@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { OfficeState, ServerMsg } from '../../shared/types.ts';
+import type { CharacterCatalog, OfficeState, ServerMsg } from '../../shared/types.ts';
 
 export interface MonitorContent {
   title: string;
@@ -18,10 +18,14 @@ interface AppStore {
   connected: boolean;
   cameraMode: CameraMode;
   settingsOpen: boolean;
+  catalog: CharacterCatalog | null;
   applyServerMsg: (msg: ServerMsg) => void;
   setConnected: (v: boolean) => void;
   setCameraMode: (m: CameraMode) => void;
   setSettingsOpen: (v: boolean) => void;
+  setCatalog: (c: CharacterCatalog) => void;
+  /** optimistic local patch while the scale slider drags; server broadcast confirms it */
+  setCharacterScale: (id: string, scale: number) => void;
 }
 
 export const useStore = create<AppStore>((set, get) => ({
@@ -31,10 +35,15 @@ export const useStore = create<AppStore>((set, get) => ({
   connected: false,
   cameraMode: { kind: 'free' },
   settingsOpen: false,
+  catalog: null,
 
   applyServerMsg: (msg) => {
     if (msg.type === 'state') {
       set({ office: msg.state });
+      return;
+    }
+    if (msg.type === 'catalog') {
+      set({ catalog: msg.catalog });
       return;
     }
     if (msg.type === 'monitor') {
@@ -53,4 +62,16 @@ export const useStore = create<AppStore>((set, get) => ({
   setConnected: (connected) => set({ connected }),
   setCameraMode: (cameraMode) => set({ cameraMode }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
+  setCatalog: (catalog) => set({ catalog }),
+  setCharacterScale: (id, scale) =>
+    set((s) =>
+      s.catalog
+        ? {
+            catalog: {
+              ...s.catalog,
+              characters: s.catalog.characters.map((c) => (c.id === id ? { ...c, scale } : c)),
+            },
+          }
+        : {},
+    ),
 }));

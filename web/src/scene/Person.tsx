@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { useGLTF, useAnimations } from '@react-three/drei';
-import { SkeletonUtils } from 'three-stdlib';
+import { useAnimations } from '@react-three/drei';
+import { useStore } from '../store.ts';
+import { catalogEntry, resolveClip } from '../characters/catalog.ts';
+import { useCharacterModel, preloadCharacter } from '../characters/useCharacterModel.ts';
 
 interface Props {
   variant: string;
@@ -11,11 +13,11 @@ interface Props {
 }
 
 export function Person({ variant, working, position = [0, 0, 0], rotationY = 0 }: Props) {
-  const url = `/models/characters/${variant}.glb`;
-  const { scene, animations } = useGLTF(url);
-  const clone = useMemo(() => SkeletonUtils.clone(scene), [scene]);
+  const catalog = useStore((s) => s.catalog);
+  const entry = catalogEntry(catalog, variant);
+  const { clone, clips } = useCharacterModel(variant, entry);
   const group = useRef<THREE.Group>(null);
-  const { actions } = useAnimations(animations, group);
+  const { actions } = useAnimations(clips, group);
 
   useEffect(() => {
     clone.traverse((child) => {
@@ -27,27 +29,27 @@ export function Person({ variant, working, position = [0, 0, 0], rotationY = 0 }
   }, [clone]);
 
   useEffect(() => {
-    const sit = actions['Sit_Chair_Idle'];
+    const sit = resolveClip(actions, 'Sit_Chair_Idle', catalog?.clipAliases);
     if (!sit) return;
     sit.reset().play();
     sit.time = Math.random() * (sit.getClip().duration || 1); // desync from neighbors
     return () => {
       sit.stop();
     };
-  }, [actions]);
+  }, [actions, catalog]);
 
   useEffect(() => {
-    const sit = actions['Sit_Chair_Idle'];
+    const sit = resolveClip(actions, 'Sit_Chair_Idle', catalog?.clipAliases);
     if (sit) sit.timeScale = working ? 2.2 : 0.6;
-  }, [actions, working]);
+  }, [actions, catalog, working]);
 
   return (
     <group ref={group} position={position} rotation={[0, rotationY, 0]}>
-      <primitive object={clone} />
+      <primitive object={clone} scale={entry?.scale ?? 1} />
     </group>
   );
 }
 
 export function preloadVariant(variant: string) {
-  useGLTF.preload(`/models/characters/${variant}.glb`);
+  preloadCharacter(variant);
 }
