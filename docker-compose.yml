@@ -1,0 +1,36 @@
+services:
+  server:
+    build: .
+    command: sh -c "npm install && npm run dev -w server"
+    working_dir: /app
+    environment:
+      CLAUDE_PROJECTS_DIR: /claude/projects
+      WATCH_POLL: "1"
+      # claude CLI reads auth/config from $HOME/.claude (mounted below)
+      HOME: /claude-home
+    volumes:
+      - .:/app
+      - server_node_modules:/app/node_modules
+      - ${HOME}/.claude:/claude:ro
+      - ${HOME}/.claude:/claude-home/.claude
+      - ${HOME}/.claude.json:/claude-home/.claude.json
+    ports:
+      - "4680:4680"
+
+  web:
+    build: .
+    command: sh -c "npm install && npm run dev -w web -- --host 0.0.0.0"
+    working_dir: /app
+    environment:
+      VITE_PROXY_TARGET: http://server:4680
+    volumes:
+      - .:/app
+      - web_node_modules:/app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - server
+
+volumes:
+  server_node_modules:
+  web_node_modules:

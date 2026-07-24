@@ -1,0 +1,66 @@
+import { useMemo } from 'react';
+import * as THREE from 'three';
+import type { ThreeElements } from '@react-three/fiber';
+import { useGLTF } from '@react-three/drei';
+import { MonitorScreen } from './MonitorScreen.tsx';
+import { Person } from './Person.tsx';
+import { seatTransform } from './layout.ts';
+
+interface Props {
+  seat: number;
+  variant: string;
+  working: boolean;
+  monitorTarget: string; // 'boss' or employee id
+  fallbackTitle?: string;
+  boss?: boolean;
+}
+
+export function FurnitureModel({ url, ...props }: { url: string } & ThreeElements['group']) {
+  const { scene } = useGLTF(url);
+  const clone = useMemo(() => {
+    const c = scene.clone(true);
+    c.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) {
+        o.castShadow = true;
+        o.receiveShadow = true;
+      }
+    });
+    return c;
+  }, [scene]);
+  return (
+    <group {...props}>
+      <primitive object={clone} />
+    </group>
+  );
+}
+
+/**
+ * A workstation: table + chair + monitor + seated character.
+ * Local space: desk faces +z (screen readable from -z, i.e. from behind the chair).
+ */
+export function Desk({ seat, variant, working, monitorTarget, fallbackTitle, boss }: Props) {
+  const { position, rotationY } = seatTransform(seat);
+  const deskScale = boss ? 1.15 : 1;
+
+  return (
+    <group position={position} rotation={[0, rotationY, 0]}>
+      <FurnitureModel
+        url="/models/furniture/table_medium.gltf"
+        scale={[deskScale, 1, 1]}
+      />
+      <FurnitureModel
+        url={boss ? '/models/furniture/armchair_pillows.gltf' : '/models/furniture/chair_A.gltf'}
+        position={[0, 0, -1.45]}
+        rotation={[0, 0, 0]}
+      />
+      <group position={[0, 1.66, 0.35]}>
+        <MonitorScreen target={monitorTarget} working={working} fallbackTitle={fallbackTitle} />
+      </group>
+      <Person variant={variant} working={working} position={[0, 0.02, -1.15]} rotationY={0} />
+    </group>
+  );
+}
+
+useGLTF.preload('/models/furniture/table_medium.gltf');
+useGLTF.preload('/models/furniture/chair_A.gltf');
+useGLTF.preload('/models/furniture/armchair_pillows.gltf');
