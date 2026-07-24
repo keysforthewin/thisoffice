@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { useAnimations } from '@react-three/drei';
@@ -56,6 +56,7 @@ export function CharacterPreview({ entry }: { entry?: CharacterEntry }) {
             ))}
           </div>
         )}
+        {entry?.pack === 'Mixamo' && <ScaleSlider key={entry.id} id={entry.id} />}
       </div>
     </div>
   );
@@ -96,6 +97,55 @@ function PreviewModel({ entry }: { entry: CharacterEntry }) {
   );
 }
 
+/** Log-scale size control for imported characters: 0.1× – 10×, persisted per character. */
+function ScaleSlider({ id }: { id: string }) {
+  const scale = useStore((s) => catalogEntry(s.catalog, id)?.scale ?? 1);
+  const setCharacterScale = useStore((s) => s.setCharacterScale);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pending = useRef<number | null>(null);
+
+  const persist = useCallback((value: number) => {
+    pending.current = null;
+    fetch(`/api/characters/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scale: value }),
+    }).catch(() => {
+      /* slider keeps working locally; next successful PATCH wins */
+    });
+  }, [id]);
+
+  const apply = (value: number) => {
+    setCharacterScale(id, value);
+    pending.current = value;
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => persist(value), 300);
+  };
+
+  // flush a pending change when the picker closes mid-debounce
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current);
+    if (pending.current !== null) persist(pending.current);
+  }, [persist]);
+
+  return (
+    <div style={styles.scaleRow}>
+      <span style={styles.scaleLabel}>Size</span>
+      <input
+        type="range"
+        min={-1}
+        max={1}
+        step={0.01}
+        value={Math.log10(scale)}
+        onChange={(e) => apply(Number((10 ** Number(e.target.value)).toFixed(2)))}
+        style={{ flex: 1 }}
+      />
+      <span style={styles.scaleValue}>{scale.toFixed(2)}×</span>
+      <button style={styles.scaleReset} onClick={() => apply(1)} title="Reset to 1×">↺</button>
+    </div>
+  );
+}
+
 const styles: Record<string, React.CSSProperties> = {
   wrap: { display: 'flex', flexDirection: 'column', gap: 10, flex: 1, minWidth: 0 },
   canvasBox: {
@@ -107,5 +157,12 @@ const styles: Record<string, React.CSSProperties> = {
   tag: {
     fontSize: 11, color: '#9aa4b0', background: '#0e1116',
     border: '1px solid #2c333d', borderRadius: 10, padding: '2px 8px',
+  },
+  scaleRow: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 },
+  scaleLabel: { fontSize: 12, color: '#9aa4b0' },
+  scaleValue: { fontSize: 12, color: '#e6e8eb', minWidth: 44, textAlign: 'right' as const },
+  scaleReset: {
+    background: 'none', border: '1px solid #2c333d', color: '#9aa4b0',
+    borderRadius: 5, cursor: 'pointer', fontSize: 12, padding: '2px 7px',
   },
 };
