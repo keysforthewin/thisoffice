@@ -28,6 +28,11 @@ describe('clampScale', () => {
     expect(clampScale(0.001)).toBe(0.1);
     expect(clampScale(50)).toBe(10);
   });
+
+  it('returns 1 for non-finite input', () => {
+    expect(clampScale(Number.NaN)).toBe(1);
+    expect(clampScale(Infinity)).toBe(1);
+  });
 });
 
 describe('CharacterStore.setScale', () => {

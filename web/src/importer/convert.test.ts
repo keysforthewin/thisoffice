@@ -32,13 +32,14 @@ describe('measureSkinnedHeight', () => {
       new THREE.MeshBasicMaterial(),
     );
     skinned.position.y = 0.9; // feet at y=0
+    skinned.scale.setScalar(2);
     group.add(skinned);
     // stray tall helper mesh like the ones Mixamo FBX exports sometimes carry
     const helper = new THREE.Mesh(new THREE.BoxGeometry(1, 100, 1), new THREE.MeshBasicMaterial());
     group.add(helper);
     group.add(new THREE.Object3D());
 
-    expect(measureSkinnedHeight(group)).toBeCloseTo(1.8);
+    expect(measureSkinnedHeight(group)).toBeCloseTo(3.6);
   });
 
   it('returns 0 when there is no skinned mesh', () => {

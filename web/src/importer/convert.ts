@@ -3,8 +3,8 @@ import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { TGALoader } from 'three/examples/jsm/loaders/TGALoader.js';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 
-/** Height (in world units) imported characters are normalized to; KayKit adults are ~1.7. */
-const TARGET_HEIGHT = 1.72;
+/** Height (in world units) imported characters are normalized to; this world is ~1.35× human scale — measured KayKit adults are ~2.2. */
+const TARGET_HEIGHT = 2.2;
 
 export interface ParsedFbx {
   group: THREE.Group;

@@ -43,6 +43,7 @@ A runtime `scale` multiplier stored in import metadata and served through the me
 ### Importer fix
 
 - `convertCharacter` measures height from a `Box3` expanded over skinned meshes only, instead of the whole group, so helper nodes no longer distort the normalization.
+- The target height was corrected from 1.72 to 2.2: this world is ~1.35× human scale, and measured KayKit adult characters are ~2.2 units tall, not 1.72.
 
 ## Error handling
 

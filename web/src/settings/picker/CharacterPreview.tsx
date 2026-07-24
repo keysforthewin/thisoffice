@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { useAnimations } from '@react-three/drei';
@@ -78,13 +78,14 @@ function PreviewModel({ entry }: { entry: CharacterEntry }) {
     });
   }, [clone]);
 
+  const idle = useMemo(() => resolveClip(actions, 'Idle', catalog?.clipAliases), [actions, catalog]);
+
   useEffect(() => {
-    const idle = resolveClip(actions, 'Idle', catalog?.clipAliases);
     idle?.reset().play();
     return () => {
       idle?.stop();
     };
-  }, [actions, catalog]);
+  }, [idle]);
 
   useFrame((_, delta) => {
     if (group.current) group.current.rotation.y += delta * 0.6;

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useAnimations } from '@react-three/drei';
 import { useStore } from '../store.ts';
@@ -28,20 +28,20 @@ export function Person({ variant, working, position = [0, 0, 0], rotationY = 0 }
     });
   }, [clone]);
 
+  const sit = useMemo(() => resolveClip(actions, 'Sit_Chair_Idle', catalog?.clipAliases), [actions, catalog]);
+
   useEffect(() => {
-    const sit = resolveClip(actions, 'Sit_Chair_Idle', catalog?.clipAliases);
     if (!sit) return;
     sit.reset().play();
     sit.time = Math.random() * (sit.getClip().duration || 1); // desync from neighbors
     return () => {
       sit.stop();
     };
-  }, [actions, catalog]);
+  }, [sit]);
 
   useEffect(() => {
-    const sit = resolveClip(actions, 'Sit_Chair_Idle', catalog?.clipAliases);
     if (sit) sit.timeScale = working ? 2.2 : 0.6;
-  }, [actions, catalog, working]);
+  }, [sit, working]);
 
   return (
     <group ref={group} position={position} rotation={[0, rotationY, 0]}>

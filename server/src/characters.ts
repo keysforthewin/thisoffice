@@ -25,6 +25,7 @@ const GLB_MAGIC = Buffer.from('glTF', 'ascii');
 const FBX_MAGIC = Buffer.from('Kaydara FBX Binary', 'ascii');
 
 export function clampScale(scale: number): number {
+  if (!Number.isFinite(scale)) return 1;
   return Math.min(SCALE_MAX, Math.max(SCALE_MIN, scale));
 }
 

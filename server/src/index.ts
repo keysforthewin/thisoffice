@@ -86,7 +86,7 @@ const server = http.createServer((req, res) => {
       const id = sanitizeId(charMatch[1]);
       if (!id) return send(400, { error: 'bad character id' });
       const body = await readBody();
-      if (typeof body.scale !== 'number' || !Number.isFinite(body.scale)) {
+      if (!body || typeof body.scale !== 'number' || !Number.isFinite(body.scale)) {
         return send(400, { error: 'scale must be a finite number' });
       }
       // builtins are never in the imported list, so setScale 404s them too
