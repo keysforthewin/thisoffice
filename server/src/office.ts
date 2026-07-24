@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Employee, OfficeState, InboxItem, TodoItem, ServerMsg, WorkerStatus } from '../../shared/types.ts';
+import type { CharacterCatalog, Employee, OfficeState, InboxItem, TodoItem, ServerMsg, WorkerStatus } from '../../shared/types.ts';
 import { CHARACTER_VARIANTS } from '../../shared/types.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -19,15 +19,61 @@ type Listener = (msg: ServerMsg) => void;
 
 const DEFAULT_EMPLOYEE_NAMES = ['Pat Chindexer', 'Sam Greppleton', 'Dee Bugger'];
 
+/** Names for manually hired employees, same pun energy as the defaults */
+const HIRE_NAMES = [
+  'Anna Lyzer',
+  'Cash Money',
+  'Gil Blameless',
+  'Hugh Mergeconflict',
+  'Kay Oss',
+  'Lin Terror',
+  'Mona Torlogs',
+  'Nell Pointer',
+  'Perl Scriptor',
+  'Polly Fill',
+  'Rachel Basecase',
+  'Rex Ecutable',
+  'Sara Bellum',
+  'Stan Dupmeeting',
+  'Tab Completion',
+];
+
+const CATALOG_FILE = path.resolve(__dirname, '../../web/public/models/characters/catalog.json');
+
+/** Variant ids from the generated character catalog; falls back to the built-in tuple. */
+function loadVariantPool(): string[] {
+  try {
+    const catalog = JSON.parse(fs.readFileSync(CATALOG_FILE, 'utf-8'));
+    const ids = (catalog.characters ?? []).map((c: { id: string }) => c.id).filter(Boolean);
+    if (ids.length) return ids;
+  } catch {
+    /* catalog not generated yet */
+  }
+  return [...CHARACTER_VARIANTS];
+}
+
 export class Office {
   private state: OfficeState;
   private listeners = new Set<Listener>();
   /** activityKey (sessionId:toolUseId) -> employeeId */
   private assignments = new Map<string, string>();
   private inboxSeq = 0;
+  private variantPool: string[];
 
-  constructor() {
+  constructor(variantPoolProvider?: () => string[]) {
+    this.variantPool = variantPoolProvider?.() ?? loadVariantPool();
+    if (!this.variantPool.length) this.variantPool = loadVariantPool();
     this.state = this.load();
+  }
+
+  /** Refresh the pool of variants used for auto-assigning new hires. */
+  setVariantPool(ids: string[]) {
+    if (ids.length) this.variantPool = ids;
+  }
+
+  /** Broadcast a refreshed character catalog to all connected clients. */
+  emitCatalog(catalog: CharacterCatalog) {
+    this.emit({ type: 'catalog', catalog });
   }
 
   private load(): OfficeState {
@@ -44,7 +90,7 @@ export class Office {
           id: `emp-${i + 1}`,
           name,
           seat: i + 1,
-          variant: CHARACTER_VARIANTS[(i + 1) % CHARACTER_VARIANTS.length],
+          variant: this.variantPool[(i + 1) % this.variantPool.length],
           hiredAt: new Date().toISOString(),
         })),
       };
@@ -164,12 +210,28 @@ export class Office {
     return this.state.employees.find((e) => e.id === id);
   }
 
+  /** Settings-panel hire: random name + random character; editable afterwards. */
+  hireManual(): Employee {
+    const usedNames = new Set(this.state.employees.map((e) => e.name));
+    const fresh = HIRE_NAMES.filter((n) => !usedNames.has(n));
+    const names = fresh.length ? fresh : HIRE_NAMES;
+    const employee = this.hire();
+    employee.name = names[Math.floor(Math.random() * names.length)];
+    const usedVariants = new Set([this.state.boss.variant, ...this.state.employees.map((e) => e.variant)]);
+    const unusedVariants = this.variantPool.filter((v) => !usedVariants.has(v));
+    const variants = unusedVariants.length ? unusedVariants : this.variantPool;
+    employee.variant = variants[Math.floor(Math.random() * variants.length)];
+    this.save();
+    this.broadcastState();
+    return employee;
+  }
+
   private hire(): Employee {
     const seat = Math.max(0, ...this.state.employees.map((e) => e.seat)) + 1;
     const usedVariants = new Set([this.state.boss.variant, ...this.state.employees.map((e) => e.variant)]);
     const variant =
-      CHARACTER_VARIANTS.find((v) => !usedVariants.has(v)) ??
-      CHARACTER_VARIANTS[seat % CHARACTER_VARIANTS.length];
+      this.variantPool.find((v) => !usedVariants.has(v)) ??
+      this.variantPool[seat % this.variantPool.length];
     const employee: Employee = {
       id: `emp-${Date.now()}-${seat}`,
       name: 'New Hire',

@@ -1,0 +1,171 @@
+{
+  "version": 1,
+  "generatedAt": "2026-07-24T20:42:38.850Z",
+  "clipAliases": {
+    "Sit_Chair_Idle": [
+      "Sit_Chair_Idle"
+    ],
+    "Idle": [
+      "Idle",
+      "Idle_A"
+    ]
+  },
+  "characters": [
+    {
+      "id": "Barbarian",
+      "displayName": "Barbarian",
+      "pack": "Adventurers 1.0",
+      "tags": [
+        "human",
+        "melee",
+        "axe"
+      ],
+      "rig": "embedded"
+    },
+    {
+      "id": "Knight",
+      "displayName": "Knight",
+      "pack": "Adventurers 1.0",
+      "tags": [
+        "human",
+        "melee",
+        "armor",
+        "sword"
+      ],
+      "rig": "embedded"
+    },
+    {
+      "id": "Mage",
+      "displayName": "Mage",
+      "pack": "Adventurers 1.0",
+      "tags": [
+        "human",
+        "magic",
+        "staff"
+      ],
+      "rig": "embedded"
+    },
+    {
+      "id": "Rogue",
+      "displayName": "Rogue",
+      "pack": "Adventurers 1.0",
+      "tags": [
+        "human",
+        "stealth",
+        "dagger"
+      ],
+      "rig": "embedded"
+    },
+    {
+      "id": "Rogue_Hooded",
+      "displayName": "Rogue Hooded",
+      "pack": "Adventurers 1.0",
+      "tags": [
+        "human",
+        "stealth",
+        "dagger",
+        "hood"
+      ],
+      "rig": "embedded"
+    },
+    {
+      "id": "Barbarian_V2",
+      "displayName": "Barbarian 2.0",
+      "pack": "Adventurers 2.0",
+      "tags": [
+        "human"
+      ],
+      "rig": "shared"
+    },
+    {
+      "id": "Knight_V2",
+      "displayName": "Knight 2.0",
+      "pack": "Adventurers 2.0",
+      "tags": [
+        "human"
+      ],
+      "rig": "shared"
+    },
+    {
+      "id": "Mage_V2",
+      "displayName": "Mage 2.0",
+      "pack": "Adventurers 2.0",
+      "tags": [
+        "human"
+      ],
+      "rig": "shared"
+    },
+    {
+      "id": "Ranger",
+      "displayName": "Ranger",
+      "pack": "Adventurers 2.0",
+      "tags": [
+        "human",
+        "ranged",
+        "bow"
+      ],
+      "rig": "shared"
+    },
+    {
+      "id": "Rogue_Hooded_V2",
+      "displayName": "Rogue Hooded 2.0",
+      "pack": "Adventurers 2.0",
+      "tags": [
+        "human"
+      ],
+      "rig": "shared"
+    },
+    {
+      "id": "Rogue_V2",
+      "displayName": "Rogue 2.0",
+      "pack": "Adventurers 2.0",
+      "tags": [
+        "human"
+      ],
+      "rig": "shared"
+    },
+    {
+      "id": "Skeleton_Mage",
+      "displayName": "Skeleton Mage",
+      "pack": "Skeletons 1.0",
+      "tags": [
+        "undead",
+        "magic",
+        "staff"
+      ],
+      "rig": "embedded"
+    },
+    {
+      "id": "Skeleton_Minion",
+      "displayName": "Skeleton Minion",
+      "pack": "Skeletons 1.0",
+      "tags": [
+        "undead",
+        "small"
+      ],
+      "rig": "embedded"
+    },
+    {
+      "id": "Skeleton_Rogue",
+      "displayName": "Skeleton Rogue",
+      "pack": "Skeletons 1.0",
+      "tags": [
+        "undead",
+        "stealth",
+        "dagger"
+      ],
+      "rig": "embedded"
+    },
+    {
+      "id": "Skeleton_Warrior",
+      "displayName": "Skeleton Warrior",
+      "pack": "Skeletons 1.0",
+      "tags": [
+        "undead",
+        "melee",
+        "sword"
+      ],
+      "rig": "embedded"
+    }
+  ]
+}

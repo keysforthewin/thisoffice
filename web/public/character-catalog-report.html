@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Character Catalog Report — This Office</title>
+<style>
+  body { background: #0e1116; color: #e6e8eb; font-family: system-ui, sans-serif; margin: 0; padding: 32px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: #9aa4b0; font-size: 14px; margin-bottom: 28px; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 1px; color: #9aa4b0; margin: 28px 0 10px; }
+  table { border-collapse: collapse; width: 100%; max-width: 980px; background: #161a20; border: 1px solid #2c333d; border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 14px; font-size: 13.5px; border-bottom: 1px solid #232a33; vertical-align: top; }
+  th { color: #9aa4b0; font-weight: 600; background: #12161c; }
+  tr:last-child td { border-bottom: none; }
+  .ok { color: #4cc38a; font-weight: 600; }
+  .skip { color: #e5a54d; font-weight: 600; }
+  .na { color: #e5484d; font-weight: 600; }
+  .muted { color: #9aa4b0; }
+  code { background: #0e1116; border: 1px solid #2c333d; border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+  a { color: #6cb6ff; }
+  .pill { display: inline-block; background: #0e1116; border: 1px solid #2c333d; border-radius: 10px; padding: 1px 8px; font-size: 11.5px; color: #9aa4b0; margin-right: 4px; }
+</style>
+</head>
+<body>
+<h1>Character Catalog Report</h1>
+<div class="sub">What was imported into This Office vs. everything found in the downloaded KayKit packs (all free tiers, CC0) — plus what exists only in paid tiers. Open the live picker at <a href="http://localhost:5173">localhost:5173</a> → ⚙ → any character button.</div>
+
+<h2>Imported — now in the picker (15 characters)</h2>
+<table>
+  <tr><th>Character</th><th>Pack</th><th>Status</th><th>Notes</th></tr>
+  <tr><td>Knight, Mage, Rogue, Rogue Hooded, Barbarian</td><td>Adventurers 1.0</td><td class="ok">already installed</td><td>76 embedded clips each (incl. <code>Sit_Chair_Idle</code>)</td></tr>
+  <tr><td>Skeleton Warrior, Skeleton Mage, Skeleton Rogue, Skeleton Minion</td><td>Skeletons 1.0</td><td class="ok">already installed</td><td>95 embedded clips each</td></tr>
+  <tr><td><b>Ranger</b></td><td>Adventurers 2.0</td><td class="ok">imported (new)</td><td>the only genuinely new free character; new-style rig, animated via shared library</td></tr>
+  <tr><td><b>Knight 2.0, Mage 2.0, Rogue 2.0, Rogue Hooded 2.0, Barbarian 2.0</b></td><td>Adventurers 2.0</td><td class="ok">imported as <code>*_V2</code></td><td>restyled versions of the 1.0 five — kept both eras so nothing changed out from under the existing roster</td></tr>
+</table>
+
+<h2>In the downloaded packs but not imported</h2>
+<table>
+  <tr><th>Item</th><th>Pack</th><th>Status</th><th>Why</th></tr>
+  <tr><td>Skeleton Warrior / Mage / Rogue / Minion (1.1)</td><td>Skeletons 1.1 Free</td><td class="skip">skipped</td><td>same four characters, updated to the new rig with 0 embedded clips — the installed 1.0 versions are self-contained and visually equivalent</td></tr>
+  <tr><td>Mannequin_Medium, Mannequin_Large</td><td>Character Animations 1.1</td><td class="skip">skipped</td><td>rig-preview mannequins, not office characters</td></tr>
+  <tr><td>Rig_Medium: MovementBasic, MovementAdvanced, CombatMelee, CombatRanged, Tools, Special</td><td>Character Animations 1.1</td><td class="skip">not installed</td><td>the app only needs <code>Idle_A</code> (General) and <code>Sit_Chair_Idle</code> (Simulation) — those two sets are installed in <code>_lib/</code>; the rest are a rerun of the import script away</td></tr>
+  <tr><td>Rig_Large animation sets (6)</td><td>Character Animations 1.1</td><td class="skip">not installed</td><td>no Rig_Large characters in the catalog yet</td></tr>
+  <tr><td>~67 weapons/props (swords, bows, shields, spellbooks…) + 25 accessories</td><td>Adventurers 2.0 Free</td><td class="skip">skipped</td><td>attachable props, not characters — could power a future “accessory” feature</td></tr>
+</table>
+
+<h2>Exists but not in any free download</h2>
+<table>
+  <tr><th>Characters</th><th>Pack</th><th>Status</th><th>Price</th></tr>
+  <tr><td>Engineer, Druid, Barbarian Large</td><td>Adventurers 2.0 Extra</td><td class="na">paid tier</td><td>$7.95</td></tr>
+  <tr><td>Skeleton Golem, Necromancer</td><td>Skeletons Extra</td><td class="na">paid tier</td><td>$7.95</td></tr>
+  <tr><td>14–15 mystery characters each</td><td>Mystery Series 4 / 5 / 6</td><td class="na">paid packs</td><td>$19.99 each</td></tr>
+</table>
+
+<div class="sub" style="margin-top: 24px">
+  <span class="pill">import</span> <code>node scripts/import-characters.mjs &lt;extracted-dir&gt; --pack "Name"</code>
+  &nbsp;<span class="pill">regen</span> <code>npm run catalog</code>
+  — any paid pack you buy later drops in the same way.
+</div>
+</body>
+</html>

@@ -1,0 +1,130 @@
+{
+  "version": 1,
+  "clipAliases": {
+    "Sit_Chair_Idle": [
+      "Sit_Chair_Idle"
+    ],
+    "Idle": [
+      "Idle",
+      "Idle_A"
+    ]
+  },
+  "characters": {
+    "Knight": {
+      "pack": "Adventurers 1.0",
+      "tags": [
+        "human",
+        "melee",
+        "armor",
+        "sword"
+      ]
+    },
+    "Mage": {
+      "pack": "Adventurers 1.0",
+      "tags": [
+        "human",
+        "magic",
+        "staff"
+      ]
+    },
+    "Rogue": {
+      "pack": "Adventurers 1.0",
+      "tags": [
+        "human",
+        "stealth",
+        "dagger"
+      ]
+    },
+    "Rogue_Hooded": {
+      "pack": "Adventurers 1.0",
+      "tags": [
+        "human",
+        "stealth",
+        "dagger",
+        "hood"
+      ]
+    },
+    "Barbarian": {
+      "pack": "Adventurers 1.0",
+      "tags": [
+        "human",
+        "melee",
+        "axe"
+      ]
+    },
+    "Skeleton_Warrior": {
+      "pack": "Skeletons 1.0",
+      "tags": [
+        "undead",
+        "melee",
+        "sword"
+      ]
+    },
+    "Skeleton_Mage": {
+      "pack": "Skeletons 1.0",
+      "tags": [
+        "undead",
+        "magic",
+        "staff"
+      ]
+    },
+    "Skeleton_Rogue": {
+      "pack": "Skeletons 1.0",
+      "tags": [
+        "undead",
+        "stealth",
+        "dagger"
+      ]
+    },
+    "Skeleton_Minion": {
+      "pack": "Skeletons 1.0",
+      "tags": [
+        "undead",
+        "small"
+      ]
+    },
+    "Ranger": {
+      "pack": "Adventurers 2.0",
+      "tags": [
+        "human",
+        "ranged",
+        "bow"
+      ]
+    },
+    "Barbarian_V2": {
+      "pack": "Adventurers 2.0",
+      "tags": [
+        "human"
+      ],
+      "displayName": "Barbarian 2.0"
+    },
+    "Knight_V2": {
+      "pack": "Adventurers 2.0",
+      "tags": [
+        "human"
+      ],
+      "displayName": "Knight 2.0"
+    },
+    "Mage_V2": {
+      "pack": "Adventurers 2.0",
+      "tags": [
+        "human"
+      ],
+      "displayName": "Mage 2.0"
+    },
+    "Rogue_V2": {
+      "pack": "Adventurers 2.0",
+      "tags": [
+        "human"
+      ],
+      "displayName": "Rogue 2.0"
+    },
+    "Rogue_Hooded_V2": {
+      "pack": "Adventurers 2.0",
+      "tags": [
+        "human"
+      ],
+      "displayName": "Rogue Hooded 2.0"
+    }
+  }
+}
