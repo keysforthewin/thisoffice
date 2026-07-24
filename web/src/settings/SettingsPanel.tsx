@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useStore } from '../store.ts';
-import { CHARACTER_VARIANTS } from '../../../shared/types.ts';
+import { CharacterButton } from './picker/CharacterButton.tsx';
 
 const api = (path: string, method: string, body?: unknown) =>
   fetch(`/api${path}`, {
@@ -36,21 +36,20 @@ export function SettingsPanel() {
               setBossName(null);
             }}
           />
-          <select
-            style={styles.select}
-            value={office.boss.variant}
-            onChange={(e) => api('/settings', 'PUT', { variant: e.target.value })}
-          >
-            {CHARACTER_VARIANTS.map((v) => (
-              <option key={v} value={v}>{v.replace(/_/g, ' ')}</option>
-            ))}
-          </select>
+          <CharacterButton
+            variant={office.boss.variant}
+            title={`Character for ${office.boss.name}`}
+            onPick={(v) => api('/settings', 'PUT', { variant: v })}
+          />
         </div>
 
         <h3 style={styles.sectionTitle}>Employees</h3>
         {office.employees.map((e) => (
           <EmployeeRow key={e.id} id={e.id} name={e.name} variant={e.variant} status={e.status} />
         ))}
+        <button style={styles.hire} onClick={() => api('/employees', 'POST')}>
+          + Hire employee
+        </button>
       </div>
     </div>
   );
@@ -69,15 +68,11 @@ function EmployeeRow({ id, name, variant, status }: { id: string; name: string; 
           setDraft(null);
         }}
       />
-      <select
-        style={styles.select}
-        value={variant}
-        onChange={(e) => api(`/employees/${id}`, 'PUT', { variant: e.target.value })}
-      >
-        {CHARACTER_VARIANTS.map((v) => (
-          <option key={v} value={v}>{v.replace(/_/g, ' ')}</option>
-        ))}
-      </select>
+      <CharacterButton
+        variant={variant}
+        title={`Character for ${name}`}
+        onPick={(v) => api(`/employees/${id}`, 'PUT', { variant: v })}
+      />
       <span style={{ ...styles.badge, background: status === 'working' ? '#2e5c37' : '#3a3f47' }}>
         {status}
       </span>
@@ -112,10 +107,10 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1, background: '#0e1116', border: '1px solid #2c333d', color: '#e6e8eb',
     borderRadius: 6, padding: '6px 10px', fontSize: 14,
   },
-  select: {
-    background: '#0e1116', border: '1px solid #2c333d', color: '#e6e8eb',
-    borderRadius: 6, padding: '6px 8px', fontSize: 13,
-  },
   badge: { fontSize: 11, padding: '3px 8px', borderRadius: 10, color: '#dfe3e8' },
+  hire: {
+    marginTop: 6, width: '100%', background: '#1c2733', border: '1px dashed #2c4258',
+    color: '#cfe0f2', borderRadius: 8, padding: '8px 0', fontSize: 13, cursor: 'pointer',
+  },
   remove: { background: 'none', border: 'none', cursor: 'pointer', fontSize: 15 },
 };

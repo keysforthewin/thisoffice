@@ -4,6 +4,7 @@ import { useStore } from './store.ts';
 import { Office } from './scene/Office.tsx';
 import { CameraRig, usePovList } from './scene/CameraRig.tsx';
 import { SettingsPanel } from './settings/SettingsPanel.tsx';
+import { loadCatalog } from './characters/catalog.ts';
 
 export default function App() {
   const connected = useStore((s) => s.connected);
@@ -13,6 +14,10 @@ export default function App() {
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
   const office = useStore((s) => s.office);
   const povCount = (office?.employees.length ?? 0) + 2; // boss + employees + whiteboard
+
+  useEffect(() => {
+    loadCatalog().then(useStore.getState().setCatalog);
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -68,7 +73,7 @@ function Hud({ connected, mode, onSettings }: { connected: boolean; mode: Return
   const povs = usePovList();
   const label =
     mode.kind === 'free'
-      ? 'Free camera — drag to orbit · V for POV tour'
+      ? 'Free camera — click to look (Esc releases) · WASD fly · E/Space up · C down · Shift slow · V for POV tour'
       : `POV: ${povs[Math.min(mode.index, povs.length - 1)]?.label ?? ''} — Tab/← → cycle · V/Esc exit`;
   return (
     <>
