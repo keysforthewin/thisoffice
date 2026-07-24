@@ -46,8 +46,34 @@ export type ServerMsg =
       title?: string;
       append?: string;
       clear?: boolean;
-    };
+    }
+  | { type: 'catalog'; catalog: CharacterCatalog };
 
+export interface CharacterEntry {
+  /** GLB basename, doubles as the `variant` string persisted in office.json */
+  id: string;
+  displayName: string;
+  pack: string;
+  tags: string[];
+  /** 'embedded' = full clip set in the GLB; 'shared' = needs the _lib animation library */
+  rig: 'embedded' | 'shared';
+  /** fetch path for the GLB when it isn't in the static /models/characters dir (user imports) */
+  url?: string;
+  /** import timestamp for user-imported characters; busts model + thumbnail caches on re-import */
+  rev?: number;
+  /** runtime size multiplier for imported characters (user-tuned); absent = 1 */
+  scale?: number;
+}
+
+export interface CharacterCatalog {
+  version: number;
+  generatedAt: string;
+  /** canonical clip name -> acceptable clip names, first match wins */
+  clipAliases: Record<string, string[]>;
+  characters: CharacterEntry[];
+}
+
+/** Fallback list used when catalog.json is unavailable */
 export const CHARACTER_VARIANTS = [
   'Knight',
   'Mage',
