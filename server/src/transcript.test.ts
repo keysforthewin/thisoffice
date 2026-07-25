@@ -53,10 +53,22 @@ function makeHarness(opts: { queue?: boolean } = {}) {
     clear: vi.fn(),
     stop: vi.fn(),
   } as unknown as ScreenStreamer;
-  const transcripts = new Transcripts(office, streamer);
+  const stats = {
+    recordUsage: vi.fn(),
+    recordTool: vi.fn(),
+    recordPrompt: vi.fn(),
+    recordSession: vi.fn(),
+    recordTurn: vi.fn(),
+    recordHeadcount: vi.fn(),
+    recordHire: vi.fn(),
+    isDirty: vi.fn(() => false),
+    flush: vi.fn(),
+    snapshot: vi.fn(),
+  };
+  const transcripts = new Transcripts(office, streamer, stats as any);
   const pickup = (key: string, id = 'emp-9') =>
     onAssignCb?.(key, { id, name: 'Q', seat: 9, variant: 'Knight', hiredAt: '', status: 'working', task: null });
-  return { transcripts, office, enqueued, monitors, finished, pickup };
+  return { transcripts, office, enqueued, monitors, finished, pickup, stats };
 }
 
 function startBash(t: Transcripts, id = 'tu-1') {
@@ -1200,5 +1212,122 @@ describe('sidecar records', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('stats aggregator wiring', () => {
+  it('records usage and tool calls from a main-transcript assistant line', () => {
+    const { transcripts, stats } = makeHarness();
+    const usage = { input_tokens: 10, output_tokens: 5 };
+    transcripts.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: {
+          id: 'msg-1',
+          model: 'claude-fable-5',
+          usage,
+          content: [{ type: 'tool_use', id: 'tu-1', name: 'Bash', input: { command: 'npm test' } }],
+        },
+      }),
+    ]);
+    expect(stats.recordUsage).toHaveBeenCalledWith('msg-1', 'claude-fable-5', usage);
+    expect(stats.recordTool).toHaveBeenCalledWith('Bash');
+  });
+
+  it('records usage twice for a streamed repeat of the same message id (dedupe is the aggregator\'s job)', () => {
+    const { transcripts, stats } = makeHarness();
+    const makeLine = (usage: unknown) =>
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: { id: 'msg-1', model: 'claude-fable-5', usage, content: [{ type: 'text', text: 'thinking' }] },
+      });
+    transcripts.handleLines(MAIN, [makeLine({ input_tokens: 10, output_tokens: 5 })]);
+    transcripts.handleLines(MAIN, [makeLine({ input_tokens: 10, output_tokens: 8 })]);
+    expect(stats.recordUsage).toHaveBeenCalledTimes(2);
+  });
+
+  it('records one recordTool call per tool_use block on an assistant line', () => {
+    const { transcripts, stats } = makeHarness();
+    transcripts.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: {
+          content: [
+            { type: 'tool_use', id: 'tu-1', name: 'Bash', input: { command: 'a' } },
+            { type: 'tool_use', id: 'tu-2', name: 'Read', input: { file_path: 'b' } },
+          ],
+        },
+      }),
+    ]);
+    expect(stats.recordTool).toHaveBeenCalledWith('Bash');
+    expect(stats.recordTool).toHaveBeenCalledWith('Read');
+    expect(stats.recordTool).toHaveBeenCalledTimes(2);
+  });
+
+  it('records usage and tool calls from a subagent-transcript assistant line', () => {
+    const { transcripts, stats } = makeHarness();
+    transcripts.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'tool_use', id: 'tu-task', name: 'Task', input: { description: 'explore' } }] },
+      }),
+    ]);
+    transcripts.fileAppeared(AGENT);
+    const usage = { input_tokens: 3, output_tokens: 2 };
+    transcripts.handleLines(AGENT, [
+      line({
+        type: 'assistant',
+        message: {
+          id: 'sub-msg-1',
+          model: 'claude-fable-5',
+          usage,
+          content: [{ type: 'tool_use', id: 'tu-sub-1', name: 'Read', input: { file_path: '/app/config.ts' } }],
+        },
+      }),
+    ]);
+    expect(stats.recordUsage).toHaveBeenCalledWith('sub-msg-1', 'claude-fable-5', usage);
+    expect(stats.recordTool).toHaveBeenCalledWith('Read');
+  });
+
+  it('records a turn_duration system record', () => {
+    const { transcripts, stats } = makeHarness();
+    transcripts.handleLines(MAIN, [
+      line({ type: 'system', subtype: 'turn_duration', sessionId: 'sess-1', cwd: '/home/user/code/myapp', durationMs: 12000, messageCount: 7 }),
+    ]);
+    expect(stats.recordTurn).toHaveBeenCalledWith(12000);
+  });
+
+  it('records a real user prompt but not meta/tool-result user lines', () => {
+    const { transcripts, stats } = makeHarness();
+    transcripts.handleLines(MAIN, [userText('please fix the login page')]);
+    expect(stats.recordPrompt).toHaveBeenCalledTimes(1);
+
+    transcripts.handleLines(MAIN, [userText('Caveat: injected context', { isMeta: true })]);
+    expect(stats.recordPrompt).toHaveBeenCalledTimes(1);
+
+    transcripts.handleLines(MAIN, [
+      line({
+        type: 'user',
+        sessionId: 'sess-1',
+        message: { content: [{ type: 'tool_result', tool_use_id: 'tu-x', content: 'ok' }] },
+      }),
+    ]);
+    expect(stats.recordPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('records the session id for any main line carrying one', () => {
+    const { transcripts, stats } = makeHarness();
+    transcripts.handleLines(MAIN, [
+      line({ type: 'system', subtype: 'away_summary', sessionId: 'sess-1', cwd: '/home/user/code/myapp', content: 'back now' }),
+    ]);
+    expect(stats.recordSession).toHaveBeenCalledWith('sess-1');
   });
 });

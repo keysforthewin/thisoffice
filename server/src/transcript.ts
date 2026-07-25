@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { Office } from './office.ts';
 import type { ScreenStreamer } from './streamer.ts';
+import type { StatsAggregator } from './stats.ts';
 import { summarizePrompt, nameNewHire } from './summarizer.ts';
 import { MONITOR_IMAGE_MARKER, type Employee } from '../../shared/types.ts';
 
@@ -103,6 +104,7 @@ export class Transcripts {
   constructor(
     private office: Office,
     private streamer: ScreenStreamer,
+    private stats?: StatsAggregator,
   ) {
     office.onAssign((key, employee) => this.onQueuedAssigned(key, employee));
     setInterval(() => this.recomputeWaiting(), STALE_SWEEP_MS).unref?.();
@@ -286,6 +288,7 @@ export class Transcripts {
     if (line.isSidechain) return; // legacy embedded subagent traffic
     const sessionId: string = line.sessionId ?? path.basename(file, '.jsonl');
     const project = projectName(line.cwd, file);
+    if (sessionId) this.stats?.recordSession(sessionId);
 
     // Sidecar record types carry no envelope (no uuid/cwd/message); the handlers
     // below must never assume one. One malformed line must not kill its batch-mates.
@@ -420,11 +423,13 @@ export class Transcripts {
       );
       return;
     }
+    if (line.message?.usage) this.stats?.recordUsage(line.message?.id ?? line.requestId, line.message?.model, line.message.usage);
     const blocks = contentBlocks(line.message?.content);
     for (const b of blocks) {
       if (b.type === 'fallback') {
         this.showEphemeral(sessionId, project, 'Model Swap', `⚠ model fallback: ${b.from?.model ?? '?'} → ${b.to?.model ?? '?'}`);
       }
+      if (b.type === 'tool_use') this.stats?.recordTool(b.name);
     }
     const toolUses = blocks.filter((b) => b.type === 'tool_use');
     // every content block of one response repeats the response's stop_reason,
@@ -466,6 +471,7 @@ export class Transcripts {
         break;
       }
       case 'turn_duration':
+        this.stats?.recordTurn(line.durationMs);
         this.digest(file, sessionId, project, `turn: ${Math.round((line.durationMs ?? 0) / 1000)}s, ${line.messageCount ?? 0} msgs`);
         break;
       case 'bridge_status':
@@ -587,6 +593,7 @@ export class Transcripts {
   }
 
   private onUserPrompt(project: string, text: string) {
+    this.stats?.recordPrompt();
     const preview = text.length > 160 ? text.slice(0, 157) + '…' : text;
     this.office.pushInbox(project, preview, text.slice(0, 4000));
     const inboxId = this.office.lastInboxId;
@@ -829,12 +836,14 @@ export class Transcripts {
 
   private handleSubagentLine(activity: Activity, line: any) {
     if (line.type === 'assistant') {
+      if (line.message?.usage) this.stats?.recordUsage(line.message?.id ?? line.requestId, line.message?.model, line.message.usage);
       for (const b of contentBlocks(line.message?.content)) {
         if (b.type === 'text' && b.text?.trim()) {
           this.emitTo(activity, b.text.trim());
         } else if (b.type === 'thinking' && b.thinking?.trim()) {
           this.emitTo(activity, '💭 ' + b.thinking.trim());
         } else if (b.type === 'tool_use') {
+          this.stats?.recordTool(b.name);
           if (FANOUT_EXCLUDED.has(b.name)) {
             this.emitTo(activity, `> ${b.name} ${oneLine(inputPreview(b.name, b.input ?? {}))}`);
             continue;

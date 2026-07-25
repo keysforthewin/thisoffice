@@ -5,6 +5,7 @@ import chokidar from 'chokidar';
 import type { Office } from './office.ts';
 import { Transcripts } from './transcript.ts';
 import { ScreenStreamer } from './streamer.ts';
+import type { StatsAggregator } from './stats.ts';
 
 const PROJECTS_DIR =
   process.env.CLAUDE_PROJECTS_DIR ?? path.join(os.homedir(), '.claude', 'projects');
@@ -13,13 +14,13 @@ const PROJECTS_DIR =
  * Tails every *.jsonl under ~/.claude/projects. Existing files are seeded at
  * their current size so we only visualize NEW activity, not history.
  */
-export function startWatcher(office: Office) {
+export function startWatcher(office: Office, stats?: StatsAggregator) {
   const streamer = new ScreenStreamer({
     emit: (id, text) => office.monitor(id, { append: text }),
     drained: (id) => office.notifyDrained(id),
   });
   office.attachStreamer(streamer);
-  const transcripts = new Transcripts(office, streamer);
+  const transcripts = new Transcripts(office, streamer, stats);
   const offsets = new Map<string, number>();
 
   const readNew = (file: string) => {

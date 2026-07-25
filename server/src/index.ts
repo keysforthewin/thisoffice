@@ -1,15 +1,24 @@
 import http from 'node:http';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Office } from './office.ts';
 import { startWatcher } from './watcher.ts';
+import { StatsAggregator } from './stats.ts';
 import { CharacterStore, sanitizeId, isAnimSlot, saveUpload, streamFile } from './characters.ts';
 
 const PORT = 4680;
 /** ~8k chars is the recommended bio size; hard cap leaves generous headroom */
 const BIO_MAX_CHARS = 20_000;
+/** How often we sample headcount / persist+broadcast dirty stats. */
+const STATS_INTERVAL_MS = 15_000;
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const STATS_FILE = path.resolve(__dirname, '../../data/usage.json');
 
 const characters = new CharacterStore();
 const office = new Office(() => characters.variantIds());
+const stats = new StatsAggregator(STATS_FILE);
 
 /** Push the merged catalog to every client and refresh the hiring pool. */
 const publishCatalog = () => {
@@ -171,19 +180,39 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({ server, path: '/ws' });
 
-wss.on('connection', (ws: WebSocket) => {
-  ws.send(JSON.stringify({ type: 'state', state: office.getState() }));
-  for (const msg of office.screenReplay()) ws.send(JSON.stringify(msg));
-});
-
-office.subscribe((msg) => {
+const broadcast = (msg: unknown) => {
   const payload = JSON.stringify(msg);
   for (const client of wss.clients) {
     if (client.readyState === WebSocket.OPEN) client.send(payload);
   }
+};
+
+wss.on('connection', (ws: WebSocket) => {
+  ws.send(JSON.stringify({ type: 'state', state: office.getState() }));
+  for (const msg of office.screenReplay()) ws.send(JSON.stringify(msg));
+  ws.send(JSON.stringify({ type: 'stats', stats: stats.snapshot() }));
 });
 
-startWatcher(office);
+office.subscribe((msg) => broadcast(msg));
+
+startWatcher(office, stats);
+
+// No clean hook into Office's hire path is reachable from here (hire() is
+// private and assign()/hireManual() aren't instrumented), so hires are
+// inferred from headcount deltas on the same cadence as the headcount sample.
+let lastHeadcount = office.getState().employees.length;
+setInterval(() => {
+  const headcount = office.getState().employees.length;
+  if (headcount > lastHeadcount) {
+    for (let i = 0; i < headcount - lastHeadcount; i++) stats.recordHire();
+  }
+  lastHeadcount = headcount;
+  stats.recordHeadcount(headcount);
+  if (stats.isDirty()) {
+    stats.flush();
+    broadcast({ type: 'stats', stats: stats.snapshot() });
+  }
+}, STATS_INTERVAL_MS).unref();
 
 server.listen(PORT, () => {
   console.log(`thisoffice server on http://localhost:${PORT}`);
