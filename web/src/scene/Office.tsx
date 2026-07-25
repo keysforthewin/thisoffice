@@ -131,6 +131,12 @@ export function Office() {
         <planeGeometry args={[depth, height]} />
         <meshStandardMaterial color="#665f6e" roughness={1} />
       </mesh>
+      {/* front wall (the one the boss faces); front-side only, so the intro
+          camera outside the room still sees in before clampToRoom pulls it inside */}
+      <mesh receiveShadow position={[0, height / 2, centerZ + depth / 2]} rotation={[0, Math.PI, 0]}>
+        <planeGeometry args={[width, height]} />
+        <meshStandardMaterial color="#5f5a68" roughness={1} />
+      </mesh>
 
       {/* ceiling: unlit material so the downward fixtures can't splash light onto it */}
       <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, height, centerZ]}>
