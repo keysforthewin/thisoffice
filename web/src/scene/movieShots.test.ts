@@ -245,12 +245,54 @@ describe('archetype shot selection', () => {
     }
   });
 
+  it('highAngle shots are actually HIGH: positive pitch raises the camera above the subject', () => {
+    // Force the single-subject pool down to highAngle by marking the other two archetypes
+    // recent (order() puts fresh archetypes first, so highAngle is the only fresh one left).
+    const office = makeOffice();
+    const now = Date.now();
+    const lastActivity = { e1: now };
+    const subject = subjectFor('e1', office)!;
+    let highAngleCount = 0;
+    for (let i = 0; i < 30; i++) {
+      const shot = pickShot(ctx({
+        office, lastActivity, now, rng: rng(i + 100), cutIndex: i,
+        recentArchetypes: ['otsCloseup', 'sideProfile'],
+      }));
+      if (shot.archetype === 'highAngle') {
+        highAngleCount++;
+        expect(shot.position.y).toBeGreaterThan(subject.center.y + 0.5);
+      }
+    }
+    // highAngle is the only fresh archetype in the pool given the forced recency, so it
+    // must be picked every time (barring the rare all-candidates-invalid fallback).
+    expect(highAngleCount).toBeGreaterThanOrEqual(20);
+  });
+
   it('multiple co-facing subjects use group archetypes', () => {
     const office = makeOffice();
     const now = Date.now();
     const lastActivity = { e1: now, e2: now };
     const shot = pickShot(ctx({ office, lastActivity, now }));
     expect(['groupLevel', 'elevatedGroup']).toContain(shot.archetype);
+  });
+
+  it('retries at half the min-distance requirement before falling to the unvalidated fallback', () => {
+    // Every single-subject archetype's candidate distance from the subject center is
+    // fixed (only direction jitters, not magnitude): otsCloseup ~1.18, highAngle ~1.90,
+    // sideProfile ~2.13 (for this monitor size/fov). Placing prevPosition AT the subject
+    // center means every candidate from every archetype is 1.18-2.13 from prev — always
+    // under the full MIN_SHOT_DIST (3.5), so the first pass must reject every candidate
+    // from every archetype. Only the halved retry (>=1.75) can succeed, and only via
+    // highAngle or sideProfile (otsCloseup's ~1.18 is under 1.75 too), so a validated
+    // (non-fallback) hit here proves the retry pass ran.
+    const office = makeOffice();
+    const now = Date.now();
+    const lastActivity = { e1: now };
+    const subject = subjectFor('e1', office)!;
+    const shot = pickShot(ctx({ office, lastActivity, now, rng: rng(11), prevPosition: subject.center.clone() }));
+    expect(['highAngle', 'sideProfile']).toContain(shot.archetype);
+    expect(shot.position.distanceTo(subject.center)).toBeGreaterThanOrEqual(MIN_SHOT_DIST / 2);
+    expect(shot.position.distanceTo(subject.center)).toBeLessThan(MIN_SHOT_DIST);
   });
 
   it('a candidate too close to the previous shot is rejected', () => {

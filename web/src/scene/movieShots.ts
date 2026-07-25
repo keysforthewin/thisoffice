@@ -195,13 +195,18 @@ export function fitDistance(spanW: number, spanH: number, fovY: number, aspect: 
   return Math.max((spanH * margin) / (2 * tanY), (spanW * margin) / (2 * tanX));
 }
 
-/** dir must be unit; returns dir yawed/pitched by small random angles. */
+/** dir must be unit; returns dir yawed/pitched by small random angles.
+ *  Positive pitch tilts the direction UPWARD (raises the resulting camera position,
+ *  since candidates are computed as subject.center + dir*dist) — verified via
+ *  right = cross(UP, d): rotating d about +right by +pitch alone would rotate its
+ *  y component negative, so the rotation angle is negated here to keep the sign
+ *  convention "positive pitch = higher camera" intuitive for callers. */
 function jitterDir(dir: THREE.Vector3, rng: () => number, yawRange: number, pitchMin: number, pitchMax: number): THREE.Vector3 {
   const yaw = (rng() * 2 - 1) * yawRange;
   const pitch = pitchMin + rng() * (pitchMax - pitchMin);
   const d = dir.clone().applyAxisAngle(UP, yaw);
   const right = new THREE.Vector3().crossVectors(UP, d).normalize();
-  return d.applyAxisAngle(right, pitch).normalize();
+  return d.applyAxisAngle(right, -pitch).normalize();
 }
 
 // widened so an over-the-shoulder angle exists — the seated character is right in
@@ -334,9 +339,10 @@ function validCandidate(
   subjects: Subject[],
   office: OfficeState | null,
   prev: THREE.Vector3 | null,
+  minDist: number = MIN_SHOT_DIST,
 ): boolean {
   if (isInsideOccluder(pos, office)) return false;
-  if (prev && pos.distanceTo(prev) < MIN_SHOT_DIST) return false;
+  if (prev && pos.distanceTo(prev) < minDist) return false;
   return subjects.every((s) => hasLineOfSight(pos, s, office));
 }
 
@@ -404,10 +410,12 @@ function highCornerCandidate(office: OfficeState | null, rng: () => number): Sho
 }
 
 function lowDollyCandidate(office: OfficeState | null, rng: () => number): Shot {
-  const { width, depth, centerZ } = roomDims(maxSeat(office));
+  const { depth, centerZ } = roomDims(maxSeat(office));
   const sx = rng() < 0.5 ? -1 : 1;
   const z = centerZ + (rng() - 0.5) * depth * 0.6;
-  const position = clampToRoom(new THREE.Vector3(sx * (width / 2 - 1.0), 1.1 + rng() * 0.3, z), office);
+  // track runs down the aisles between desk columns (x = ±3.4, ~1.1 half-width), not
+  // along the side walls where the couch/shelf/lamp line lives.
+  const position = clampToRoom(new THREE.Vector3(sx * (1.7 + (rng() - 0.5) * 0.4), 1.1 + rng() * 0.3, z), office);
   return { position, lookAt: new THREE.Vector3(0, 1.3, z + (rng() - 0.5) * 2) };
 }
 
@@ -458,10 +466,31 @@ export function pickShot(ctx: ShotContext): PickedShot {
     return [...fresh, ...pool.filter((n) => recent.includes(n))];
   };
 
-  const attempt = (name: ArchetypeName, gen: () => Shot, losSubjects: Subject[]): PickedShot | null => {
+  const attempt = (name: ArchetypeName, gen: () => Shot, losSubjects: Subject[], minDist: number = MIN_SHOT_DIST): PickedShot | null => {
     for (let i = 0; i < LOS_CANDIDATES; i++) {
       const shot = gen();
-      if (validCandidate(shot.position, losSubjects, office, prev)) return { ...shot, archetype: name };
+      if (validCandidate(shot.position, losSubjects, office, prev, minDist)) return { ...shot, archetype: name };
+    }
+    return null;
+  };
+
+  /** Try every archetype in the ordered pool at the full min-distance requirement, then
+   *  again at half that (occluder/LOS checks unchanged) before giving up — this rescues
+   *  cuts in tight quarters where the previous shot happens to block every full-distance
+   *  candidate, instead of falling straight through to the unvalidated fallback. */
+  const tryPool = (
+    pool: ArchetypeName[],
+    gens: Record<string, () => Shot>,
+    losSubjects: Subject[],
+  ): PickedShot | null => {
+    const ordered = order(pool);
+    for (const name of ordered) {
+      const hit = attempt(name, gens[name], losSubjects);
+      if (hit) return hit;
+    }
+    for (const name of ordered) {
+      const hit = attempt(name, gens[name], losSubjects, MIN_SHOT_DIST / 2);
+      if (hit) return hit;
     }
     return null;
   };
@@ -473,10 +502,8 @@ export function pickShot(ctx: ShotContext): PickedShot {
       lowDolly: () => lowDollyCandidate(office, rng),
       wideEstablishing: () => wideEstablishingCandidate(office, rng),
     };
-    for (const name of order(IDLE_POOL)) {
-      const hit = attempt(name, gens[name], []);
-      if (hit) return hit;
-    }
+    const hit = tryPool(IDLE_POOL, gens, []);
+    if (hit) return hit;
     return { ...wideShot(office, rng), archetype: 'wideEstablishing' }; // last-resort, unvalidated
   }
 
@@ -490,10 +517,8 @@ export function pickShot(ctx: ShotContext): PickedShot {
       highAngle: () => highAngleCandidate(s, fovY, aspect, rng, office),
       sideProfile: () => sideProfileCandidate(s, fovY, aspect, rng, office),
     };
-    for (const name of order(SINGLE_POOL)) {
-      const hit = attempt(name, gens[name], [s]);
-      if (hit) return hit;
-    }
+    const hit = tryPool(SINGLE_POOL, gens, [s]);
+    if (hit) return hit;
     return { ...closeUpShot(s, fovY, aspect, rng, office), archetype: 'otsCloseup' }; // best-effort fallback
   }
 
@@ -501,9 +526,7 @@ export function pickShot(ctx: ShotContext): PickedShot {
     groupLevel: () => groupCandidate(group, fovY, aspect, rng, office, GROUP_PITCH_MIN, GROUP_PITCH_MAX),
     elevatedGroup: () => groupCandidate(group, fovY, aspect, rng, office, deg(25), deg(45)),
   };
-  for (const name of order(GROUP_POOL)) {
-    const hit = attempt(name, gens[name], group);
-    if (hit) return hit;
-  }
+  const hit = tryPool(GROUP_POOL, gens, group);
+  if (hit) return hit;
   return { ...groupShot(group, fovY, aspect, rng, office), archetype: 'groupLevel' }; // best-effort fallback
 }

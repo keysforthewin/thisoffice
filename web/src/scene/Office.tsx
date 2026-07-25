@@ -73,7 +73,7 @@ function CeilingLight({ position, castShadow = false }: { position: [number, num
       </mesh>
       <pointLight
         color="#f4f1e8"
-        intensity={22}
+        intensity={32}
         distance={20}
         decay={2}
         position={[0, -1.3, 0]}
@@ -110,7 +110,7 @@ export function Office() {
 
       {/* left wall, with a transparent window onto the skybox (windows face outward like before) */}
       <group position={[-width / 2, height / 2, centerZ]} rotation={[0, Math.PI / 2, 0]}>
-        <WallWithWindow w={depth} h={height} ox={1.0} oy={2.1 - height / 2} ow={3.6} oh={1.9} />
+        <WallWithWindow w={depth} h={height} ox={4.5} oy={2.1 - height / 2} ow={3.6} oh={1.9} />
       </group>
       {/* right wall (whiteboard wall) */}
       <mesh receiveShadow position={[width / 2, height / 2, centerZ]} rotation={[0, -Math.PI / 2, 0]}>
