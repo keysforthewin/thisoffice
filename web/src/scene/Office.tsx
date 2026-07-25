@@ -5,6 +5,7 @@ import { Desk, FurnitureModel } from './Desk.tsx';
 import { Whiteboard } from './Whiteboard.tsx';
 import { roomDims, whiteboardTransform, BACK_Z } from './layout.ts';
 import { wallStrips } from './wallOpenings.ts';
+import { WindowVista } from './WindowVista.tsx';
 
 function WallArt({ url, position }: { url: string; position: [number, number, number] }) {
   const texture = useTexture(url);
@@ -32,7 +33,7 @@ function WallWithWindow({ w, h, ox, oy, ow, oh }: { w: number; h: number; ox: nu
           <meshStandardMaterial color="#5c5a68" roughness={1} />
         </mesh>
       ))}
-      {/* glass: barely-there tint so the skybox reads through */}
+      {/* glass: barely-there tint so the vista reads through */}
       <mesh position={[ox, oy, 0.01]}>
         <planeGeometry args={[ow, oh]} />
         <meshBasicMaterial color="#aac4d8" transparent opacity={0.1} depthWrite={false} />
@@ -108,16 +109,22 @@ export function Office() {
         <planeGeometry args={[width, depth]} />
         <meshStandardMaterial color="#8a6f52" roughness={0.85} />
       </mesh>
-      {/* back wall (behind the boss), with a transparent window onto the skybox */}
+      {/* back wall (behind the boss), with a window onto its own layered city vista */}
       <group position={[0, height / 2, backZ]}>
         <WallWithWindow w={width} h={height} ox={-width / 4} oy={2.1 - height / 2} ow={3.6} oh={1.9} />
+        <group position={[-width / 4, 2.1 - height / 2, 0]}>
+          <WindowVista id="back" />
+        </group>
       </group>
       {/* warm spill through the back window (kept from the old fake window) */}
       <pointLight color="#ffd9a0" intensity={14} distance={12} decay={2} position={[-width / 4, 2.1, backZ + 1]} />
 
-      {/* left wall, with a transparent window onto the skybox (windows face outward like before) */}
+      {/* left wall, with a window onto its own layered city vista (windows face outward like before) */}
       <group position={[-width / 2, height / 2, centerZ]} rotation={[0, Math.PI / 2, 0]}>
         <WallWithWindow w={depth} h={height} ox={4.5} oy={2.1 - height / 2} ow={3.6} oh={1.9} />
+        <group position={[4.5, 2.1 - height / 2, 0]}>
+          <WindowVista id="left" />
+        </group>
       </group>
       {/* right wall (whiteboard wall) */}
       <mesh receiveShadow position={[width / 2, height / 2, centerZ]} rotation={[0, -Math.PI / 2, 0]}>

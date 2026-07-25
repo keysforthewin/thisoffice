@@ -3,7 +3,6 @@ import { Canvas } from '@react-three/fiber';
 import { shouldExitFocusOnMissedClick, useStore, type CameraMode } from './store.ts';
 import { Office } from './scene/Office.tsx';
 import { CameraRig, usePovList } from './scene/CameraRig.tsx';
-import { Skybox } from './scene/Skybox.tsx';
 import { SettingsPanel } from './settings/SettingsPanel.tsx';
 import { loadCatalog } from './characters/catalog.ts';
 
@@ -79,11 +78,11 @@ export default function App() {
           }
         }}
       >
+        <color attach="background" args={['#241d2e']} />
         <fog attach="fog" args={['#141218', 20, 46]} />
         <ambientLight intensity={0.5} color="#ffe9d0" />
         <hemisphereLight args={['#b8c4dc', '#5a4a3a', 0.55]} />
         <Suspense fallback={null}>
-          <Skybox />
           <Office />
         </Suspense>
         <CameraRig />
