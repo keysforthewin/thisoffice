@@ -7,11 +7,11 @@ import { activeSetKey, pickShot, type Shot } from './movieShots.ts';
 const CUT_MIN_S = 3;
 const CUT_MAX_S = 10;
 /** handheld position noise amplitude (world units; world scale is 1.35× human) */
-const SHAKE_AMP = 0.05;
+const SHAKE_AMP = 0.015;
 /** look-target drift amplitude */
-const DRIFT_AMP = 0.12;
+const DRIFT_AMP = 0.05;
 /** total pan of the look target across a shot, along camera-right */
-const PAN_AMP = 0.18;
+const PAN_AMP = 0.08;
 
 const ARROW_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
 
@@ -71,16 +71,16 @@ export function MovieCamera() {
     const s = shot.current;
     // layered irrational-ratio sinusoids read as organic drift rather than a loop
     tmpPos.copy(s.position);
-    tmpPos.x += SHAKE_AMP * (Math.sin(t * 1.7) * 0.6 + Math.sin(t * 3.1 + 1.3) * 0.4);
-    tmpPos.y += SHAKE_AMP * (Math.sin(t * 2.3 + 0.7) * 0.6 + Math.sin(t * 4.1 + 2.1) * 0.4);
-    tmpPos.z += SHAKE_AMP * (Math.sin(t * 1.3 + 2.9) * 0.6 + Math.sin(t * 3.7 + 0.4) * 0.4);
+    tmpPos.x += SHAKE_AMP * (Math.sin(t * 0.23) * 0.6 + Math.sin(t * 0.41 + 1.3) * 0.4);
+    tmpPos.y += SHAKE_AMP * (Math.sin(t * 0.31 + 0.7) * 0.6 + Math.sin(t * 0.53 + 2.1) * 0.4);
+    tmpPos.z += SHAKE_AMP * (Math.sin(t * 0.19 + 2.9) * 0.6 + Math.sin(t * 0.37 + 0.4) * 0.4);
 
     tmpForward.copy(s.lookAt).sub(s.position).normalize();
     tmpRight.crossVectors(tmpForward, UP).normalize();
     tmpLook.copy(s.lookAt);
     tmpLook.addScaledVector(tmpRight, panDir.current * PAN_AMP * (t / shotDuration.current - 0.5));
-    tmpLook.x += DRIFT_AMP * Math.sin(t * 0.9 + 0.2) * 0.5;
-    tmpLook.y += DRIFT_AMP * Math.sin(t * 1.1 + 1.7) * 0.5;
+    tmpLook.x += DRIFT_AMP * Math.sin(t * 0.31 + 0.2) * 0.5;
+    tmpLook.y += DRIFT_AMP * Math.sin(t * 0.47 + 1.7) * 0.5;
 
     camera.position.copy(tmpPos);
     camera.lookAt(tmpLook);

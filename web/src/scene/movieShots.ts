@@ -47,6 +47,108 @@ function maxSeat(office: OfficeState | null): number {
   return Math.max(3, ...(office?.employees.map((e) => e.seat) ?? []));
 }
 
+/** Keep a camera position above the floor, under the wall tops, and inside the walls. */
+export function clampToRoom(pos: THREE.Vector3, office: OfficeState | null): THREE.Vector3 {
+  const { width, depth, centerZ } = roomDims(maxSeat(office));
+  const backZ = centerZ - depth / 2;
+  const frontZ = centerZ + depth / 2;
+  pos.y = THREE.MathUtils.clamp(pos.y, 0.4, 3.9);
+  pos.x = THREE.MathUtils.clamp(pos.x, -(width / 2 - 0.3), width / 2 - 0.3);
+  pos.z = THREE.MathUtils.clamp(pos.z, backZ + 0.3, frontZ - 0.3);
+  return pos;
+}
+
+/** Occupied seat numbers: boss (seat 0) plus every employee's seat. */
+function occupiedSeats(office: OfficeState | null): number[] {
+  return [0, ...(office?.employees.map((e) => e.seat) ?? [])];
+}
+
+/** World-space seated-person base position for a seat (see Desk.tsx local offset [0,0,-1.15]). */
+function personPosition(seat: number): THREE.Vector3 {
+  const { position, rotationY } = seatTransform(seat);
+  const local = new THREE.Vector3(0, 0, -1.15).applyAxisAngle(UP, rotationY);
+  return position.clone().add(local);
+}
+
+function monitorAABB(seat: number): THREE.Box3 {
+  const { position, rotationY } = seatTransform(seat);
+  const center = position.clone().add(MONITOR_OFFSET.clone().applyAxisAngle(UP, rotationY));
+  const half = new THREE.Vector3(MONITOR_W / 2, MONITOR_H / 2, 0.15);
+  return new THREE.Box3(center.clone().sub(half), center.clone().add(half));
+}
+
+function seatForKey(key: string, office: OfficeState | null): number | null {
+  if (key === 'boss') return 0;
+  const emp = office?.employees.find((e) => e.id === key);
+  return emp ? emp.seat : null;
+}
+
+export function segmentHitsSphere(a: THREE.Vector3, b: THREE.Vector3, center: THREE.Vector3, radius: number): boolean {
+  const ab = b.clone().sub(a);
+  const len2 = ab.lengthSq();
+  if (len2 < 1e-9) return a.distanceTo(center) <= radius;
+  const t = THREE.MathUtils.clamp(center.clone().sub(a).dot(ab) / len2, 0, 1);
+  const closest = a.clone().addScaledVector(ab, t);
+  return closest.distanceTo(center) <= radius;
+}
+
+export function segmentHitsBox(a: THREE.Vector3, b: THREE.Vector3, box: THREE.Box3): boolean {
+  const dir = b.clone().sub(a);
+  let tmin = 0;
+  let tmax = 1;
+  for (const axis of ['x', 'y', 'z'] as const) {
+    const d = dir[axis];
+    const origin = a[axis];
+    const minB = box.min[axis];
+    const maxB = box.max[axis];
+    if (Math.abs(d) < 1e-9) {
+      if (origin < minB || origin > maxB) return false;
+      continue;
+    }
+    let t1 = (minB - origin) / d;
+    let t2 = (maxB - origin) / d;
+    if (t1 > t2) [t1, t2] = [t2, t1];
+    tmin = Math.max(tmin, t1);
+    tmax = Math.min(tmax, t2);
+    if (tmin > tmax) return false;
+  }
+  return true;
+}
+
+/** True if camPos is inside a person's body sphere or a monitor's AABB (unusable camera spot). */
+function isInsideOccluder(pos: THREE.Vector3, office: OfficeState | null): boolean {
+  for (const seat of occupiedSeats(office)) {
+    const p = personPosition(seat);
+    if (pos.distanceTo(p.clone().add(new THREE.Vector3(0, 1.8, 0))) <= 0.35) return true;
+    if (pos.distanceTo(p.clone().add(new THREE.Vector3(0, 1.25, 0))) <= 0.45) return true;
+  }
+  for (const seat of occupiedSeats(office)) {
+    if (monitorAABB(seat).containsPoint(pos)) return true;
+  }
+  return false;
+}
+
+/**
+ * Does camPos see subject.center? Blocked by any occupied seat's person (head/torso
+ * spheres) or by any OTHER seat's monitor panel (the subject's own monitor is skipped
+ * since the segment ends on it).
+ */
+export function hasLineOfSight(camPos: THREE.Vector3, subject: Subject, office: OfficeState | null): boolean {
+  for (const seat of occupiedSeats(office)) {
+    const p = personPosition(seat);
+    const head = p.clone().add(new THREE.Vector3(0, 1.8, 0));
+    const torso = p.clone().add(new THREE.Vector3(0, 1.25, 0));
+    if (segmentHitsSphere(camPos, subject.center, head, 0.35)) return false;
+    if (segmentHitsSphere(camPos, subject.center, torso, 0.45)) return false;
+  }
+  const ownSeat = seatForKey(subject.key, office);
+  for (const seat of occupiedSeats(office)) {
+    if (ownSeat !== null && seat === ownSeat) continue;
+    if (segmentHitsBox(camPos, subject.center, monitorAABB(seat))) return false;
+  }
+  return true;
+}
+
 export function subjectFor(key: string, office: OfficeState | null): Subject | null {
   if (key === 'whiteboard') {
     const wb = whiteboardTransform(maxSeat(office));
@@ -97,14 +199,33 @@ function jitterDir(dir: THREE.Vector3, rng: () => number, yawRange: number, pitc
   return d.applyAxisAngle(right, pitch).normalize();
 }
 
-const CLOSEUP_YAW = THREE.MathUtils.degToRad(15);
-const CLOSEUP_PITCH = THREE.MathUtils.degToRad(8);
+// widened so an over-the-shoulder angle exists — the seated character is right in
+// front of their own screen, so a straight-on close-up is usually self-occluded
+const CLOSEUP_YAW = THREE.MathUtils.degToRad(35);
+const CLOSEUP_PITCH_MIN = THREE.MathUtils.degToRad(-5);
+const CLOSEUP_PITCH_MAX = THREE.MathUtils.degToRad(25);
+const LOS_CANDIDATES = 16;
 
-export function closeUpShot(subject: Subject, fovY: number, aspect: number, rng: () => number): Shot {
-  const dir = jitterDir(subject.normal, rng, CLOSEUP_YAW, -CLOSEUP_PITCH, CLOSEUP_PITCH);
+export function closeUpShot(subject: Subject, fovY: number, aspect: number, rng: () => number, office: OfficeState | null = null): Shot {
   // margin 1.3: the jittered angle foreshortens the rect, and we want a little air
   const dist = fitDistance(subject.width, subject.height, fovY, aspect, 1.3);
-  return { position: subject.center.clone().addScaledVector(dir, dist), lookAt: subject.center.clone() };
+  let bestPos: THREE.Vector3 | null = null;
+  let bestSeen = -1;
+  for (let i = 0; i < LOS_CANDIDATES; i++) {
+    const dir = jitterDir(subject.normal, rng, CLOSEUP_YAW, CLOSEUP_PITCH_MIN, CLOSEUP_PITCH_MAX);
+    const pos = clampToRoom(subject.center.clone().addScaledVector(dir, dist), office);
+    if (isInsideOccluder(pos, office)) continue;
+    const seen = hasLineOfSight(pos, subject, office) ? 1 : 0;
+    if (seen === 1) return { position: pos, lookAt: subject.center.clone() };
+    if (seen > bestSeen) {
+      bestSeen = seen;
+      bestPos = pos;
+    }
+  }
+  // every candidate was inside an occluder (rare) — fall back to a straight-on shot,
+  // still clamped to the room
+  bestPos ??= clampToRoom(subject.center.clone().addScaledVector(subject.normal, dist), office);
+  return { position: bestPos, lookAt: subject.center.clone() };
 }
 
 const GROUP_YAW = THREE.MathUtils.degToRad(40);
@@ -113,20 +234,13 @@ const GROUP_PITCH_MAX = THREE.MathUtils.degToRad(20);
 /** min dot(viewDir→camera, screen normal) for a screen to read as front-facing */
 const FRONT_FACING_DOT = 0.25;
 
-export function groupShot(subjects: Subject[], fovY: number, aspect: number, rng: () => number): Shot {
+export function groupShot(subjects: Subject[], fovY: number, aspect: number, rng: () => number, office: OfficeState | null = null): Shot {
   const centroid = subjects
     .reduce((acc, s) => acc.add(s.center), new THREE.Vector3())
     .divideScalar(subjects.length);
   const avgNormal = subjects
     .reduce((acc, s) => acc.add(s.normal), new THREE.Vector3())
     .normalize();
-
-  let dir: THREE.Vector3 | null = null;
-  for (let attempt = 0; attempt < 8 && !dir; attempt++) {
-    const cand = jitterDir(avgNormal, rng, GROUP_YAW, GROUP_PITCH_MIN, GROUP_PITCH_MAX);
-    if (subjects.every((s) => cand.dot(s.normal) > FRONT_FACING_DOT)) dir = cand;
-  }
-  dir ??= jitterDir(avgNormal, () => 0.5, 0, GROUP_PITCH_MIN, GROUP_PITCH_MIN);
 
   // bounding sphere of all screen corners around the centroid; a distance of
   // R*margin/min(tan) + R guarantees every corner is inside the frustum
@@ -141,16 +255,41 @@ export function groupShot(subjects: Subject[], fovY: number, aspect: number, rng
   const tanY = Math.tan(fovY / 2);
   const minTan = Math.min(tanY, tanY * aspect);
   const dist = (radius * 1.15) / minTan + radius;
-  return { position: centroid.clone().addScaledVector(dir, dist), lookAt: centroid.clone() };
+
+  // among front-facing candidates (existing constraint), prefer one with a clamped,
+  // occluder-free position and line of sight to every subject; fall back to the
+  // front-facing candidate that sees the most subjects
+  let bestPos: THREE.Vector3 | null = null;
+  let bestSeen = -1;
+  let firstFrontFacingDir: THREE.Vector3 | null = null;
+  for (let i = 0; i < LOS_CANDIDATES; i++) {
+    const cand = jitterDir(avgNormal, rng, GROUP_YAW, GROUP_PITCH_MIN, GROUP_PITCH_MAX);
+    if (!subjects.every((s) => cand.dot(s.normal) > FRONT_FACING_DOT)) continue;
+    firstFrontFacingDir ??= cand;
+    const pos = clampToRoom(centroid.clone().addScaledVector(cand, dist), office);
+    if (isInsideOccluder(pos, office)) continue;
+    const seen = subjects.filter((s) => hasLineOfSight(pos, s, office)).length;
+    if (seen === subjects.length) return { position: pos, lookAt: centroid.clone() };
+    if (seen > bestSeen) {
+      bestSeen = seen;
+      bestPos = pos;
+    }
+  }
+  const fallbackDir = firstFrontFacingDir ?? jitterDir(avgNormal, () => 0.5, 0, GROUP_PITCH_MIN, GROUP_PITCH_MIN);
+  bestPos ??= clampToRoom(centroid.clone().addScaledVector(fallbackDir, dist), office);
+  return { position: bestPos, lookAt: centroid.clone() };
 }
 
 function wideShot(office: OfficeState | null, rng: () => number): Shot {
   const { width, depth, centerZ } = roomDims(maxSeat(office));
   const angle = rng() * Math.PI * 2;
-  const position = new THREE.Vector3(
-    Math.cos(angle) * width * 0.42,
-    3.0 + rng() * 1.0,
-    centerZ + Math.sin(angle) * depth * 0.42,
+  const position = clampToRoom(
+    new THREE.Vector3(
+      Math.cos(angle) * width * 0.42,
+      3.0 + rng() * 1.0,
+      centerZ + Math.sin(angle) * depth * 0.42,
+    ),
+    office,
   );
   return { position, lookAt: new THREE.Vector3(0, 1.2, centerZ) };
 }
@@ -180,7 +319,7 @@ export function pickShot(ctx: ShotContext): Shot {
       .map((k) => subjectFor(k, office))
       .filter((s): s is Subject => s !== null);
     if (cutIndex % 2 === 1 && all.length > 0) {
-      return closeUpShot(all[Math.floor(rng() * all.length)], fovY, aspect, rng);
+      return closeUpShot(all[Math.floor(rng() * all.length)], fovY, aspect, rng, office);
     }
     return wideShot(office, rng);
   }
@@ -188,6 +327,6 @@ export function pickShot(ctx: ShotContext): Shot {
   const groups = groupByFacing(subjects);
   const group = groups[cutIndex % groups.length];
   return group.length === 1
-    ? closeUpShot(group[0], fovY, aspect, rng)
-    : groupShot(group, fovY, aspect, rng);
+    ? closeUpShot(group[0], fovY, aspect, rng, office)
+    : groupShot(group, fovY, aspect, rng, office);
 }

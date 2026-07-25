@@ -1,15 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import type { Employee, OfficeState } from '../../../shared/types.ts';
+import { roomDims, seatTransform } from './layout.ts';
 import {
   ACTIVE_WINDOW_MS,
   activeKeys,
   activeSetKey,
+  clampToRoom,
   closeUpShot,
   fitDistance,
   groupByFacing,
   groupShot,
+  hasLineOfSight,
   pickShot,
+  segmentHitsBox,
+  segmentHitsSphere,
   subjectFor,
   type Subject,
 } from './movieShots.ts';
@@ -179,5 +184,131 @@ describe('shots', () => {
     });
     expect(Number.isFinite(shot.position.x)).toBe(true);
     expect(shot.position.y).toBeGreaterThan(0);
+  });
+});
+
+function roomBounds(office: OfficeState | null) {
+  const maxSeat = Math.max(3, ...(office?.employees.map((e) => e.seat) ?? []));
+  const { width, depth, centerZ } = roomDims(maxSeat);
+  const backZ = centerZ - depth / 2;
+  const frontZ = centerZ + depth / 2;
+  return {
+    yMin: 0.4, yMax: 3.9,
+    xMin: -(width / 2 - 0.3), xMax: width / 2 - 0.3,
+    zMin: backZ + 0.3, zMax: frontZ - 0.3,
+  };
+}
+
+function expectInRoom(pos: THREE.Vector3, office: OfficeState | null) {
+  const b = roomBounds(office);
+  expect(pos.y).toBeGreaterThanOrEqual(b.yMin - 1e-6);
+  expect(pos.y).toBeLessThanOrEqual(b.yMax + 1e-6);
+  expect(pos.x).toBeGreaterThanOrEqual(b.xMin - 1e-6);
+  expect(pos.x).toBeLessThanOrEqual(b.xMax + 1e-6);
+  expect(pos.z).toBeGreaterThanOrEqual(b.zMin - 1e-6);
+  expect(pos.z).toBeLessThanOrEqual(b.zMax + 1e-6);
+}
+
+describe('clampToRoom', () => {
+  it('clamps 50 seeded shots of every type into the room bounds', () => {
+    const office = makeOffice();
+    const subjects = [subjectFor('e1', office)!, subjectFor('e2', office)!, subjectFor('boss', office)!, subjectFor('whiteboard', office)!];
+    for (let i = 0; i < 50; i++) {
+      const r = rng(i + 1);
+      const kind = i % 3;
+      let shot;
+      if (kind === 0) shot = closeUpShot(subjects[i % subjects.length], FOV, ASPECT, r, office);
+      else if (kind === 1) shot = groupShot(subjects.slice(0, 2), FOV, ASPECT, r, office);
+      else shot = pickShot({ office, lastActivity: {}, now: 0, fovY: FOV, aspect: ASPECT, rng: r, cutIndex: i });
+      expectInRoom(shot.position, office);
+    }
+  });
+
+  it('clamps an out-of-bounds vector directly', () => {
+    const office = makeOffice();
+    const pos = clampToRoom(new THREE.Vector3(-100, -5, 200), office);
+    expectInRoom(pos, office);
+  });
+});
+
+describe('segmentHitsSphere', () => {
+  it('detects a hit when the segment passes through the sphere', () => {
+    const a = new THREE.Vector3(-5, 0, 0);
+    const b = new THREE.Vector3(5, 0, 0);
+    expect(segmentHitsSphere(a, b, new THREE.Vector3(0, 0, 0), 1)).toBe(true);
+  });
+  it('detects a miss when the segment passes wide of the sphere', () => {
+    const a = new THREE.Vector3(-5, 5, 0);
+    const b = new THREE.Vector3(5, 5, 0);
+    expect(segmentHitsSphere(a, b, new THREE.Vector3(0, 0, 0), 1)).toBe(false);
+  });
+  it('detects a miss when the segment ends short of the sphere', () => {
+    const a = new THREE.Vector3(-5, 0, 0);
+    const b = new THREE.Vector3(-2, 0, 0);
+    expect(segmentHitsSphere(a, b, new THREE.Vector3(0, 0, 0), 1)).toBe(false);
+  });
+});
+
+describe('segmentHitsBox', () => {
+  const box = new THREE.Box3(new THREE.Vector3(-1, -1, -1), new THREE.Vector3(1, 1, 1));
+  it('detects a hit when the segment crosses the box', () => {
+    expect(segmentHitsBox(new THREE.Vector3(-5, 0, 0), new THREE.Vector3(5, 0, 0), box)).toBe(true);
+  });
+  it('detects a miss when the segment passes wide of the box', () => {
+    expect(segmentHitsBox(new THREE.Vector3(-5, 5, 0), new THREE.Vector3(5, 5, 0), box)).toBe(false);
+  });
+  it('detects a miss when the segment ends short of the box', () => {
+    expect(segmentHitsBox(new THREE.Vector3(-5, 0, 0), new THREE.Vector3(-2, 0, 0), box)).toBe(false);
+  });
+});
+
+describe('hasLineOfSight', () => {
+  it('blocks an employee close-up straight along the screen normal at eye height (own person occludes)', () => {
+    const office = makeOffice();
+    const subject = subjectFor('e1', office)!;
+    // straight back along the normal at seated eye height (~1.5), through the seated person's torso/head
+    const camPos = subject.center.clone().addScaledVector(subject.normal, 3).setY(1.6);
+    expect(hasLineOfSight(camPos, subject, office)).toBe(false);
+  });
+  it('is clear from above/beside the shoulder line', () => {
+    const office = makeOffice();
+    const subject = subjectFor('e1', office)!;
+    const camPos = subject.center.clone().addScaledVector(subject.normal, 1.5).add(new THREE.Vector3(1.2, 1.2, 0));
+    expect(hasLineOfSight(camPos, subject, office)).toBe(true);
+  });
+});
+
+describe('closeUpShot line of sight', () => {
+  it('for 20 seeds on an employee monitor, position is never inside an occluder, and LOS holds for >=15/20', () => {
+    const office = makeOffice();
+    const subject = subjectFor('e1', office)!;
+    let losCount = 0;
+    for (let i = 0; i < 20; i++) {
+      const shot = closeUpShot(subject, FOV, ASPECT, rng(i), office);
+      // not inside any person sphere (approximate: check both known occupied seats' spheres)
+      for (const seat of [0, 1, 2]) {
+        const { position, rotationY } = seatTransform(seat);
+        const p = position.clone().add(new THREE.Vector3(0, 0, -1.15).applyAxisAngle(new THREE.Vector3(0, 1, 0), rotationY));
+        expect(shot.position.distanceTo(p.clone().add(new THREE.Vector3(0, 1.8, 0)))).toBeGreaterThan(0.35);
+        expect(shot.position.distanceTo(p.clone().add(new THREE.Vector3(0, 1.25, 0)))).toBeGreaterThan(0.45);
+      }
+      if (hasLineOfSight(shot.position, subject, office)) losCount++;
+    }
+    expect(losCount).toBeGreaterThanOrEqual(15);
+  });
+});
+
+describe('groupShot with office', () => {
+  it('for 20 seeds all subjects stay front-facing and in-frustum, and position is in-room', () => {
+    const office = makeOffice();
+    const subjects = [subjectFor('e1', office)!, subjectFor('e2', office)!, subjectFor('whiteboard', office)!];
+    for (let i = 0; i < 20; i++) {
+      const shot = groupShot(subjects, FOV, ASPECT, rng(i), office);
+      for (const s of subjects) {
+        expect(shot.position.clone().sub(s.center).dot(s.normal)).toBeGreaterThan(0);
+        expect(inFrustum(s.center, shot)).toBe(true);
+      }
+      expectInRoom(shot.position, office);
+    }
   });
 });
