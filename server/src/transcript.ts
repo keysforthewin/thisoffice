@@ -1,5 +1,6 @@
 import path from 'node:path';
 import type { Office } from './office.ts';
+import type { ScreenStreamer } from './streamer.ts';
 import { summarizePrompt, nameNewHire } from './summarizer.ts';
 
 /**
@@ -23,7 +24,6 @@ interface TrackedTask {
   status: 'pending' | 'in_progress' | 'completed';
 }
 
-const MAX_OUTPUT_CHARS = 4000;
 const BOSS_IDLE_MS = 8000;
 
 export class Transcripts {
@@ -41,7 +41,10 @@ export class Transcripts {
   /** toolUseId -> TaskUpdate input awaiting confirmation */
   private pendingTaskUpdates = new Map<string, { project: string; taskId: string; status?: string; subject?: string }>();
 
-  constructor(private office: Office) {}
+  constructor(
+    private office: Office,
+    private streamer: ScreenStreamer,
+  ) {}
 
   fileAppeared(file: string) {
     if (!isSubagentFile(file)) return;
@@ -162,11 +165,8 @@ export class Transcripts {
       });
     }
 
-    this.office.monitor(employee.id, {
-      clear: true,
-      title: `${label} · ${project}`,
-      append: inputPreview(name, input),
-    });
+    this.office.monitor(employee.id, { clear: true, title: `${label} · ${project}` });
+    this.streamer.enqueue(employee.id, inputPreview(name, input));
   }
 
   private finishTool(result: any) {
@@ -205,9 +205,7 @@ export class Transcripts {
     }
 
     const text = extractText(result.content) || '(no output)';
-    this.office.monitor(activity.employeeId, {
-      append: '\n' + truncate(text, MAX_OUTPUT_CHARS) + '\n\n✓ done',
-    });
+    this.streamer.enqueue(activity.employeeId, text + '\n\n✓ done');
     this.office.finish(activity.key);
   }
 
@@ -230,15 +228,22 @@ export class Transcripts {
 
   private handleSubagentLine(activity: Activity, line: any) {
     if (line.type === 'assistant') {
-      const blocks = contentBlocks(line.message?.content);
-      for (const b of blocks) {
+      for (const b of contentBlocks(line.message?.content)) {
         if (b.type === 'text' && b.text?.trim()) {
-          this.office.monitor(activity.employeeId, { append: '\n' + truncate(b.text, 1000) });
+          this.streamer.enqueue(activity.employeeId, b.text.trim());
+        } else if (b.type === 'thinking' && b.thinking?.trim()) {
+          this.streamer.enqueue(activity.employeeId, '💭 ' + b.thinking.trim());
         } else if (b.type === 'tool_use') {
-          this.office.monitor(activity.employeeId, {
-            append: `\n> ${b.name} ${truncate(oneLine(inputPreview(b.name, b.input ?? {})), 120)}`,
-          });
+          this.streamer.enqueue(activity.employeeId, `> ${b.name} ${oneLine(inputPreview(b.name, b.input ?? {}))}`);
         }
+      }
+      return;
+    }
+    if (line.type === 'user') {
+      for (const b of contentBlocks(line.message?.content)) {
+        if (b.type !== 'tool_result') continue;
+        const text = extractText(b.content);
+        if (text) this.streamer.enqueue(activity.employeeId, text);
       }
     }
   }
@@ -275,10 +280,6 @@ function extractText(content: any): string {
     .trim();
 }
 
-function truncate(s: string, n: number): string {
-  return s.length > n ? s.slice(0, n) + `\n… [${s.length - n} chars truncated]` : s;
-}
-
 function oneLine(s: string): string {
   return s.replace(/\s+/g, ' ');
 }
@@ -303,10 +304,9 @@ function inputPreview(tool: string, input: Record<string, any>): string {
       return `fetch ${input.url ?? ''}`;
     case 'Task':
     case 'Agent':
-      return truncate(input.prompt ?? input.description ?? '', 600);
+      return input.prompt ?? input.description ?? '';
     default: {
-      const json = JSON.stringify(input, null, 1) ?? '';
-      return truncate(json, 400);
+      return JSON.stringify(input, null, 1) ?? '';
     }
   }
 }
