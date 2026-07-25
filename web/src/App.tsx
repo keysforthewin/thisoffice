@@ -2,6 +2,7 @@ import { Suspense, useEffect, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { shouldExitFocusOnMissedClick, useStore, type CameraMode } from './store.ts';
 import { Office } from './scene/Office.tsx';
+import { DuskSky } from './scene/DuskSky.tsx';
 import { CameraRig, usePovList } from './scene/CameraRig.tsx';
 import { SettingsPanel } from './settings/SettingsPanel.tsx';
 import { loadCatalog } from './characters/catalog.ts';
@@ -83,6 +84,7 @@ export default function App() {
         <ambientLight intensity={0.5} color="#ffe9d0" />
         <hemisphereLight args={['#b8c4dc', '#5a4a3a', 0.55]} />
         <Suspense fallback={null}>
+          <DuskSky />
           <Office />
         </Suspense>
         <CameraRig />
