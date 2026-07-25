@@ -3,6 +3,8 @@ import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
 import { useStore } from '../store.ts';
 import { boardContent, type BoardContent } from './whiteboardContent.ts';
+import { statusBoardContent, type StatusBoardContent } from './statusBoardContent.ts';
+import type { OfficeState } from '../../../shared/types.ts';
 
 const W = 640;
 const H = 400;
@@ -12,7 +14,14 @@ interface Props {
   rotationY?: number;
 }
 
-export function Whiteboard({ position, rotationY = 0 }: Props) {
+interface BoardMeshProps<T> extends Props {
+  /** projection from office state to board content; redrawn only when its JSON changes */
+  content: (office: OfficeState | null) => T;
+  draw: (ctx: CanvasRenderingContext2D, content: T) => void;
+}
+
+/** Shared wall-board shell: frame, marker tray, and a canvas texture redrawn on content change. */
+function BoardMesh<T>({ position, rotationY = 0, content, draw }: BoardMeshProps<T>) {
   const { ctx, texture } = useMemo(() => {
     const canvas = document.createElement('canvas');
     canvas.width = W;
@@ -26,11 +35,11 @@ export function Whiteboard({ position, rotationY = 0 }: Props) {
   const drawnKey = useRef('');
 
   useFrame(() => {
-    const content = boardContent(useStore.getState().office);
-    const key = JSON.stringify(content);
+    const c = content(useStore.getState().office);
+    const key = JSON.stringify(c);
     if (key === drawnKey.current) return;
     drawnKey.current = key;
-    draw(ctx, content);
+    draw(ctx, c);
     texture.needsUpdate = true;
   });
 
@@ -52,6 +61,14 @@ export function Whiteboard({ position, rotationY = 0 }: Props) {
       </mesh>
     </group>
   );
+}
+
+export function Whiteboard(props: Props) {
+  return <BoardMesh {...props} content={(office) => boardContent(office)} draw={drawTodos} />;
+}
+
+export function StatusBoard(props: Props) {
+  return <BoardMesh {...props} content={statusBoardContent} draw={drawStatus} />;
 }
 
 function drawHeading(ctx: CanvasRenderingContext2D, text: string) {
@@ -125,56 +142,18 @@ function wrapLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number
   return lines;
 }
 
-function draw(ctx: CanvasRenderingContext2D, content: BoardContent) {
+function drawTodos(ctx: CanvasRenderingContext2D, content: BoardContent) {
   ctx.fillStyle = '#f4f4ef';
   ctx.fillRect(0, 0, W, H);
+  drawHeading(ctx, 'TODO');
 
   if (content.mode === 'empty') {
-    drawHeading(ctx, 'TODO');
     ctx.fillStyle = '#8a8f96';
     ctx.font = 'italic 20px "Segoe Print", "Comic Sans MS", cursive';
     ctx.fillText('(nothing on the board)', 40, 120);
     return;
   }
 
-  if (content.mode === 'synopsis') {
-    // "IN PROGRESS" only makes sense while someone's actually working; once
-    // everyone's idle again the inbox item is stale, so relabel it as history.
-    drawHeading(ctx, content.workers.length > 0 ? 'IN PROGRESS' : 'LAST PROMPT');
-    drawProjectLabel(ctx, content.project);
-
-    ctx.fillStyle = '#22262b';
-    ctx.font = 'italic 19px "Segoe Print", "Comic Sans MS", cursive';
-    const summaryLines = content.summary ? wrapLines(ctx, content.summary, W - 60, 3) : [];
-    let y = 90;
-    for (const line of summaryLines) {
-      ctx.fillText(line, 30, y);
-      y += 26;
-    }
-
-    y += 6;
-    ctx.strokeStyle = '#c9c9bd';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(28, y);
-    ctx.lineTo(W - 28, y);
-    ctx.stroke();
-    y += 30;
-
-    ctx.font = '19px "Segoe Print", "Comic Sans MS", cursive';
-    for (const worker of content.workers.slice(0, 7)) {
-      if (y > H - 15) break;
-      const label = `${worker.name} — ${worker.task}`;
-      const text = label.length > 48 ? label.slice(0, 47) + '…' : label;
-      ctx.fillStyle = '#a33';
-      ctx.fillText(`• ${text}`, 34, y);
-      y += 27;
-    }
-    return;
-  }
-
-  // mode === 'todos'
-  drawHeading(ctx, 'TODO');
   drawProjectLabel(ctx, content.project);
 
   ctx.font = '19px "Segoe Print", "Comic Sans MS", cursive';
@@ -207,5 +186,52 @@ function draw(ctx: CanvasRenderingContext2D, content: BoardContent) {
     }
     if (active) ctx.fillText('◀', 62 + ctx.measureText(text).width + 10, y);
     y += 27;
+  }
+}
+
+function drawStatus(ctx: CanvasRenderingContext2D, content: StatusBoardContent) {
+  ctx.fillStyle = '#f4f4ef';
+  ctx.fillRect(0, 0, W, H);
+  drawHeading(ctx, 'STATUS');
+
+  if (content.items.length === 0 && content.workers.length === 0) {
+    ctx.fillStyle = '#8a8f96';
+    ctx.font = 'italic 20px "Segoe Print", "Comic Sans MS", cursive';
+    ctx.fillText('(all quiet)', 40, 120);
+    return;
+  }
+
+  ctx.font = '19px "Segoe Print", "Comic Sans MS", cursive';
+  let y = 90;
+  for (const item of content.items) {
+    if (y > H - 40) break;
+    ctx.fillStyle = item.kind === 'boss' ? '#a33' : '#22262b';
+    const lines = wrapLines(ctx, item.text, W - 90, 2);
+    ctx.fillText('•', 34, y);
+    for (const l of lines) {
+      ctx.fillText(l, 54, y);
+      y += 25;
+    }
+    y += 4;
+  }
+
+  if (content.workers.length > 0) {
+    y += 4;
+    ctx.strokeStyle = '#c9c9bd';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(28, y);
+    ctx.lineTo(W - 28, y);
+    ctx.stroke();
+    y += 28;
+    ctx.font = 'italic 18px "Segoe Print", "Comic Sans MS", cursive';
+    for (const worker of content.workers.slice(0, 4)) {
+      if (y > H - 12) break;
+      const label = `${worker.name} — ${worker.task}`;
+      const text = label.length > 52 ? label.slice(0, 51) + '…' : label;
+      ctx.fillStyle = '#1a6e3c';
+      ctx.fillText(`▸ ${text}`, 34, y);
+      y += 25;
+    }
   }
 }

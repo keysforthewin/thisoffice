@@ -111,6 +111,8 @@ interface AppStore {
 let whiteboardKey: string | null = null;
 /** id of the newest inbox item last seen; a new tail id means the boss just received a message */
 let inboxKey: string | null = null;
+/** id of the newest status item last seen; keyed on id so summarizer text rewrites don't re-stamp */
+let statusKey: string | null = null;
 
 /** stamp `key` as active now, dropping entries that have already fallen outside the movie camera's window */
 function stampActivity(lastActivity: Record<string, number>, key: string): Record<string, number> {
@@ -147,9 +149,14 @@ export const useStore = create<AppStore>((set, get) => ({
       const tailId = msg.state.inbox.at(-1)?.id ?? '';
       const prevInboxKey = inboxKey;
       inboxKey = tailId;
+      // `?? []` guards against an older server without the status field
+      const statusTailId = (msg.state.status ?? []).at(-1)?.id ?? '';
+      const prevStatusKey = statusKey;
+      statusKey = statusTailId;
       let lastActivity = get().lastActivity;
       if (prevKey !== null && prevKey !== key) lastActivity = stampActivity(lastActivity, 'whiteboard');
       if (prevInboxKey !== null && prevInboxKey !== tailId) lastActivity = stampActivity(lastActivity, 'boss');
+      if (prevStatusKey !== null && prevStatusKey !== statusTailId) lastActivity = stampActivity(lastActivity, 'statusboard');
       set({ office: msg.state, lastActivity });
       return;
     }
@@ -245,4 +252,9 @@ export function resetWhiteboardKeyForTest() {
 /** test-only: forget the cached inbox tail id so the next state msg counts as "first" */
 export function resetInboxKeyForTest() {
   inboxKey = null;
+}
+
+/** test-only: forget the cached status tail id so the next state msg counts as "first" */
+export function resetStatusKeyForTest() {
+  statusKey = null;
 }

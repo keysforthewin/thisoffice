@@ -1,29 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { Employee, InboxItem, OfficeState } from '../../../shared/types.ts';
-import { boardContent } from './whiteboardContent.ts';
-
-function makeEmployee(overrides: Partial<Employee>): Employee {
-  return {
-    id: 'e1',
-    name: 'Alice',
-    seat: 1,
-    variant: 'Knight',
-    hiredAt: new Date().toISOString(),
-    status: 'idle',
-    task: null,
-    ...overrides,
-  };
-}
-
-function makeInbox(overrides: Partial<InboxItem>): InboxItem {
-  return {
-    id: 'i1',
-    project: 'thisoffice',
-    text: 'Doing a thing',
-    at: new Date().toISOString(),
-    ...overrides,
-  };
-}
+import type { OfficeState, TodoItem } from '../../../shared/types.ts';
+import { boardContent, TODO_STALE_MS } from './whiteboardContent.ts';
 
 function makeOffice(overrides: Partial<OfficeState>): OfficeState {
   return {
@@ -32,109 +9,67 @@ function makeOffice(overrides: Partial<OfficeState>): OfficeState {
     employees: [],
     inbox: [],
     todos: null,
+    status: [],
     staffing: { minEmployees: 1, maxEmployees: 5, idleTimeoutSec: 60 },
     waitingForInput: false,
     ...overrides,
   };
 }
 
+const NOW = Date.parse('2026-07-25T12:00:00Z');
+
+function todosAt(items: TodoItem[], ageMs: number) {
+  return { project: 'thisoffice', items, at: new Date(NOW - ageMs).toISOString() };
+}
+
 describe('boardContent', () => {
-  it('returns empty when there is no office', () => {
+  it('returns empty when there is no office or no todos', () => {
     expect(boardContent(null)).toEqual({ mode: 'empty' });
-  });
-
-  it('returns empty when the office has no todos, inbox, or working employees', () => {
-    const office = makeOffice({});
-    expect(boardContent(office)).toEqual({ mode: 'empty' });
-  });
-
-  it('prefers real todos over a synopsis, even with inbox and working employees present', () => {
-    const office = makeOffice({
-      todos: { project: 'thisoffice', items: [{ content: 'Ship it', status: 'pending' }] },
-      inbox: [makeInbox({})],
-      employees: [makeEmployee({ status: 'working', task: 'Bash' })],
+    expect(boardContent(makeOffice({}))).toEqual({ mode: 'empty' });
+    expect(boardContent(makeOffice({ todos: { project: 'p', items: [], at: new Date(NOW).toISOString() } }), NOW)).toEqual({
+      mode: 'empty',
     });
-    const result = boardContent(office);
-    expect(result.mode).toBe('todos');
-    if (result.mode === 'todos') {
-      expect(result.project).toBe('thisoffice');
-      expect(result.items).toEqual([{ content: 'Ship it', status: 'pending' }]);
-    }
   });
 
-  it('falls back to synopsis when todos is null', () => {
+  it('shows todos even when the inbox and employees have activity (synopsis lives on the status board)', () => {
     const office = makeOffice({
-      todos: null,
-      inbox: [makeInbox({ project: 'thisoffice', text: 'Refactoring the whiteboard' })],
-      employees: [
-        makeEmployee({ id: 'e2', name: 'Bob', seat: 2, status: 'working', task: 'Edit' }),
-        makeEmployee({ id: 'e1', name: 'Alice', seat: 1, status: 'working', task: 'Bash' }),
-      ],
+      todos: todosAt([{ content: 'Ship it', status: 'pending' }], 0),
+      inbox: [{ id: 'i1', project: 'thisoffice', text: 'Doing a thing', at: new Date(NOW).toISOString() }],
     });
-    const result = boardContent(office);
-    expect(result).toEqual({
-      mode: 'synopsis',
+    expect(boardContent(office, NOW)).toEqual({
+      mode: 'todos',
       project: 'thisoffice',
-      summary: 'Refactoring the whiteboard',
-      workers: [
-        { name: 'Alice', task: 'Bash' },
-        { name: 'Bob', task: 'Edit' },
-      ],
+      items: [{ content: 'Ship it', status: 'pending' }],
     });
   });
 
-  it('falls back to synopsis when todos has empty items', () => {
-    const office = makeOffice({
-      todos: { project: 'thisoffice', items: [] },
-      inbox: [makeInbox({ text: 'Latest prompt' })],
-      employees: [],
-    });
-    const result = boardContent(office);
-    expect(result.mode).toBe('synopsis');
-    if (result.mode === 'synopsis') {
-      expect(result.summary).toBe('Latest prompt');
-      expect(result.workers).toEqual([]);
-    }
+  it('keeps a fresh all-completed list on the board', () => {
+    const office = makeOffice({ todos: todosAt([{ content: 'x', status: 'completed' }], TODO_STALE_MS - 60_000) });
+    expect(boardContent(office, NOW).mode).toBe('todos');
   });
 
-  it('excludes idle employees and working employees without a task', () => {
-    const office = makeOffice({
-      inbox: [makeInbox({})],
-      employees: [
-        makeEmployee({ id: 'e1', name: 'Idle Ivy', status: 'idle', task: null }),
-        makeEmployee({ id: 'e2', name: 'Taskless Tom', status: 'working', task: null }),
-        makeEmployee({ id: 'e3', name: 'Working Wendy', status: 'working', task: 'Read' }),
-      ],
-    });
-    const result = boardContent(office);
-    expect(result.mode).toBe('synopsis');
-    if (result.mode === 'synopsis') {
-      expect(result.workers).toEqual([{ name: 'Working Wendy', task: 'Read' }]);
-    }
+  it('drops an all-completed list once it goes stale', () => {
+    const office = makeOffice({ todos: todosAt([{ content: 'x', status: 'completed' }], TODO_STALE_MS + 60_000) });
+    expect(boardContent(office, NOW)).toEqual({ mode: 'empty' });
   });
 
-  it('uses the latest inbox item, sorted by insertion order (last wins)', () => {
+  it('an old list with unfinished items never goes stale', () => {
     const office = makeOffice({
-      inbox: [makeInbox({ text: 'Older prompt' }), makeInbox({ id: 'i2', text: 'Newer prompt' })],
-      employees: [],
+      todos: todosAt(
+        [
+          { content: 'done', status: 'completed' },
+          { content: 'still open', status: 'pending' },
+        ],
+        TODO_STALE_MS * 10,
+      ),
     });
-    const result = boardContent(office);
-    expect(result.mode).toBe('synopsis');
-    if (result.mode === 'synopsis') {
-      expect(result.summary).toBe('Newer prompt');
-    }
+    expect(boardContent(office, NOW).mode).toBe('todos');
   });
 
-  it('produces a synopsis from working employees alone when there is no inbox item', () => {
+  it('an all-completed list without a timestamp (old server) is stale immediately', () => {
     const office = makeOffice({
-      inbox: [],
-      employees: [makeEmployee({ status: 'working', task: 'Bash' })],
+      todos: { project: 'thisoffice', items: [{ content: 'x', status: 'completed' }] },
     });
-    const result = boardContent(office);
-    expect(result.mode).toBe('synopsis');
-    if (result.mode === 'synopsis') {
-      expect(result.summary).toBe('');
-      expect(result.workers).toEqual([{ name: 'Alice', task: 'Bash' }]);
-    }
+    expect(boardContent(office, NOW)).toEqual({ mode: 'empty' });
   });
 });

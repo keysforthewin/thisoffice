@@ -121,13 +121,61 @@ describe('inbox persistence', () => {
       { content: 'persist todos', status: 'in_progress' },
     ]);
     const reloaded = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
-    expect(reloaded.getState().todos).toEqual({
+    expect(reloaded.getState().todos).toMatchObject({
       project: 'thisoffice',
       items: [
         { content: 'write tests', status: 'completed' },
         { content: 'persist todos', status: 'in_progress' },
       ],
     });
+  });
+
+  it('setTodos stamps a timestamp and legacy persisted todos restore as epoch', () => {
+    const file = tempFile();
+    const office = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
+    office.setTodos('thisoffice', [{ content: 'x', status: 'completed' }]);
+    const at = office.getState().todos!.at!;
+    expect(Date.now() - Date.parse(at)).toBeLessThan(5_000);
+    // strip `at` from the file, as pre-upgrade office.json would have it
+    const raw = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    delete raw.todos.at;
+    fs.writeFileSync(file, JSON.stringify(raw));
+    const reloaded = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
+    expect(reloaded.getState().todos!.at).toBe(new Date(0).toISOString());
+  });
+
+  it('pushStatus caps the feed, keeps ids monotonic, and survives a reload', () => {
+    const file = tempFile();
+    const office = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
+    for (let i = 1; i <= 13; i++) office.pushStatus('done', `job ${i}`);
+    const status = office.getState().status;
+    expect(status.length).toBe(10);
+    expect(status[0].text).toBe('job 4');
+    expect(status.at(-1)!.text).toBe('job 13');
+    const reloaded = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
+    expect(reloaded.getState().status.map((s) => s.text)).toEqual(status.map((s) => s.text));
+    reloaded.pushStatus('boss', 'after reload');
+    const ids = reloaded.getState().status.map((s) => s.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('an identical consecutive status refreshes the tail instead of duplicating', () => {
+    const file = tempFile();
+    const office = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
+    office.pushStatus('session', 'Looking at myapp: "Fix login"');
+    office.pushStatus('session', 'Looking at myapp: "Fix login"');
+    expect(office.getState().status).toHaveLength(1);
+    office.pushStatus('done', 'Looking at myapp: "Fix login"'); // different kind → new item
+    expect(office.getState().status).toHaveLength(2);
+  });
+
+  it('updateStatusText rewrites the item in place (summarizer path)', () => {
+    const file = tempFile();
+    const office = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
+    office.pushStatus('boss', 'Message from upstairs: raw prompt text');
+    office.updateStatusText(office.lastStatusId, 'Message from upstairs: tidy summary');
+    expect(office.getState().status.at(-1)!.text).toBe('Message from upstairs: tidy summary');
+    expect(office.getState().status.length).toBe(1);
   });
 
   it('fullText survives a save/load round-trip and the summarizer only rewrites text', () => {

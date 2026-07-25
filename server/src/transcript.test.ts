@@ -39,9 +39,13 @@ function makeHarness(opts: { queue?: boolean } = {}) {
     setWaitingForInput: vi.fn(),
     pushInbox: vi.fn(),
     updateInboxText: vi.fn(),
+    pushStatus: vi.fn(),
+    updateStatusText: vi.fn(),
     setTodos: vi.fn(),
     rename: vi.fn(),
+    employeeFor: vi.fn((key: string) => ({ id: 'emp-1', name: 'E', seat: 1, variant: 'Knight', hiredAt: '', status: 'working', task: 'Agent: explore' })),
     lastInboxId: 'inbox-1',
+    lastStatusId: 'status-1',
   } as unknown as Office;
   const streamer = {
     enqueue: vi.fn((id: string, text: string) => enqueued.push({ id, text })),
@@ -543,6 +547,7 @@ describe('queued activities', () => {
 
 describe('waiting-for-input detection', () => {
   const MAIN2 = '/proj/-home-user-code-myapp/sess-2.jsonl';
+  const OTHER = '/proj/-home-user-code-otherapp/sess-9.jsonl';
 
   function endTurn(file: string, t: Transcripts) {
     t.handleLines(file, [
@@ -599,13 +604,86 @@ describe('waiting-for-input detection', () => {
     expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([false]);
   });
 
-  it('any waiting session keeps the flag on until every session resumes', () => {
+  it('any waiting project keeps the flag on until every project resumes', () => {
     const h = makeHarness();
     endTurn(MAIN, h.transcripts);
-    endTurn(MAIN2, h.transcripts);
-    userPrompt(MAIN2, h.transcripts);
+    endTurn(OTHER, h.transcripts);
+    userPrompt(OTHER, h.transcripts);
     expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([true]);
     userPrompt(MAIN, h.transcripts);
+    expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([false]);
+  });
+
+  it("a user prompt in a new file for the same project clears the old file's waiting entry", () => {
+    // resume/fork/compact write a NEW jsonl in the same project dir; the old
+    // file's entry must not pin the light for the stale-sweep duration
+    const h = makeHarness();
+    endTurn(MAIN, h.transcripts);
+    userPrompt(MAIN2, h.transcripts);
+    expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([false]);
+  });
+
+  it("user activity in one project leaves another project's waiting flag on", () => {
+    const h = makeHarness();
+    endTurn(MAIN, h.transcripts);
+    userPrompt(OTHER, h.transcripts);
+    expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([true]);
+  });
+
+  it('a slash command clears waiting', () => {
+    const h = makeHarness();
+    endTurn(MAIN, h.transcripts);
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'user',
+        sessionId: 'sess-x',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'text', text: '<command-name>/foo</command-name><command-message>foo</command-message>' }] },
+      }),
+    ]);
+    expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([false]);
+  });
+
+  it('an interrupt clears waiting', () => {
+    const h = makeHarness();
+    endTurn(MAIN, h.transcripts);
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'user',
+        sessionId: 'sess-x',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'text', text: '[Request interrupted by user]' }] },
+      }),
+    ]);
+    expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([false]);
+  });
+
+  it('a meta user line clears waiting', () => {
+    const h = makeHarness();
+    endTurn(MAIN, h.transcripts);
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'user',
+        sessionId: 'sess-x',
+        cwd: '/home/user/code/myapp',
+        isMeta: true,
+        message: { content: [{ type: 'text', text: 'Caveat: injected context' }] },
+      }),
+    ]);
+    expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([false]);
+  });
+
+  it('a task-notification clears waiting', () => {
+    const h = makeHarness();
+    endTurn(MAIN, h.transcripts);
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'user',
+        sessionId: 'sess-x',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'text', text: '<task-notification>agent done</task-notification>' }] },
+      }),
+    ]);
     expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([false]);
   });
 
@@ -625,7 +703,9 @@ describe('waiting-for-input detection', () => {
       const h = makeHarness();
       endTurn(MAIN, h.transcripts);
       expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([true]);
-      vi.advanceTimersByTime(31 * 60_000);
+      vi.advanceTimersByTime(9 * 60_000);
+      expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([true]);
+      vi.advanceTimersByTime(2 * 60_000);
       expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([false]);
     } finally {
       vi.useRealTimers();
@@ -898,6 +978,89 @@ describe('assistant-side events', () => {
       }),
     ]);
     expect(h.enqueued[0].text).toBe('💭 [redacted]\ndone');
+  });
+});
+
+describe('status whiteboard feed', () => {
+  it('a boss prompt pushes a status line', () => {
+    // (the summarizer-rewrite mechanics are covered by office.test.ts updateStatusText)
+    const h = makeHarness();
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'user',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'text', text: 'please fix the login bug' }] },
+      }),
+    ]);
+    expect(h.office.pushStatus).toHaveBeenCalledWith('boss', 'Message from upstairs: please fix the login bug');
+  });
+
+  it('a finishing Task pushes a done status with the employee name and task', () => {
+    const h = makeHarness();
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'tool_use', id: 'tu-task', name: 'Task', input: { description: 'explore' } }] },
+      }),
+      line({
+        type: 'user',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'tool_result', tool_use_id: 'tu-task', content: 'found it' }] },
+      }),
+    ]);
+    expect(h.office.pushStatus).toHaveBeenCalledWith('done', 'E finished Agent: explore');
+  });
+
+  it('a plain Bash finish pushes nothing', () => {
+    const h = makeHarness();
+    startBash(h.transcripts);
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'user',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'tool_result', tool_use_id: 'tu-1', content: 'ok' }] },
+      }),
+    ]);
+    const kinds = vi.mocked(h.office.pushStatus).mock.calls.map((c) => c[0]);
+    expect(kinds).not.toContain('done');
+  });
+
+  it('a failed Task pushes no done status', () => {
+    const h = makeHarness();
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'tool_use', id: 'tu-task', name: 'Task', input: { description: 'explore' } }] },
+      }),
+      line({
+        type: 'user',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'tool_result', tool_use_id: 'tu-task', content: 'boom', is_error: true }] },
+      }),
+    ]);
+    const kinds = vi.mocked(h.office.pushStatus).mock.calls.map((c) => c[0]);
+    expect(kinds).not.toContain('done');
+  });
+
+  it('plan approval, away summaries, and session titles push their kinds', () => {
+    const h = makeHarness();
+    h.transcripts.handleLines(MAIN, [
+      line({ type: 'attachment', sessionId: 'sess-1', cwd: '/home/user/code/myapp', attachment: { type: 'plan_mode_exit', planFilePath: '/tmp/plan.md' } }),
+      line({ type: 'system', subtype: 'away_summary', sessionId: 'sess-1', cwd: '/home/user/code/myapp', content: 'I fixed three bugs.' }),
+      line({ type: 'ai-title', aiTitle: 'Fixing login', sessionId: 'sess-1', cwd: '/home/user/code/myapp' }),
+    ]);
+    const calls = vi.mocked(h.office.pushStatus).mock.calls;
+    expect(calls).toContainEqual(['plan', 'Plan approved · myapp']);
+    expect(calls).toContainEqual(['away', 'While you were away: I fixed three bugs.']);
+    expect(calls).toContainEqual(['session', 'Looking at myapp: “Fixing login”']);
   });
 });
 

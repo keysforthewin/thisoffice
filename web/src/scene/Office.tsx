@@ -2,8 +2,8 @@ import { useMemo } from 'react';
 import { useTexture } from '@react-three/drei';
 import { useStore } from '../store.ts';
 import { Desk, FurnitureModel } from './Desk.tsx';
-import { Whiteboard } from './Whiteboard.tsx';
-import { roomDims, whiteboardTransform, BACK_Z } from './layout.ts';
+import { Whiteboard, StatusBoard } from './Whiteboard.tsx';
+import { roomDims, whiteboardTransform, statusBoardTransform, BACK_Z } from './layout.ts';
 import { resolveFurniture, WALL_ITEMS } from './buildLayout.ts';
 import { BuildHandle, WallHandle, displayPose, useWallOffset } from './build.tsx';
 import { wallStrips } from './wallOpenings.ts';
@@ -199,6 +199,10 @@ export function Office() {
       <Whiteboard
         position={whiteboardTransform(maxSeat).position.toArray() as [number, number, number]}
         rotationY={whiteboardTransform(maxSeat).rotationY}
+      />
+      <StatusBoard
+        position={statusBoardTransform(maxSeat).position.toArray() as [number, number, number]}
+        rotationY={statusBoardTransform(maxSeat).rotationY}
       />
 
       {/* boss */}

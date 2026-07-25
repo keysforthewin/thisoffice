@@ -221,13 +221,6 @@ describe('isPlacementValid', () => {
     ).toBe(false);
   });
 
-  it('lets the rug sit under other furniture', () => {
-    const s1 = seatTransform(1); // dead center of a desk
-    expect(
-      isPlacementValid(undefined, { kind: 'furniture', key: 'rug', pose: { x: s1.position.x, z: s1.position.z, rotY: 0 } }, seats, 3),
-    ).toBe(true);
-  });
-
   it('rejects furniture dropped onto a desk', () => {
     const s1 = seatTransform(1);
     expect(

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { enterFocusMode, useStore, type CameraPose } from '../store.ts';
-import { whiteboardTransform } from './layout.ts';
+import { whiteboardTransform, statusBoardTransform } from './layout.ts';
 import { resolveSeat } from './buildLayout.ts';
 import type { OfficeLayout } from '../../../shared/types.ts';
 import { MovieCamera } from './MovieCamera.tsx';
@@ -41,6 +41,8 @@ export function usePovList(): Pov[] {
     for (const e of office?.employees ?? []) povs.push(seatPov(e.seat, e.name, office?.layout, maxSeat));
     const wb = whiteboardTransform(maxSeat);
     povs.push({ label: 'Whiteboard', position: wb.camera, lookAt: wb.lookAt });
+    const sb = statusBoardTransform(maxSeat);
+    povs.push({ label: 'Status Board', position: sb.camera, lookAt: sb.lookAt });
     return povs;
   }, [office]);
 }

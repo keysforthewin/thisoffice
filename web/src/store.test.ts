@@ -3,6 +3,7 @@ import type { OfficeState } from '../../shared/types.ts';
 import {
   enterFocusMode,
   resetInboxKeyForTest,
+  resetStatusKeyForTest,
   resetWhiteboardKeyForTest,
   shouldExitFocusOnMissedClick,
   useStore,
@@ -17,6 +18,7 @@ function makeOffice(overrides: Partial<OfficeState> = {}): OfficeState {
     employees: [],
     inbox: [],
     todos: null,
+    status: [],
     staffing: { minEmployees: 0, maxEmployees: 9, idleTimeoutSec: 60 },
     ...overrides,
   } as OfficeState;
@@ -169,6 +171,7 @@ describe('lastActivity stamping', () => {
     vi.setSystemTime(1_000_000);
     resetWhiteboardKeyForTest();
     resetInboxKeyForTest();
+    resetStatusKeyForTest();
     useStore.setState({ office: null, monitors: {}, monitorVersion: {}, lastActivity: {} });
   });
   afterEach(() => vi.useRealTimers());
@@ -189,7 +192,7 @@ describe('lastActivity stamping', () => {
 
     vi.setSystemTime(1_005_000);
     const changed = makeOffice({
-      inbox: [{ id: 'i1', project: 'p', text: 'new prompt', at: new Date().toISOString() }],
+      todos: { project: 'p', items: [{ content: 'new item', status: 'pending' }], at: new Date().toISOString() },
     } as Partial<OfficeState>);
     useStore.getState().applyServerMsg({ type: 'state', state: changed });
     expect(useStore.getState().lastActivity['whiteboard']).toBe(1_005_000);
@@ -198,6 +201,42 @@ describe('lastActivity stamping', () => {
     vi.setSystemTime(1_009_000);
     useStore.getState().applyServerMsg({ type: 'state', state: changed });
     expect(useStore.getState().lastActivity['whiteboard']).toBe(1_005_000);
+  });
+
+  it('stamps the status board on a new status tail id, but not on rewrites or the first state', () => {
+    const first = makeOffice({
+      status: [{ id: 'status-1', at: new Date().toISOString(), text: 'raw', kind: 'boss' }],
+    } as Partial<OfficeState>);
+    useStore.getState().applyServerMsg({ type: 'state', state: first });
+    expect(useStore.getState().lastActivity['statusboard']).toBeUndefined();
+
+    vi.setSystemTime(1_005_000);
+    const withNew = makeOffice({
+      status: [
+        { id: 'status-1', at: new Date().toISOString(), text: 'raw', kind: 'boss' },
+        { id: 'status-2', at: new Date().toISOString(), text: 'Alice finished a job', kind: 'done' },
+      ],
+    } as Partial<OfficeState>);
+    useStore.getState().applyServerMsg({ type: 'state', state: withNew });
+    expect(useStore.getState().lastActivity['statusboard']).toBe(1_005_000);
+
+    // summarizer rewrite of the same tail id → no re-stamp
+    vi.setSystemTime(1_009_000);
+    const rewritten = makeOffice({
+      status: [
+        { id: 'status-1', at: new Date().toISOString(), text: 'raw', kind: 'boss' },
+        { id: 'status-2', at: new Date().toISOString(), text: 'a tidy summary', kind: 'done' },
+      ],
+    } as Partial<OfficeState>);
+    useStore.getState().applyServerMsg({ type: 'state', state: rewritten });
+    expect(useStore.getState().lastActivity['statusboard']).toBe(1_005_000);
+  });
+
+  it('tolerates a state from an older server with no status field', () => {
+    const legacy = makeOffice();
+    delete (legacy as Partial<OfficeState>).status;
+    useStore.getState().applyServerMsg({ type: 'state', state: legacy });
+    expect(useStore.getState().lastActivity['statusboard']).toBeUndefined();
   });
 
   it('stamps the boss when a new inbox item arrives, but not on the first state', () => {

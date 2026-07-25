@@ -14,7 +14,7 @@ export default function App() {
   const settingsOpen = useStore((s) => s.settingsOpen);
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
   const office = useStore((s) => s.office);
-  const povCount = (office?.employees.length ?? 0) + 2; // boss + employees + whiteboard
+  const povCount = (office?.employees.length ?? 0) + 3; // boss + employees + whiteboard + status board
 
   useEffect(() => {
     loadCatalog().then(useStore.getState().setCatalog);

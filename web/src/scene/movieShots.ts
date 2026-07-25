@@ -1,15 +1,21 @@
 import * as THREE from 'three';
 import type { OfficeState } from '../../../shared/types.ts';
-import { roomDims, whiteboardTransform } from './layout.ts';
+import { roomDims, whiteboardTransform, statusBoardTransform } from './layout.ts';
 import { resolveSeat } from './buildLayout.ts';
 
 export const ACTIVE_WINDOW_MS = 10_000;
 
-/** Boss inbox and whiteboard changes are single events (not streams), so their shots expire sooner. */
-const ACTIVITY_TTL_MS: Record<string, number> = { boss: 5_000, whiteboard: 5_000 };
+/**
+ * Boss inbox and whiteboard changes are single events (not streams), so their
+ * activity window differs from streaming employee monitors: long enough to
+ * survive the min shot hold + cut cadence (14s), and the status board stays a
+ * cut target for minutes after an update.
+ */
+const ACTIVITY_TTL_MS: Record<string, number> = { boss: 14_000, whiteboard: 14_000, statusboard: 150_000 };
+const WALL_BOARD_TTL_MS = 14_000;
 
 export function activityTtl(key: string): number {
-  return ACTIVITY_TTL_MS[key] ?? ACTIVE_WINDOW_MS;
+  return ACTIVITY_TTL_MS[key] ?? (isWallBoard(key) ? WALL_BOARD_TTL_MS : ACTIVE_WINDOW_MS);
 }
 
 /** Body sphere radii for LOS line-of-sight checking. */
@@ -37,6 +43,16 @@ export interface Subject {
 export interface Shot {
   position: THREE.Vector3;
   lookAt: THREE.Vector3;
+  /** motion endpoints — absent means a static shot */
+  positionEnd?: THREE.Vector3;
+  lookAtEnd?: THREE.Vector3;
+  /** fov move in DEGREES; absent keeps the camera's base fov */
+  fov?: number;
+  fovEnd?: number;
+  /** default 'inOut' (smoothstep) */
+  ease?: 'linear' | 'inOut';
+  /** minimum seconds so slow moves aren't cut short by the random 3–10s duration */
+  minDuration?: number;
 }
 
 export function activeKeys(lastActivity: Record<string, number>, now: number): string[] {
@@ -162,10 +178,21 @@ export function hasLineOfSight(camPos: THREE.Vector3, subject: Subject, office: 
   return true;
 }
 
+/** Wall-mounted board subjects on the right wall, all readable from −x. */
+const WALL_BOARDS: Record<string, (maxSeat: number) => { position: THREE.Vector3 }> = {
+  whiteboard: whiteboardTransform,
+  statusboard: statusBoardTransform,
+};
+
+export function isWallBoard(key: string): boolean {
+  return key in WALL_BOARDS;
+}
+
 export function subjectFor(key: string, office: OfficeState | null): Subject | null {
-  if (key === 'whiteboard') {
-    const wb = whiteboardTransform(maxSeat(office));
-    return { key, center: wb.position.clone(), normal: new THREE.Vector3(-1, 0, 0), width: WHITEBOARD_W, height: WHITEBOARD_H };
+  const board = WALL_BOARDS[key];
+  if (board) {
+    const b = board(maxSeat(office));
+    return { key, center: b.position.clone(), normal: new THREE.Vector3(-1, 0, 0), width: WHITEBOARD_W, height: WHITEBOARD_H };
   }
   let seat: number | null = null;
   if (key === 'boss') seat = 0;
@@ -335,45 +362,83 @@ export const MIN_SHOT_DIST = 3.5;
 
 export type ArchetypeName =
   | 'otsCloseup' | 'highAngle' | 'sideProfile'
-  | 'groupLevel' | 'elevatedGroup'
+  | 'pushInCloseup' | 'orbitArc' | 'zoomPunch' | 'lowPush' | 'boardPan'
+  | 'groupLevel' | 'elevatedGroup' | 'groupArc'
   | 'overheadGod' | 'highCorner' | 'lowDolly' | 'wideEstablishing';
 
-export interface PickedShot extends Shot { archetype: ArchetypeName }
+export interface PickedShot extends Shot {
+  archetype: ArchetypeName;
+  /** active subject key the shot is built around; absent for idle B-roll */
+  primaryKey?: string;
+}
 
-/** A candidate passes only if it's outside all occluders, far enough from the
- *  previous shot, and sees every subject. Empty subjects (idle B-roll) skips LOS. */
-function validCandidate(
-  pos: THREE.Vector3,
+/** A shot passes only if its whole camera path (start, midpoint, end) stays
+ *  outside occluders and sees every required subject, and it starts far enough
+ *  from the previous shot. Empty subjects (idle B-roll) skips LOS. */
+function validShot(
+  shot: Shot,
   subjects: Subject[],
   office: OfficeState | null,
   prev: THREE.Vector3 | null,
   minDist: number = MIN_SHOT_DIST,
 ): boolean {
-  if (isInsideOccluder(pos, office)) return false;
-  if (prev && pos.distanceTo(prev) < minDist) return false;
-  return subjects.every((s) => hasLineOfSight(pos, s, office));
+  if (prev && shot.position.distanceTo(prev) < minDist) return false;
+  const points = [shot.position];
+  if (shot.positionEnd) {
+    points.push(shot.positionEnd, shot.position.clone().lerp(shot.positionEnd, 0.5));
+  }
+  for (const pos of points) {
+    if (isInsideOccluder(pos, office)) return false;
+    if (!subjects.every((s) => hasLineOfSight(pos, s, office))) return false;
+  }
+  return true;
 }
 
 const deg = THREE.MathUtils.degToRad;
 
-/** One candidate around dir, pitched within [pitchMin,pitchMax], at dist·mul from the subject. */
-function subjectCandidate(
+/** Dolly along one sight line: start at dist·mulStart, end at dist·mulEnd (equal = static). */
+function dollyCandidate(
   subject: Subject, fovY: number, aspect: number, rng: () => number,
   office: OfficeState | null,
-  yawRange: number, pitchMin: number, pitchMax: number, distMul: number, margin: number,
+  yawRange: number, pitchMin: number, pitchMax: number,
+  mulStart: number, mulEnd: number, margin: number, extra: Partial<Shot> = {},
+): Shot {
+  const dist = fitDistance(subject.width, subject.height, fovY, aspect, margin);
+  const dir = jitterDir(subject.normal, rng, yawRange, pitchMin, pitchMax);
+  const position = clampToRoom(subject.center.clone().addScaledVector(dir, dist * mulStart), office);
+  const shot: Shot = { position, lookAt: subject.center.clone(), ...extra };
+  if (mulEnd !== mulStart) {
+    shot.positionEnd = clampToRoom(subject.center.clone().addScaledVector(dir, dist * mulEnd), office);
+  }
+  return shot;
+}
+
+/** Orbit around the subject: the camera slides along an arc while looking at the screen. */
+function arcCandidate(
+  subject: Subject, fovY: number, aspect: number, rng: () => number,
+  office: OfficeState | null,
+  yawRange: number, pitchMin: number, pitchMax: number,
+  distMul: number, arcRad: number, margin: number,
 ): Shot {
   const dist = fitDistance(subject.width, subject.height, fovY, aspect, margin) * distMul;
   const dir = jitterDir(subject.normal, rng, yawRange, pitchMin, pitchMax);
-  const position = clampToRoom(subject.center.clone().addScaledVector(dir, dist), office);
-  return { position, lookAt: subject.center.clone() };
+  const sign = rng() < 0.5 ? -1 : 1;
+  const dirEnd = dir.clone().applyAxisAngle(UP, sign * arcRad);
+  return {
+    position: clampToRoom(subject.center.clone().addScaledVector(dir, dist), office),
+    positionEnd: clampToRoom(subject.center.clone().addScaledVector(dirEnd, dist), office),
+    lookAt: subject.center.clone(),
+  };
 }
 
 function otsCloseupCandidate(s: Subject, fovY: number, aspect: number, rng: () => number, office: OfficeState | null): Shot {
-  return subjectCandidate(s, fovY, aspect, rng, office, CLOSEUP_YAW, CLOSEUP_PITCH_MIN, CLOSEUP_PITCH_MAX, 1, 1.3);
+  // gentle push-in on the classic over-the-shoulder framing
+  return dollyCandidate(s, fovY, aspect, rng, office, CLOSEUP_YAW, CLOSEUP_PITCH_MIN, CLOSEUP_PITCH_MAX, 1.15, 1.0, 1.3);
 }
 
 function highAngleCandidate(s: Subject, fovY: number, aspect: number, rng: () => number, office: OfficeState | null): Shot {
-  return subjectCandidate(s, fovY, aspect, rng, office, deg(35), deg(45), deg(65), 1.6, 1.3);
+  // slow orbit at the existing high angle
+  return arcCandidate(s, fovY, aspect, rng, office, deg(35), deg(45), deg(65), 1.6, deg(12), 1.3);
 }
 
 function sideProfileCandidate(s: Subject, fovY: number, aspect: number, rng: () => number, office: OfficeState | null): Shot {
@@ -383,17 +448,82 @@ function sideProfileCandidate(s: Subject, fovY: number, aspect: number, rng: () 
   const dist = fitDistance(s.width, s.height, fovY, aspect, 1.3) * 1.8;
   const dir = jitterDir(s.normal.clone().applyAxisAngle(UP, yaw), rng, 0, pitch, pitch);
   const position = clampToRoom(s.center.clone().addScaledVector(dir, dist), office);
-  return { position, lookAt: s.center.clone() };
+  // lateral truck: the camera slides along its own right axis, subject stays centered
+  const forward = s.center.clone().sub(position).normalize();
+  const right = new THREE.Vector3().crossVectors(forward, UP).normalize();
+  const positionEnd = clampToRoom(position.clone().addScaledVector(right, (rng() < 0.5 ? -1 : 1) * 0.8), office);
+  return { position, positionEnd, lookAt: s.center.clone() };
 }
+
+function pushInCloseupCandidate(s: Subject, fovY: number, aspect: number, rng: () => number, office: OfficeState | null): Shot {
+  // wide → close-up dolly; needs time to breathe
+  return dollyCandidate(s, fovY, aspect, rng, office, CLOSEUP_YAW, deg(0), deg(20), 2.2, 1.0, 1.3, { minDuration: 6 });
+}
+
+function orbitArcCandidate(s: Subject, fovY: number, aspect: number, rng: () => number, office: OfficeState | null): Shot {
+  return { ...arcCandidate(s, fovY, aspect, rng, office, deg(25), deg(10), deg(25), 1.6, deg(20) + rng() * deg(15), 1.3), minDuration: 5 };
+}
+
+const ZOOM_PUNCH_FOV_START = 50;
+const ZOOM_PUNCH_FOV_END = 34;
+
+function zoomPunchCandidate(s: Subject, aspect: number, rng: () => number, office: OfficeState | null): Shot {
+  // static camera, lens zooms in; distance framed for the NARROW end so the
+  // subject fits (and fills the frame) for the entire move
+  const dist = fitDistance(s.width, s.height, deg(ZOOM_PUNCH_FOV_END), aspect, 1.3) * 1.0;
+  const dir = jitterDir(s.normal, rng, deg(25), deg(0), deg(20));
+  return {
+    position: clampToRoom(s.center.clone().addScaledVector(dir, dist), office),
+    lookAt: s.center.clone(),
+    fov: ZOOM_PUNCH_FOV_START,
+    fovEnd: ZOOM_PUNCH_FOV_END,
+    minDuration: 5,
+  };
+}
+
+function lowPushCandidate(s: Subject, fovY: number, aspect: number, rng: () => number, office: OfficeState | null): Shot {
+  // near-floor push-in; clampToRoom keeps the camera above y=0.4
+  return dollyCandidate(s, fovY, aspect, rng, office, deg(30), deg(-5), deg(5), 2.0, 1.3, 1.3, { minDuration: 4 });
+}
+
+function boardPanCandidate(s: Subject, fovY: number, aspect: number, rng: () => number, office: OfficeState | null): Shot {
+  // fixed reading position; the look target sweeps across the board like reading it
+  const dist = fitDistance(s.width * 0.55, s.height, fovY, aspect, 1.2);
+  const dir = jitterDir(s.normal, rng, deg(10), deg(-3), deg(8));
+  const right = new THREE.Vector3().crossVectors(UP, s.normal).normalize();
+  const sign = rng() < 0.5 ? -1 : 1;
+  return {
+    position: clampToRoom(s.center.clone().addScaledVector(dir, dist), office),
+    lookAt: s.center.clone().addScaledVector(right, -sign * s.width * 0.35),
+    lookAtEnd: s.center.clone().addScaledVector(right, sign * s.width * 0.35),
+    ease: 'linear',
+    minDuration: 6,
+  };
+}
+
+type GroupMotion = 'truck' | 'pushIn' | 'arc' | 'none';
 
 function groupCandidate(
   subjects: Subject[], fovY: number, aspect: number, rng: () => number,
-  office: OfficeState | null, pitchMin: number, pitchMax: number,
+  office: OfficeState | null, pitchMin: number, pitchMax: number, motion: GroupMotion = 'none',
 ): Shot {
   const { centroid, avgNormal, dist } = groupFraming(subjects, fovY, aspect);
   const dir = jitterDir(avgNormal, rng, GROUP_YAW, pitchMin, pitchMax);
   const position = clampToRoom(centroid.clone().addScaledVector(dir, dist), office);
-  return { position, lookAt: centroid.clone() };
+  const shot: Shot = { position, lookAt: centroid.clone() };
+  const sign = rng() < 0.5 ? -1 : 1;
+  if (motion === 'truck') {
+    const forward = centroid.clone().sub(position).normalize();
+    const right = new THREE.Vector3().crossVectors(forward, UP).normalize();
+    shot.positionEnd = clampToRoom(position.clone().addScaledVector(right, sign * 0.6), office);
+  } else if (motion === 'pushIn') {
+    shot.positionEnd = clampToRoom(centroid.clone().addScaledVector(dir, dist * 0.85), office);
+  } else if (motion === 'arc') {
+    const dirEnd = dir.clone().applyAxisAngle(UP, sign * deg(15));
+    shot.positionEnd = clampToRoom(centroid.clone().addScaledVector(dirEnd, dist), office);
+    shot.minDuration = 5;
+  }
+  return shot;
 }
 
 function overheadGodCandidate(office: OfficeState | null, rng: () => number): Shot {
@@ -405,7 +535,11 @@ function overheadGodCandidate(office: OfficeState | null, rng: () => number): Sh
   const a = rng() * Math.PI * 2;
   const position = clampToRoom(
     new THREE.Vector3(lookAt.x + Math.cos(a) * horiz, y, lookAt.z + Math.sin(a) * horiz), office);
-  return { position, lookAt };
+  // slow orbit about the look target
+  const sign = rng() < 0.5 ? -1 : 1;
+  const positionEnd = clampToRoom(
+    position.clone().sub(lookAt).applyAxisAngle(UP, sign * deg(15)).add(lookAt), office);
+  return { position, positionEnd, lookAt, minDuration: 5 };
 }
 
 function highCornerCandidate(office: OfficeState | null, rng: () => number): Shot {
@@ -414,7 +548,11 @@ function highCornerCandidate(office: OfficeState | null, rng: () => number): Sho
   const sz = rng() < 0.5 ? -1 : 1;
   const position = clampToRoom(new THREE.Vector3(
     sx * (width / 2 - 0.6), 3.0 + rng() * 0.5, centerZ + sz * (depth / 2 - 0.6)), office);
-  return { position, lookAt: new THREE.Vector3(0, 1.2, centerZ) };
+  // surveillance-camera pan across the room
+  const lookAt = new THREE.Vector3(-width * 0.2, 1.2, centerZ);
+  const lookAtEnd = new THREE.Vector3(width * 0.2, 1.2, centerZ);
+  if (rng() < 0.5) return { position, lookAt: lookAtEnd, lookAtEnd: lookAt, ease: 'linear', minDuration: 5 };
+  return { position, lookAt, lookAtEnd, ease: 'linear', minDuration: 5 };
 }
 
 function lowDollyCandidate(office: OfficeState | null, rng: () => number): Shot {
@@ -422,9 +560,18 @@ function lowDollyCandidate(office: OfficeState | null, rng: () => number): Shot 
   const sx = rng() < 0.5 ? -1 : 1;
   const z = centerZ + (rng() - 0.5) * depth * 0.6;
   // track runs down the aisles between desk columns (x = ±3.4, ~1.1 half-width), not
-  // along the side walls where the couch/shelf/lamp line lives.
+  // along the side walls where the couch/lamp line lives.
   const position = clampToRoom(new THREE.Vector3(sx * (1.7 + (rng() - 0.5) * 0.4), 1.1 + rng() * 0.3, z), office);
-  return { position, lookAt: new THREE.Vector3(0, 1.3, z + (rng() - 0.5) * 2) };
+  const lookAt = new THREE.Vector3(0, 1.3, z + (rng() - 0.5) * 2);
+  // a real dolly move: camera and look target travel together down the aisle
+  const dz = (rng() < 0.5 ? -1 : 1) * (1.2 + rng() * 0.6);
+  return {
+    position,
+    positionEnd: clampToRoom(position.clone().add(new THREE.Vector3(0, 0, dz)), office),
+    lookAt,
+    lookAtEnd: lookAt.clone().add(new THREE.Vector3(0, 0, dz)),
+    minDuration: 5,
+  };
 }
 
 function wideEstablishingCandidate(office: OfficeState | null, rng: () => number): Shot {
@@ -432,12 +579,13 @@ function wideEstablishingCandidate(office: OfficeState | null, rng: () => number
   const angle = rng() * Math.PI * 2;
   const position = clampToRoom(new THREE.Vector3(
     Math.cos(angle) * width * 0.42, 2.2 + rng() * (height - 4.2), centerZ + Math.sin(angle) * depth * 0.42), office);
-  return { position, lookAt: new THREE.Vector3(0, 1.2, centerZ) };
+  // slow creeping zoom on the wide
+  return { position, lookAt: new THREE.Vector3(0, 1.2, centerZ), fov: 50, fovEnd: 43, minDuration: 6 };
 }
 
-const SINGLE_POOL: ArchetypeName[] = ['otsCloseup', 'highAngle', 'sideProfile'];
-const GROUP_POOL: ArchetypeName[] = ['groupLevel', 'elevatedGroup'];
-const IDLE_POOL: ArchetypeName[] = ['overheadGod', 'highCorner', 'lowDolly', 'wideEstablishing'];
+export const SINGLE_POOL: ArchetypeName[] = ['otsCloseup', 'highAngle', 'sideProfile', 'pushInCloseup', 'orbitArc', 'zoomPunch', 'lowPush'];
+export const GROUP_POOL: ArchetypeName[] = ['groupLevel', 'elevatedGroup', 'groupArc'];
+export const IDLE_POOL: ArchetypeName[] = ['overheadGod', 'highCorner', 'lowDolly', 'wideEstablishing'];
 
 export interface ShotContext {
   office: OfficeState | null;
@@ -454,10 +602,31 @@ export interface ShotContext {
   prevPosition?: THREE.Vector3 | null;
   /** archetype names of the last two shots — never repeated */
   recentArchetypes?: ArchetypeName[];
+  /** primary subject keys of recent shots, most recent first (least-recently-shot weighting) */
+  recentPrimaries?: string[];
+}
+
+/** Boss screen and wall boards fire rarely; give them extra draw weight so their
+ *  brief activity windows actually land as shots among streaming employee monitors. */
+function subjectWeight(s: Subject): number {
+  return s.key === 'boss' || isWallBoard(s.key) ? 2 : 1;
+}
+
+function pickPrimary(subjects: Subject[], recentPrimaries: string[], rng: () => number): Subject {
+  const recent = recentPrimaries.slice(0, 2);
+  const fresh = subjects.filter((s) => !recent.includes(s.key));
+  const pool = fresh.length > 0 ? fresh : subjects;
+  const total = pool.reduce((sum, s) => sum + subjectWeight(s), 0);
+  let r = rng() * total;
+  for (const s of pool) {
+    r -= subjectWeight(s);
+    if (r < 0) return s;
+  }
+  return pool[pool.length - 1];
 }
 
 export function pickShot(ctx: ShotContext): PickedShot {
-  const { office, fovY, aspect, rng, cutIndex } = ctx;
+  const { office, fovY, aspect, rng } = ctx;
   const prev = ctx.prevPosition ?? null;
   const recent = ctx.recentArchetypes ?? [];
   const subjects = activeKeys(ctx.lastActivity, ctx.now)
@@ -477,7 +646,7 @@ export function pickShot(ctx: ShotContext): PickedShot {
   const attempt = (name: ArchetypeName, gen: () => Shot, losSubjects: Subject[], minDist: number = MIN_SHOT_DIST): PickedShot | null => {
     for (let i = 0; i < LOS_CANDIDATES; i++) {
       const shot = gen();
-      if (validCandidate(shot.position, losSubjects, office, prev, minDist)) return { ...shot, archetype: name };
+      if (validShot(shot, losSubjects, office, prev, minDist)) return { ...shot, archetype: name };
     }
     return null;
   };
@@ -515,26 +684,35 @@ export function pickShot(ctx: ShotContext): PickedShot {
     return { ...wideShot(office, rng), archetype: 'wideEstablishing' }; // last-resort, unvalidated
   }
 
-  const groups = groupByFacing(subjects);
-  const group = groups[cutIndex % groups.length];
-
-  if (group.length === 1) {
-    const s = group[0];
-    const gens: Record<string, () => Shot> = {
-      otsCloseup: () => otsCloseupCandidate(s, fovY, aspect, rng, office),
-      highAngle: () => highAngleCandidate(s, fovY, aspect, rng, office),
-      sideProfile: () => sideProfileCandidate(s, fovY, aspect, rng, office),
-    };
-    const hit = tryPool(SINGLE_POOL, gens, [s]);
-    if (hit) return hit;
-    return { ...closeUpShot(s, fovY, aspect, rng, office), archetype: 'otsCloseup' }; // best-effort fallback
-  }
+  // One primary subject per cut — the hard invariant is LOS to this ONE active
+  // screen (validated along the whole camera move). Facing-compatible neighbors
+  // are framed opportunistically by group archetypes but never constrain LOS,
+  // so a crowd of active monitors can't starve boss/board shots anymore.
+  const primary = pickPrimary(subjects, ctx.recentPrimaries ?? [], rng);
+  const neighbors = subjects.filter((s) => s !== primary && s.normal.dot(primary.normal) > -0.01);
 
   const gens: Record<string, () => Shot> = {
-    groupLevel: () => groupCandidate(group, fovY, aspect, rng, office, GROUP_PITCH_MIN, GROUP_PITCH_MAX),
-    elevatedGroup: () => groupCandidate(group, fovY, aspect, rng, office, deg(25), deg(45)),
+    otsCloseup: () => otsCloseupCandidate(primary, fovY, aspect, rng, office),
+    highAngle: () => highAngleCandidate(primary, fovY, aspect, rng, office),
+    sideProfile: () => sideProfileCandidate(primary, fovY, aspect, rng, office),
+    pushInCloseup: () => pushInCloseupCandidate(primary, fovY, aspect, rng, office),
+    orbitArc: () => orbitArcCandidate(primary, fovY, aspect, rng, office),
+    zoomPunch: () => zoomPunchCandidate(primary, aspect, rng, office),
+    lowPush: () => lowPushCandidate(primary, fovY, aspect, rng, office),
+    boardPan: () => boardPanCandidate(primary, fovY, aspect, rng, office),
   };
-  const hit = tryPool(GROUP_POOL, gens, group);
-  if (hit) return hit;
-  return { ...groupShot(group, fovY, aspect, rng, office), archetype: 'groupLevel' }; // best-effort fallback
+  let pool: ArchetypeName[] = [...SINGLE_POOL];
+  if (isWallBoard(primary.key)) pool.push('boardPan');
+  if (neighbors.length > 0) {
+    const group = [primary, ...neighbors];
+    gens.groupLevel = () => groupCandidate(group, fovY, aspect, rng, office, GROUP_PITCH_MIN, GROUP_PITCH_MAX, 'truck');
+    gens.elevatedGroup = () => groupCandidate(group, fovY, aspect, rng, office, deg(25), deg(45), 'pushIn');
+    gens.groupArc = () => groupCandidate(group, fovY, aspect, rng, office, GROUP_PITCH_MIN, GROUP_PITCH_MAX, 'arc');
+    pool = [...pool, ...GROUP_POOL];
+  }
+
+  const hit = tryPool(pool, gens, [primary]);
+  if (hit) return { ...hit, primaryKey: primary.key };
+  // best-effort fallback: static close-up on the primary
+  return { ...closeUpShot(primary, fovY, aspect, rng, office), archetype: 'otsCloseup', primaryKey: primary.key };
 }

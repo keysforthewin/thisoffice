@@ -44,6 +44,21 @@ export function whiteboardTransform(maxSeat: number) {
   };
 }
 
+/**
+ * Status board: same right wall, boss end. The todo board's frame spans
+ * z −2.9..0.5; this one spans −7.3..−3.9 (1.0 gap) with the back wall at −8.4,
+ * so both fit at every room size.
+ */
+export function statusBoardTransform(maxSeat: number) {
+  const { width } = roomDims(maxSeat);
+  return {
+    position: new THREE.Vector3(width / 2 - 0.06, 2.0, -5.6),
+    rotationY: -Math.PI / 2,
+    camera: new THREE.Vector3(width / 2 - 4.2, 2.0, -5.6),
+    lookAt: new THREE.Vector3(width / 2, 2.0, -5.6),
+  };
+}
+
 export function roomDims(maxSeat: number) {
   const rows = Math.max(1, Math.ceil(Math.max(0, maxSeat) / COLS));
   const frontZ = FIRST_ROW_Z + rows * ROW_SPACING + 2.4;

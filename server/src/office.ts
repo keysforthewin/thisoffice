@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { CharacterCatalog, Employee, OfficeState, InboxItem, ItemPose, OfficeLayout, TodoItem, ServerMsg, WorkerStatus, StaffingSettings } from '../../shared/types.ts';
+import type { CharacterCatalog, Employee, OfficeState, InboxItem, ItemPose, OfficeLayout, StatusItem, TodoItem, ServerMsg, WorkerStatus, StaffingSettings } from '../../shared/types.ts';
 import { CHARACTER_VARIANTS, MONITOR_IMAGE_MARKER } from '../../shared/types.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -9,6 +9,9 @@ const DATA_DIR = path.resolve(__dirname, '../../data');
 const DATA_FILE = path.join(DATA_DIR, 'office.json');
 
 const INBOX_MAX = 8;
+const STATUS_MAX = 10;
+/** Status lines stay one readable sentence; anything longer is truncated. */
+const STATUS_TEXT_MAX = 120;
 
 const DEFAULT_STAFFING: StaffingSettings = { minEmployees: 3, maxEmployees: 12, idleTimeoutSec: 60 };
 
@@ -41,7 +44,9 @@ interface PersistedState {
   /** boss monitor messages; survive server restarts so the boss screen isn't wiped */
   inbox?: InboxItem[];
   /** whiteboard todo list; survives server restarts like the inbox */
-  todos?: { project: string; items: TodoItem[] } | null;
+  todos?: { project: string; items: TodoItem[]; at?: string } | null;
+  /** status whiteboard feed; survives server restarts like the inbox */
+  status?: StatusItem[];
   /** build-mode layout overrides; absent = default layout */
   layout?: OfficeLayout;
 }
@@ -136,6 +141,7 @@ export class Office {
   /** activityKey (sessionId:toolUseId) -> employeeId */
   private assignments = new Map<string, string>();
   private inboxSeq = 0;
+  private statusSeq = 0;
   private variantPool: string[];
   private streamer: ScreenStream | null = null;
   /** employees whose activity finished but whose screen is still streaming */
@@ -288,6 +294,10 @@ export class Office {
       .slice(-INBOX_MAX);
     // resume the id sequence past restored items so new ids never collide
     this.inboxSeq = inbox.reduce((max, i) => Math.max(max, parseInt(i.id.replace('inbox-', ''), 10) || 0), 0);
+    const status = (persisted.status ?? [])
+      .filter((s) => s && s.id && typeof s.text === 'string')
+      .slice(-STATUS_MAX);
+    this.statusSeq = status.reduce((max, s) => Math.max(max, parseInt(s.id.replace('status-', ''), 10) || 0), 0);
     return {
       // bio deliberately stripped: it lives in bossBio, never in the broadcast state
       boss: { name: persisted.boss.name, variant: persisted.boss.variant },
@@ -295,7 +305,13 @@ export class Office {
       waitingForInput: false,
       employees: persisted.employees.map((e) => ({ ...e, status: 'idle' as WorkerStatus, task: null })),
       inbox,
-      todos: persisted.todos && Array.isArray(persisted.todos.items) ? persisted.todos : null,
+      // legacy todos without a timestamp restore as epoch-0: an all-completed
+      // list persisted before this field existed is treated as stale immediately
+      todos:
+        persisted.todos && Array.isArray(persisted.todos.items)
+          ? { ...persisted.todos, at: persisted.todos.at ?? new Date(0).toISOString() }
+          : null,
+      status,
       staffing: clampStaffing(persisted.staffing),
       // re-sanitize on load: office.json may have been hand-edited
       ...(persisted.layout ? { layout: mergeLayout(undefined, persisted.layout) } : {}),
@@ -312,6 +328,7 @@ export class Office {
         .map(([seat, r]) => ({ seat, ...r })),
       inbox: this.state.inbox,
       todos: this.state.todos,
+      status: this.state.status,
       ...(this.state.layout ? { layout: this.state.layout } : {}),
     };
     fs.mkdirSync(path.dirname(this.dataFile), { recursive: true });
@@ -391,9 +408,42 @@ export class Office {
   }
 
   setTodos(project: string, items: TodoItem[]) {
-    this.state.todos = { project, items };
+    this.state.todos = { project, items, at: new Date().toISOString() };
     this.save();
     this.broadcastState();
+  }
+
+  pushStatus(kind: StatusItem['kind'], text: string) {
+    // an identical consecutive event (e.g. a session re-titled the same way)
+    // refreshes the tail instead of stacking duplicates on the board
+    const last = this.state.status.at(-1);
+    if (last && last.kind === kind && last.text === text.slice(0, STATUS_TEXT_MAX)) {
+      last.at = new Date().toISOString();
+      this.save();
+      this.broadcastState();
+      return;
+    }
+    const item: StatusItem = {
+      id: `status-${++this.statusSeq}`,
+      at: new Date().toISOString(),
+      text: text.slice(0, STATUS_TEXT_MAX),
+      kind,
+    };
+    this.state.status = [...this.state.status, item].slice(-STATUS_MAX);
+    this.save();
+    this.broadcastState();
+  }
+
+  updateStatusText(id: string, text: string) {
+    const item = this.state.status.find((s) => s.id === id);
+    if (!item) return;
+    item.text = text.slice(0, STATUS_TEXT_MAX);
+    this.save();
+    this.broadcastState();
+  }
+
+  get lastStatusId(): string {
+    return `status-${this.statusSeq}`;
   }
 
   setBossStatus(status: WorkerStatus) {

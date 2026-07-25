@@ -155,16 +155,6 @@ export function defaultFurniture(maxSeat: number): ResolvedFurniture[] {
   const backZ = BACK_Z;
   return [
     {
-      id: 'rug',
-      handleH: 0.3,
-      url: '/models/furniture/rug_rectangle_A.gltf',
-      y: 0.005,
-      scale: [2.2, 1, 2.2],
-      footprint: { w: 4.0, d: 2.6, cz: 0 },
-      collides: false,
-      pose: { x: 0, z: centerZ + 0.5, rotY: 0 },
-    },
-    {
       id: 'lampBack',
       handleH: 2.4,
       url: '/models/furniture/lamp_standing.gltf',
@@ -175,13 +165,23 @@ export function defaultFurniture(maxSeat: number): ResolvedFurniture[] {
       pose: { x: width / 2 - 1, z: backZ + 0.9, rotY: -Math.PI / 4 },
     },
     {
-      id: 'shelf',
-      handleH: 1.9,
-      url: '/models/furniture/shelf_A_big.gltf',
+      id: 'couch2',
+      handleH: 1.1,
+      url: '/models/furniture/couch_pillows.gltf',
       y: 0,
-      footprint: { w: 2.0, d: 0.6, cz: 0 },
+      footprint: { w: 2.2, d: 1.0, cz: 0 },
       collides: true,
-      pose: { x: width / 2 - 0.4, z: centerZ + 3.2, rotY: -Math.PI / 2 },
+      pose: { x: width / 2 - 0.9, z: centerZ + 3.2, rotY: -Math.PI / 2 },
+    },
+    {
+      id: 'lampCouch2',
+      handleH: 2.4,
+      url: '/models/furniture/lamp_standing.gltf',
+      y: 0,
+      footprint: { w: 0.5, d: 0.5, cz: 0 },
+      collides: true,
+      light: { offset: [0, 2.2, 0], color: '#ffcf96', intensity: 10, distance: 9 },
+      pose: { x: width / 2 - 0.7, z: centerZ + 1.4, rotY: -Math.PI / 3 },
     },
     {
       id: 'cactusBig',
@@ -364,7 +364,7 @@ export function isPlacementValid(
   if (!insideRoom(moving.pose, movingFp, maxSeat)) return false;
   if (moving.kind === 'furniture') {
     const def = defaultFurniture(maxSeat).find((f) => f.id === moving.key);
-    if (def && !def.collides) return true; // rug: bounds check only
+    if (def && !def.collides) return true; // non-colliding items: bounds check only
   }
   const movingObb = obbFromPose(moving.pose, movingFp);
   for (const seat of occupiedSeats) {

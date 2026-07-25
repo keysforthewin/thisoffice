@@ -15,6 +15,8 @@ import {
   hasLineOfSight,
   MIN_SHOT_DIST,
   pickShot,
+  SINGLE_POOL,
+  GROUP_POOL,
   segmentHitsBox,
   segmentHitsSphere,
   subjectFor,
@@ -77,15 +79,27 @@ describe('activeKeys / activeSetKey', () => {
     const la = { fresh: now - 1, stale: now - ACTIVE_WINDOW_MS - 1, edge: now - ACTIVE_WINDOW_MS + 1 };
     expect(activeKeys(la, now).sort()).toEqual(['edge', 'fresh']);
   });
-  it('boss and whiteboard expire after their shorter 5s TTL while monitors keep the full window', () => {
+  it('boss and whiteboard expire after their 14s TTL while monitors keep the shorter global window', () => {
     const now = 100_000;
-    const la = { boss: now - 6_000, whiteboard: now - 6_000, e1: now - 6_000 };
-    expect(activeKeys(la, now)).toEqual(['e1']);
+    const la = { boss: now - 12_000, whiteboard: now - 12_000, e1: now - 12_000, statusboard: now - 12_000 };
+    expect(activeKeys(la, now).sort()).toEqual(['boss', 'statusboard', 'whiteboard']);
+    const later = { boss: now - 15_000, whiteboard: now - 15_000, statusboard: now - 15_000 };
+    expect(activeKeys(later, now)).toEqual(['statusboard']);
   });
-  it('activityTtl gives boss/whiteboard 5s and everything else the global window', () => {
-    expect(activityTtl('boss')).toBe(5_000);
-    expect(activityTtl('whiteboard')).toBe(5_000);
+  it('activityTtl gives boards their own windows and everything else the global window', () => {
+    expect(activityTtl('boss')).toBe(14_000);
+    expect(activityTtl('whiteboard')).toBe(14_000);
+    expect(activityTtl('statusboard')).toBe(150_000);
     expect(activityTtl('e1')).toBe(ACTIVE_WINDOW_MS);
+  });
+  it('the two wall boards resolve as distinct non-overlapping subjects on the right wall', () => {
+    const wb = subjectFor('whiteboard', null)!;
+    const sb = subjectFor('statusboard', null)!;
+    expect(wb.normal.x).toBe(-1);
+    expect(sb.normal.x).toBe(-1);
+    expect(wb.center.x).toBeCloseTo(sb.center.x, 6);
+    // frames are 3.4 wide along z; centers must be at least that far apart
+    expect(Math.abs(wb.center.z - sb.center.z)).toBeGreaterThanOrEqual(3.4);
   });
   it('activeSetKey is order-independent', () => {
     const now = 100_000;
@@ -183,21 +197,31 @@ describe('shots', () => {
     }
   });
 
-  it('pickShot alternates facing groups when boss and employees are both active', () => {
+  it('pickShot rotates primaries: every active subject (incl. boss and boards) leads a shot within a few cuts', () => {
     const office = makeOffice();
     const now = 100_000;
-    const ctx = {
-      office, lastActivity: { boss: now, e1: now }, now,
-      fovY: FOV, aspect: ASPECT, rng: rng(1), cutIndex: 0,
-    };
-    const a = pickShot({ ...ctx, cutIndex: 0 });
-    const b = pickShot({ ...ctx, cutIndex: 1 });
-    const bossSubj = subjectFor('boss', office)!;
-    const e1Subj = subjectFor('e1', office)!;
-    const seesBoss = (s: typeof a) => s.position.clone().sub(bossSubj.center).dot(bossSubj.normal) > 0;
-    const seesE1 = (s: typeof a) => s.position.clone().sub(e1Subj.center).dot(e1Subj.normal) > 0;
-    expect(seesBoss(a) !== seesBoss(b)).toBe(true);
-    expect(seesE1(a) !== seesE1(b)).toBe(true);
+    const active = { boss: now, e1: now, e2: now, whiteboard: now, statusboard: now };
+    const leads = new Set<string>();
+    let recentPrimaries: string[] = [];
+    let prev: THREE.Vector3 | null = null;
+    // one continuous rng across cuts, like the live camera (fresh tiny seeds
+    // bias the first draw low, which would starve the last weighted-pool slot)
+    const r = rng(9001);
+    for (let i = 0; i < 20; i++) {
+      const shot = pickShot({
+        office, lastActivity: active, now,
+        fovY: FOV, aspect: ASPECT, rng: r, cutIndex: i,
+        prevPosition: prev, recentPrimaries,
+      });
+      expect(shot.primaryKey).toBeDefined();
+      leads.add(shot.primaryKey!);
+      recentPrimaries = [shot.primaryKey!, ...recentPrimaries].slice(0, 4);
+      prev = (shot.positionEnd ?? shot.position).clone();
+    }
+    expect(leads).toContain('boss');
+    expect(leads).toContain('whiteboard');
+    expect(leads).toContain('statusboard');
+    expect(leads.size).toBeGreaterThanOrEqual(4);
   });
 
   it('pickShot returns a sane idle shot with no activity and even no office', () => {
@@ -247,7 +271,7 @@ describe('archetype shot selection', () => {
     }
   });
 
-  it('a single active subject uses the single-subject pool with LOS and min distance', () => {
+  it('a single active subject uses the single-subject pool with LOS along the whole move', () => {
     const office = makeOffice();
     const now = Date.now();
     const lastActivity = { e1: now };
@@ -256,12 +280,68 @@ describe('archetype shot selection', () => {
     let recent: ArchetypeName[] = [];
     for (let i = 0; i < 8; i++) {
       const shot = pickShot(ctx({ office, lastActivity, now, rng: rng(i + 3), cutIndex: i, prevPosition: prev, recentArchetypes: recent }));
-      expect(['otsCloseup', 'highAngle', 'sideProfile']).toContain(shot.archetype);
+      expect(SINGLE_POOL).toContain(shot.archetype);
+      expect(shot.primaryKey).toBe('e1');
+      // the ≥1-active-screen invariant holds at start, end, and midpoint of the move
       expect(hasLineOfSight(shot.position, subject, office)).toBe(true);
-      if (prev) expect(shot.position.distanceTo(prev)).toBeGreaterThanOrEqual(MIN_SHOT_DIST);
-      prev = shot.position.clone();
+      if (shot.positionEnd) {
+        expect(hasLineOfSight(shot.positionEnd, subject, office)).toBe(true);
+        expect(hasLineOfSight(shot.position.clone().lerp(shot.positionEnd, 0.5), subject, office)).toBe(true);
+      }
+      // the halved-min-dist rescue pass is a legal outcome, so assert the floor it guarantees
+      if (prev) expect(shot.position.distanceTo(prev)).toBeGreaterThanOrEqual(MIN_SHOT_DIST / 2);
+      prev = (shot.positionEnd ?? shot.position).clone();
       recent = [shot.archetype, ...recent].slice(0, 2);
     }
+  });
+
+  it('motion endpoints stay inside the room and actually move', () => {
+    const office = makeOffice();
+    const now = Date.now();
+    for (let i = 0; i < 30; i++) {
+      const shot = pickShot(ctx({ office, lastActivity: { e1: now, boss: now }, now, rng: rng(i + 40), cutIndex: i }));
+      if (shot.positionEnd) {
+        expectInRoom(shot.positionEnd, office);
+        expect(shot.positionEnd.distanceTo(shot.position)).toBeGreaterThan(0);
+      }
+      if (shot.fov !== undefined) {
+        expect(shot.fov).toBeGreaterThanOrEqual(30);
+        expect(shot.fov).toBeLessThanOrEqual(55);
+        expect(shot.fovEnd!).toBeGreaterThanOrEqual(30);
+        expect(shot.fovEnd!).toBeLessThanOrEqual(55);
+      }
+    }
+  });
+
+  it('boardPan sweeps the look target across the board width', () => {
+    const office = makeOffice();
+    const now = Date.now();
+    const subject = subjectFor('whiteboard', office)!;
+    let sawPan = false;
+    for (let i = 0; i < 40 && !sawPan; i++) {
+      const shot = pickShot(ctx({ office, lastActivity: { whiteboard: now }, now, rng: rng(i + 500), cutIndex: i }));
+      if (shot.archetype !== 'boardPan') continue;
+      sawPan = true;
+      expect(shot.lookAtEnd).toBeDefined();
+      // sweep runs along z (the board's width axis on the right wall), ~70% of its width
+      expect(Math.abs(shot.lookAtEnd!.z - shot.lookAt.z)).toBeCloseTo(subject.width * 0.7, 1);
+      // camera stays on the readable side of the board
+      expect(shot.position.clone().sub(subject.center).dot(subject.normal)).toBeGreaterThan(0);
+    }
+    expect(sawPan).toBe(true);
+  });
+
+  it('pickShot is deterministic under a seeded rng', () => {
+    const office = makeOffice();
+    const now = 100_000;
+    const make = () =>
+      pickShot(ctx({ office, lastActivity: { e1: now, e2: now, boss: now }, now, rng: rng(42), cutIndex: 3 }));
+    const a = make();
+    const b = make();
+    expect(b.archetype).toBe(a.archetype);
+    expect(b.primaryKey).toBe(a.primaryKey);
+    expect(b.position.toArray()).toEqual(a.position.toArray());
+    expect((b.positionEnd ?? b.position).toArray()).toEqual((a.positionEnd ?? a.position).toArray());
   });
 
   it('highAngle shots are actually HIGH: positive pitch raises the camera above the subject', () => {
@@ -272,10 +352,11 @@ describe('archetype shot selection', () => {
     const lastActivity = { e1: now };
     const subject = subjectFor('e1', office)!;
     let highAngleCount = 0;
+    const othersRecent = SINGLE_POOL.filter((n) => n !== 'highAngle');
     for (let i = 0; i < 30; i++) {
       const shot = pickShot(ctx({
         office, lastActivity, now, rng: rng(i + 100), cutIndex: i,
-        recentArchetypes: ['otsCloseup', 'sideProfile'],
+        recentArchetypes: othersRecent,
       }));
       if (shot.archetype === 'highAngle') {
         highAngleCount++;
@@ -287,29 +368,33 @@ describe('archetype shot selection', () => {
     expect(highAngleCount).toBeGreaterThanOrEqual(20);
   });
 
-  it('multiple co-facing subjects use group archetypes', () => {
+  it('multiple co-facing subjects draw from the single + group pools with LOS to the primary', () => {
     const office = makeOffice();
     const now = Date.now();
     const lastActivity = { e1: now, e2: now };
-    const shot = pickShot(ctx({ office, lastActivity, now }));
-    expect(['groupLevel', 'elevatedGroup']).toContain(shot.archetype);
+    for (let i = 0; i < 10; i++) {
+      const shot = pickShot(ctx({ office, lastActivity, now, rng: rng(i + 20), cutIndex: i }));
+      expect([...SINGLE_POOL, ...GROUP_POOL]).toContain(shot.archetype);
+      expect(['e1', 'e2']).toContain(shot.primaryKey);
+      const primary = subjectFor(shot.primaryKey!, office)!;
+      expect(hasLineOfSight(shot.position, primary, office)).toBe(true);
+    }
   });
 
   it('retries at half the min-distance requirement before falling to the unvalidated fallback', () => {
-    // Every single-subject archetype's candidate distance from the subject center is
-    // fixed (only direction jitters, not magnitude): otsCloseup ~1.18, highAngle ~1.90,
-    // sideProfile ~2.13 (for this monitor size/fov). Placing prevPosition AT the subject
-    // center means every candidate from every archetype is 1.18-2.13 from prev — always
-    // under the full MIN_SHOT_DIST (3.5), so the first pass must reject every candidate
-    // from every archetype. Only the halved retry (>=1.75) can succeed, and only via
-    // highAngle or sideProfile (otsCloseup's ~1.18 is under 1.75 too), so a validated
-    // (non-fallback) hit here proves the retry pass ran.
+    // Every single-subject archetype's candidate START distance from the subject center
+    // is fixed (only direction jitters, not magnitude), and all of them sit under the
+    // full MIN_SHOT_DIST (3.5) for this monitor size/fov. Placing prevPosition AT the
+    // subject center means the first pass must reject every candidate from every
+    // archetype; only the halved retry (>=1.75) can succeed, and only via archetypes
+    // whose start distance clears 1.75 (otsCloseup's ~1.36 stays under), so a validated
+    // (non-fallback) hit in-range here proves the retry pass ran.
     const office = makeOffice();
     const now = Date.now();
     const lastActivity = { e1: now };
     const subject = subjectFor('e1', office)!;
     const shot = pickShot(ctx({ office, lastActivity, now, rng: rng(11), prevPosition: subject.center.clone() }));
-    expect(['highAngle', 'sideProfile']).toContain(shot.archetype);
+    expect(SINGLE_POOL.filter((n) => n !== 'otsCloseup')).toContain(shot.archetype);
     expect(shot.position.distanceTo(subject.center)).toBeGreaterThanOrEqual(MIN_SHOT_DIST / 2);
     expect(shot.position.distanceTo(subject.center)).toBeLessThan(MIN_SHOT_DIST);
   });

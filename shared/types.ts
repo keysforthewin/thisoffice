@@ -33,6 +33,15 @@ export interface InboxItem {
   at: string;
 }
 
+/** One line on the status whiteboard — a curated feed of office happenings. */
+export interface StatusItem {
+  id: string;
+  at: string;
+  /** one readable line, capped server-side */
+  text: string;
+  kind: 'boss' | 'done' | 'hire' | 'plan' | 'away' | 'session';
+}
+
 export interface TodoItem {
   content: string;
   status: 'pending' | 'in_progress' | 'completed';
@@ -53,7 +62,7 @@ export interface ItemPose {
 export interface OfficeLayout {
   /** desk-unit overrides keyed by seat number (0 = boss) */
   seats?: Record<number, ItemPose>;
-  /** floor furniture keyed by stable id: couch, lampBack, lampCouch, cactusBig, cactusSmall, shelf, rug */
+  /** floor furniture keyed by stable id: couch, couch2, lampBack, lampCouch, lampCouch2, cactusBig, cactusSmall */
   furniture?: Record<string, ItemPose>;
   /** wall-mounted items keyed by id: windowBack, windowLeft, wallArt, pictureFrame → along-wall offset (the wall's local `ox` frame) */
   wallItems?: Record<string, number>;
@@ -64,7 +73,9 @@ export interface OfficeState {
   bossStatus: WorkerStatus;
   employees: Employee[];
   inbox: InboxItem[];
-  todos: { project: string; items: TodoItem[] } | null;
+  todos: { project: string; items: TodoItem[]; at?: string } | null;
+  /** rolling status feed shown on the status whiteboard (newest last) */
+  status: StatusItem[];
   staffing: StaffingSettings;
   /** true while any tailed session has ended its turn and is waiting on the user (ephemeral) */
   waitingForInput: boolean;

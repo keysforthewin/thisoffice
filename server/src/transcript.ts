@@ -57,8 +57,12 @@ const DIGEST_MAX_LINES = 20;
  * is pending; streamed partial lines carry a null stop_reason.)
  */
 const WAITING_STOP_REASONS = new Set(['end_turn', 'stop_sequence', 'max_tokens', 'refusal']);
-/** A waiting session nobody touches for this long stops holding the desk light. */
-const SESSION_STALE_MS = 30 * 60_000;
+/**
+ * Backstop only: user-activity eviction handles resumes/forks in the same
+ * project dir; this catches files eviction can't see (deleted transcripts,
+ * renamed project dirs, missed watcher events).
+ */
+const SESSION_STALE_MS = 10 * 60_000;
 const STALE_SWEEP_MS = 60_000;
 
 export class Transcripts {
@@ -89,7 +93,11 @@ export class Transcripts {
   private digests = new Map<string, { sessionId: string; project: string; lines: string[]; timer: NodeJS.Timeout }>();
   /** activity key -> queued activity awaiting an employee */
   private queued = new Map<string, Activity>();
-  /** main transcript file -> waiting-for-input state (a resumed session's new file gets its own entry) */
+  /**
+   * main transcript file -> waiting-for-input state. A resumed session's new
+   * file gets its own entry; user activity in any file evicts sibling entries
+   * in the same project dir (see clearSiblingSessions).
+   */
   private sessions = new Map<string, { waiting: boolean; lastEventAt: number }>();
 
   constructor(
@@ -103,6 +111,17 @@ export class Transcripts {
   private setSessionWaiting(file: string, waiting: boolean) {
     this.sessions.set(file, { waiting, lastEventAt: Date.now() });
     this.recomputeWaiting();
+  }
+
+  /**
+   * User input in one file proves the boss is active in this project; any
+   * sibling file still flagged waiting is a pre-resume/-fork/-compact husk.
+   */
+  private clearSiblingSessions(file: string) {
+    const dir = path.dirname(file);
+    for (const other of this.sessions.keys()) {
+      if (other !== file && path.dirname(other) === dir) this.sessions.delete(other);
+    }
   }
 
   private recomputeWaiting() {
@@ -173,7 +192,10 @@ export class Transcripts {
     // only name genuinely new hires; a rehire into a remembered seat keeps their name
     if (hired && employee.name === 'New Hire') {
       nameNewHire(title).then((name) => {
-        if (name) this.office.rename(employee.id, name);
+        if (name) {
+          this.office.rename(employee.id, name);
+          this.office.pushStatus('hire', `New hire: ${name} joined the office`);
+        }
       });
     }
     this.office.monitor(employee.id, { clear: true, title: fullTitle });
@@ -290,6 +312,12 @@ export class Transcripts {
   }
 
   private handleUserLine(file: string, sessionId: string, project: string, line: any) {
+    // Any user-role line exists because input reached the model (prompt, tool
+    // result, slash command, interrupt, injected notification…) — the session
+    // is no longer waiting, and neither is any pre-resume/-fork/-compact
+    // sibling file in the same project dir.
+    this.clearSiblingSessions(file);
+    this.setSessionWaiting(file, false);
     const content = line.message?.content;
     const blocks = contentBlocks(content);
     // tool results come back as user-role messages
@@ -302,7 +330,6 @@ export class Transcripts {
         this.finishTool(r, { toolUseResult: line.toolUseResult, toolDenialKind: line.toolDenialKind });
       }
       this.touchBoss();
-      this.setSessionWaiting(file, false); // a tool result means the turn resumed
       // text sharing the line with results is the Boss typing mid-turn
       if (text) this.routeUserText(file, sessionId, project, line, text, true);
       return;
@@ -334,7 +361,6 @@ export class Transcripts {
       return;
     }
     this.touchBoss();
-    this.setSessionWaiting(file, false);
     this.onUserPrompt(project, text);
   }
 
@@ -414,6 +440,7 @@ export class Transcripts {
     switch (line.subtype) {
       case 'away_summary':
         this.showEphemeral(sessionId, project, 'While You Were Away', content);
+        this.office.pushStatus('away', `While you were away: ${firstLine(content, 90)}`);
         break;
       case 'scheduled_task_fire':
         this.showEphemeral(sessionId, project, 'Scheduled Task', content);
@@ -473,6 +500,7 @@ export class Transcripts {
         break;
       case 'plan_mode_exit':
         this.showEphemeral(sessionId, project, 'Plan Approved', `plan accepted: ${att.planFilePath ?? ''}`);
+        this.office.pushStatus('plan', `Plan approved · ${project}`);
         break;
       case 'plan_mode':
       case 'plan_mode_reentry':
@@ -524,6 +552,7 @@ export class Transcripts {
         if (line.aiTitle) {
           this.showEphemeral(sessionId, project, 'Session Titled', `“${line.aiTitle}”`);
           this.sessionTitles.set(sessionId, String(line.aiTitle));
+          this.office.pushStatus('session', `Looking at ${project}: “${line.aiTitle}”`);
         }
         break;
       case 'agent-name':
@@ -561,8 +590,13 @@ export class Transcripts {
     const preview = text.length > 160 ? text.slice(0, 157) + '…' : text;
     this.office.pushInbox(project, preview, text.slice(0, 4000));
     const inboxId = this.office.lastInboxId;
+    this.office.pushStatus('boss', `Message from upstairs: ${preview}`);
+    const statusId = this.office.lastStatusId;
     summarizePrompt(text).then((summary) => {
-      if (summary) this.office.updateInboxText(inboxId, summary);
+      if (summary) {
+        this.office.updateInboxText(inboxId, summary);
+        this.office.updateStatusText(statusId, `Message from upstairs: ${summary}`);
+      }
     });
   }
 
@@ -664,7 +698,10 @@ export class Transcripts {
 
     if (hired && employee && employee.name === 'New Hire') {
       nameNewHire(label).then((n) => {
-        if (n) this.office.rename(employee.id, n);
+        if (n) {
+          this.office.rename(employee.id, n);
+          this.office.pushStatus('hire', `New hire: ${n} joined the office`);
+        }
       });
     }
 
@@ -764,6 +801,11 @@ export class Transcripts {
         ? '✗ failed'
         : '✓ done';
     this.emitTo(activity, (text || '(no output)') + '\n\n' + terminal);
+    // subagent jobs are status-board-worthy; per-tool finishes would be a firehose
+    if (activity.isTask && activity.employeeId && !ctx?.toolDenialKind && !result.is_error) {
+      const emp = this.office.employeeFor(activity.key);
+      if (emp?.task) this.office.pushStatus('done', `${emp.name} finished ${emp.task}`);
+    }
     if (activity.employeeId) this.office.finish(activity.key);
     else activity.doneWhileQueued = true;
   }
