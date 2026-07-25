@@ -2,8 +2,9 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { useStore } from '../store.ts';
-import { activeSetKey, pickShot, type Shot } from './movieShots.ts';
+import { activeSetKey, pickShot, type ArchetypeName, type Shot } from './movieShots.ts';
 
+const MIN_HOLD_S = 2.5;
 const CUT_MIN_S = 3;
 const CUT_MAX_S = 10;
 /** handheld position noise amplitude (world units; world scale is 1.35× human) */
@@ -33,6 +34,9 @@ export function MovieCamera() {
   const setKey = useRef('');
   const panDir = useRef(1);
   const wantCut = useRef(false);
+  const prevPos = useRef<THREE.Vector3 | null>(null);
+  const recent = useRef<ArchetypeName[]>([]);
+  const pendingRecut = useRef(false);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -50,18 +54,26 @@ export function MovieCamera() {
     const key = activeSetKey(lastActivity, now, office);
     shotAge.current += delta;
 
-    if (!shot.current || wantCut.current || shotAge.current >= shotDuration.current || key !== setKey.current) {
-      wantCut.current = false;
+    if (key !== setKey.current) {
       setKey.current = key;
-      shot.current = pickShot({
-        office,
-        lastActivity,
-        now,
+      pendingRecut.current = true; // honored only once the hold expires
+    }
+    const held = shotAge.current < MIN_HOLD_S;
+    if (!shot.current || wantCut.current || (!held && (pendingRecut.current || shotAge.current >= shotDuration.current))) {
+      wantCut.current = false;
+      pendingRecut.current = false;
+      const picked = pickShot({
+        office, lastActivity, now,
         fovY: THREE.MathUtils.degToRad(camera.fov),
         aspect: camera.aspect,
         rng: Math.random,
         cutIndex: cutIndex.current++,
+        prevPosition: prevPos.current,
+        recentArchetypes: recent.current,
       });
+      shot.current = picked;
+      prevPos.current = picked.position.clone();
+      recent.current = [picked.archetype, ...recent.current].slice(0, 2);
       shotAge.current = 0;
       shotDuration.current = CUT_MIN_S + Math.random() * (CUT_MAX_S - CUT_MIN_S);
       panDir.current = Math.random() < 0.5 ? -1 : 1;
