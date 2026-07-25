@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { MONITOR_IMAGE_MARKER, type CharacterCatalog, type OfficeState, type ServerMsg } from '../../shared/types.ts';
+import { boardContent } from './scene/whiteboardContent.ts';
 
 export interface MonitorContent {
   title: string;
@@ -10,13 +11,15 @@ export interface MonitorContent {
 
 const MONITOR_MAX_LINES = 200;
 
-export type CameraMode = { kind: 'free' } | { kind: 'pov'; index: number };
+export type CameraMode = { kind: 'free' } | { kind: 'pov'; index: number } | { kind: 'movie' };
 
 interface AppStore {
   office: OfficeState | null;
   monitors: Record<string, MonitorContent>;
   /** bumps every time a monitor changes so screens know to redraw */
   monitorVersion: Record<string, number>;
+  /** subject key ('boss' | employee id | 'whiteboard') → epoch ms of last content change */
+  lastActivity: Record<string, number>;
   connected: boolean;
   cameraMode: CameraMode;
   settingsOpen: boolean;
@@ -30,10 +33,13 @@ interface AppStore {
   setCharacterScale: (id: string, scale: number) => void;
 }
 
+let whiteboardKey: string | null = null;
+
 export const useStore = create<AppStore>((set, get) => ({
   office: null,
   monitors: {},
   monitorVersion: {},
+  lastActivity: {},
   connected: false,
   cameraMode: { kind: 'free' },
   settingsOpen: false,
@@ -41,7 +47,14 @@ export const useStore = create<AppStore>((set, get) => ({
 
   applyServerMsg: (msg) => {
     if (msg.type === 'state') {
-      set({ office: msg.state });
+      const key = JSON.stringify(boardContent(msg.state));
+      const prevKey = whiteboardKey;
+      whiteboardKey = key;
+      if (prevKey !== null && prevKey !== key) {
+        set({ office: msg.state, lastActivity: { ...get().lastActivity, whiteboard: Date.now() } });
+      } else {
+        set({ office: msg.state });
+      }
       return;
     }
     if (msg.type === 'catalog') {
@@ -68,7 +81,10 @@ export const useStore = create<AppStore>((set, get) => ({
       monitors[msg.target] = { title: msg.title ?? prev.title, lines, image };
       const monitorVersion = { ...get().monitorVersion };
       monitorVersion[msg.target] = (monitorVersion[msg.target] ?? 0) + 1;
-      set({ monitors, monitorVersion });
+      const lastActivity = msg.append
+        ? { ...get().lastActivity, [msg.target]: Date.now() }
+        : get().lastActivity;
+      set({ monitors, monitorVersion, lastActivity });
     }
   },
 
@@ -88,3 +104,8 @@ export const useStore = create<AppStore>((set, get) => ({
         : {},
     ),
 }));
+
+/** test-only: forget the cached whiteboard key so the next state msg counts as "first" */
+export function resetWhiteboardKeyForTest() {
+  whiteboardKey = null;
+}
