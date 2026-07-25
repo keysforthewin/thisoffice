@@ -43,6 +43,38 @@ export const CHAIR_OFFSET_Z = -1.45;
 export const PERSON_OFFSET_Z = -1.15;
 export const PERSON_LIFT_Y = 0.02;
 
+/** Leg positions/size measured from chair_A.gltf foot vertices (chunky corner
+ *  posts 0.18 wide centered at ±0.23); the boss armchair gets a base plinth. */
+const CHAIR_LEG_XZ = [
+  [-0.23, -0.23],
+  [0.23, -0.23],
+  [-0.23, 0.23],
+  [0.23, 0.23],
+] as const;
+
+/** Continuations of the chair legs that run down through the floor, so a chair
+ *  raised via the picker's Chair-height slider still looks planted instead of
+ *  floating. Slightly inset so they hide inside the real legs at rest; fully
+ *  below the floor when the chair isn't raised. (The picker preview has no
+ *  floor, so it intentionally omits these and shows the raw offset.) */
+function ChairLegExtensions({ boss }: { boss?: boolean }) {
+  return boss ? (
+    <mesh position={[0, -0.31, 0.05]}>
+      <boxGeometry args={[1.7, 0.6, 1.5]} />
+      <meshStandardMaterial color="#a5664c" roughness={0.9} />
+    </mesh>
+  ) : (
+    <>
+      {CHAIR_LEG_XZ.map(([x, z]) => (
+        <mesh key={`${x},${z}`} position={[x, -0.2, z]}>
+          <boxGeometry args={[0.16, 0.6, 0.16]} />
+          <meshStandardMaterial color="#d4885f" roughness={0.9} />
+        </mesh>
+      ))}
+    </>
+  );
+}
+
 /**
  * A workstation: table + chair + monitor + seated character.
  * Local space: desk faces +z (screen readable from -z, i.e. from behind the chair).
@@ -67,6 +99,9 @@ export function Desk({ seat, variant, working, monitorTarget, name, fallbackTitl
         position={[0, chairHeight, CHAIR_OFFSET_Z]}
         rotation={[0, 0, 0]}
       />
+      <group position={[0, chairHeight, CHAIR_OFFSET_Z]}>
+        <ChairLegExtensions boss={boss} />
+      </group>
       <group position={[0, 1.66, 0.35]}>
         <MonitorScreen target={monitorTarget} working={working} fallbackTitle={fallbackTitle} />
       </group>
