@@ -86,6 +86,24 @@ Shot selection given the active subject set:
 - Keyboard handling ignores keypresses while typing in inputs (existing
   `isTyping` guard behavior in App.tsx).
 
+## Addendum (user feedback during implementation)
+
+- The camera must never go below the floor or outside the room: every shot
+  position is clamped to y ∈ [0.4, 3.9] and inside the walls (0.3 margin).
+- Shots must have line of sight to the screens they frame. Occluders are
+  modeled in pure math: two spheres per seated character (head/torso) and
+  the monitor panels of other seats. Close-up/group shots pick from up to
+  16 jittered candidates (close-up jitter widened to yaw ±35°, pitch
+  −5°…+25° so over-the-shoulder angles exist); first fully-clear candidate
+  wins, otherwise the most-visible one.
+- Handheld motion toned way down: amplitude 0.015 units, all noise
+  frequencies ≤ ~0.6 rad/s, drift 0.05, pan 0.08 — a slow breathing drift,
+  not a jitter.
+- Name tags (separate follow-up): occluded by scene geometry via a
+  depth-tested pass, but visible through character models via a
+  stencil-masked second pass (characters write stencil ref 1 on zpass;
+  Canvas gets `gl={{ stencil: true }}`).
+
 ## Testing
 
 - `web/src/scene/movieShots.test.ts` (vitest): active-window selection,
