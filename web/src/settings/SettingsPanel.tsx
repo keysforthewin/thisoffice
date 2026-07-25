@@ -50,6 +50,20 @@ export function SettingsPanel() {
         <button style={styles.hire} onClick={() => api('/employees', 'POST')}>
           + Hire employee
         </button>
+
+        <h3 style={styles.sectionTitle}>Staffing</h3>
+        <div style={styles.row}>
+          <StaffingInput
+            label="Min employees"
+            value={office.staffing.minEmployees}
+            onCommit={(v) => api('/settings', 'PUT', { staffing: { minEmployees: v } })}
+          />
+          <StaffingInput
+            label="Max employees"
+            value={office.staffing.maxEmployees}
+            onCommit={(v) => api('/settings', 'PUT', { staffing: { maxEmployees: v } })}
+          />
+        </div>
       </div>
     </div>
   );
@@ -86,6 +100,27 @@ function EmployeeRow({ id, name, variant, status }: { id: string; name: string; 
         🗑
       </button>
     </div>
+  );
+}
+
+function StaffingInput({ label, value, onCommit }: { label: string; value: number; onCommit: (v: number) => void }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <label style={{ flex: 1, fontSize: 12, color: '#9aa4b0' }}>
+      {label}
+      <input
+        style={{ ...styles.input, width: '100%', marginTop: 4 }}
+        type="number"
+        min={1}
+        value={draft ?? String(value)}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          const v = parseInt(draft ?? '', 10);
+          if (Number.isInteger(v) && v >= 1 && v !== value) onCommit(v);
+          setDraft(null);
+        }}
+      />
+    </label>
   );
 }
 
