@@ -1,6 +1,7 @@
+import { useMemo } from 'react';
 import * as THREE from 'three';
 import { useTexture } from '@react-three/drei';
-import { vistaBoxFaces, type FaceKind } from './vistaGeometry.ts';
+import { vistaBoxFaces } from './vistaGeometry.ts';
 
 /** All positions are in the window opening's local frame: opening center at the
  *  origin, outside = -z. Tuned by eye; adjust freely. `cy` drops the whole box
@@ -8,28 +9,28 @@ import { vistaBoxFaces, type FaceKind } from './vistaGeometry.ts';
 interface LayerCfg { url: string; z: number; w: number; h: number; y: number }
 interface VistaCfg {
   box: { w: number; h: number; d: number; cy: number };
-  faceColors: Record<Exclude<FaceKind, 'back'>, string>;
+  faceColors: { top: string; bottom: string };
   far: string;
   layers: LayerCfg[];
 }
 
 const CFG: Record<'back' | 'left', VistaCfg> = {
   back: {
-    box: { w: 14, h: 10, d: 24, cy: -1.5 },
-    faceColors: { top: '#3d3050', bottom: '#241b22', left: '#9c7258', right: '#9c7258' },
+    box: { w: 32, h: 20, d: 24, cy: 0 },
+    faceColors: { top: '#8b87ba', bottom: '#16121a' },
     far: '/vista/back-far.jpg',
     layers: [
-      { url: '/vista/back-mid.png', z: -11, w: 10, h: 6, y: -1.4 },
-      { url: '/vista/back-near.png', z: -4.5, w: 7, h: 4.2, y: -1.6 },
+      { url: '/vista/back-mid.png', z: -11, w: 16, h: 9, y: -2.8 },
+      { url: '/vista/back-near.png', z: -4.5, w: 10, h: 6, y: -2.2 },
     ],
   },
   left: {
-    box: { w: 14, h: 10, d: 24, cy: -1.5 },
-    faceColors: { top: '#3d3050', bottom: '#241b22', left: '#7d6270', right: '#b57e56' },
+    box: { w: 32, h: 20, d: 24, cy: 0 },
+    faceColors: { top: '#8b87ba', bottom: '#16121a' },
     far: '/vista/left-far.jpg',
     layers: [
-      { url: '/vista/left-mid.png', z: -11, w: 10, h: 6, y: -1.4 },
-      { url: '/vista/left-near.png', z: -4.5, w: 7, h: 4.2, y: -1.6 },
+      { url: '/vista/left-mid.png', z: -11, w: 16, h: 9, y: -2.8 },
+      { url: '/vista/left-near.png', z: -4.5, w: 10, h: 6, y: -2.2 },
     ],
   },
 };
@@ -47,6 +48,16 @@ export function WindowVista({ id }: { id: 'back' | 'left' }) {
   const cfg = CFG[id];
   const far = useTexture(cfg.far, srgb);
   const layerTex = useTexture(cfg.layers.map((l) => l.url), srgb);
+  // Side walls of the box reuse the far texture mirrored horizontally: at each
+  // back corner the mirrored image meets the back face's matching edge, so
+  // grazing views read as continuous hazy city instead of a flat painted wall.
+  const farMirror = useMemo(() => {
+    const t = far.clone();
+    t.wrapS = THREE.RepeatWrapping;
+    t.repeat.x = -1;
+    t.needsUpdate = true;
+    return t;
+  }, [far]);
   return (
     <group position={[0, cfg.box.cy, 0]}>
       {vistaBoxFaces(cfg.box.w, cfg.box.h, cfg.box.d).map((f) => (
@@ -54,6 +65,8 @@ export function WindowVista({ id }: { id: 'back' | 'left' }) {
           <planeGeometry args={f.size} />
           {f.kind === 'back' ? (
             <meshBasicMaterial map={far} fog={false} />
+          ) : f.kind === 'left' || f.kind === 'right' ? (
+            <meshBasicMaterial map={farMirror} fog={false} />
           ) : (
             <meshBasicMaterial color={cfg.faceColors[f.kind]} fog={false} />
           )}
