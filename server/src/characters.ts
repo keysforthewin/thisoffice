@@ -8,10 +8,7 @@ import { CHARACTER_VARIANTS } from '../../shared/types.ts';
 import { sanitizeCharacterId } from '../../shared/characterId.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.resolve(__dirname, '../../data');
-const CHARACTERS_DIR = path.join(DATA_DIR, 'characters');
-const ANIMS_DIR = path.join(CHARACTERS_DIR, 'anims');
-const META_FILE = path.join(CHARACTERS_DIR, 'imported.json');
+const DEFAULT_DATA_DIR = path.resolve(__dirname, '../../data');
 const BUILTIN_CATALOG = path.resolve(__dirname, '../../web/public/models/characters/catalog.json');
 
 export const ANIM_SLOTS = ['sit', 'idle'] as const;
@@ -20,6 +17,8 @@ export type AnimSlot = (typeof ANIM_SLOTS)[number];
 const MAX_UPLOAD_BYTES = 64 * 1024 * 1024;
 const SCALE_MIN = 0.1;
 const SCALE_MAX = 10;
+export const SEAT_OFFSET_RANGE = 0.5;
+export const CHAIR_HEIGHT_RANGE = 0.4;
 const GLB_MAGIC = Buffer.from('glTF', 'ascii');
 /** Binary FBX files always start with this signature */
 const FBX_MAGIC = Buffer.from('Kaydara FBX Binary', 'ascii');
@@ -29,11 +28,24 @@ export function clampScale(scale: number): number {
   return Math.min(SCALE_MAX, Math.max(SCALE_MIN, scale));
 }
 
+export function clampOffset(v: number, range: number): number {
+  if (!Number.isFinite(v)) return 0;
+  return Math.min(range, Math.max(-range, v));
+}
+
+export interface CharacterAdjust {
+  scale?: number;
+  seatOffset?: number;
+  chairHeight?: number;
+}
+
 interface ImportedMeta {
   id: string;
   displayName: string;
   importedAt: number;
   scale?: number;
+  seatOffset?: number;
+  chairHeight?: number;
 }
 
 export const sanitizeId = sanitizeCharacterId;
@@ -44,14 +56,22 @@ export function isAnimSlot(slot: string): slot is AnimSlot {
 
 export class CharacterStore {
   private imported: ImportedMeta[];
+  private dataDir: string;
+  private charactersDir: string;
+  private animeDir: string;
+  private metaFile: string;
 
-  constructor() {
+  constructor(dataDir?: string) {
+    this.dataDir = dataDir ?? DEFAULT_DATA_DIR;
+    this.charactersDir = path.join(this.dataDir, 'characters');
+    this.animeDir = path.join(this.charactersDir, 'anims');
+    this.metaFile = path.join(this.charactersDir, 'imported.json');
     this.imported = this.loadMeta();
   }
 
   private loadMeta(): ImportedMeta[] {
     try {
-      const list = JSON.parse(fs.readFileSync(META_FILE, 'utf-8'));
+      const list = JSON.parse(fs.readFileSync(this.metaFile, 'utf-8'));
       if (Array.isArray(list)) {
         // only keep entries whose GLB still exists on disk
         return list.filter((m) => m?.id && fs.existsSync(this.modelPath(m.id)));
@@ -63,18 +83,18 @@ export class CharacterStore {
   }
 
   private saveMeta() {
-    fs.mkdirSync(CHARACTERS_DIR, { recursive: true });
-    const tmp = `${META_FILE}.tmp`;
+    fs.mkdirSync(this.charactersDir, { recursive: true });
+    const tmp = `${this.metaFile}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(this.imported, null, 2));
-    fs.renameSync(tmp, META_FILE);
+    fs.renameSync(tmp, this.metaFile);
   }
 
   modelPath(id: string): string {
-    return path.join(CHARACTERS_DIR, `${id}.glb`);
+    return path.join(this.charactersDir, `${id}.glb`);
   }
 
   animPath(slot: AnimSlot): string {
-    return path.join(ANIMS_DIR, `${slot}.fbx`);
+    return path.join(this.animeDir, `${slot}.fbx`);
   }
 
   animStatus(): Record<AnimSlot, boolean> {
@@ -118,6 +138,8 @@ export class CharacterStore {
       url: `/api/characters/${m.id}/model.glb?v=${m.importedAt}`,
       rev: m.importedAt,
       scale: m.scale,
+      seatOffset: m.seatOffset,
+      chairHeight: m.chairHeight,
     }));
     return { ...builtin, characters: [...builtin.characters, ...importedEntries] };
   }
@@ -134,12 +156,18 @@ export class CharacterStore {
     this.saveMeta();
   }
 
-  setScale(id: string, scale: number): boolean {
+  adjust(id: string, adj: CharacterAdjust): boolean {
     const meta = this.imported.find((m) => m.id === id);
     if (!meta) return false;
-    meta.scale = clampScale(scale);
+    if (adj.scale !== undefined) meta.scale = clampScale(adj.scale);
+    if (adj.seatOffset !== undefined) meta.seatOffset = clampOffset(adj.seatOffset, SEAT_OFFSET_RANGE);
+    if (adj.chairHeight !== undefined) meta.chairHeight = clampOffset(adj.chairHeight, CHAIR_HEIGHT_RANGE);
     this.saveMeta();
     return true;
+  }
+
+  setScale(id: string, scale: number): boolean {
+    return this.adjust(id, { scale });
   }
 
   remove(id: string): boolean {

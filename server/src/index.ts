@@ -86,11 +86,15 @@ const server = http.createServer((req, res) => {
       const id = sanitizeId(charMatch[1]);
       if (!id) return send(400, { error: 'bad character id' });
       const body = await readBody();
-      if (!body || typeof body.scale !== 'number' || !Number.isFinite(body.scale)) {
-        return send(400, { error: 'scale must be a finite number' });
+      const patch: { scale?: number; seatOffset?: number; chairHeight?: number } = {};
+      for (const f of ['scale', 'seatOffset', 'chairHeight'] as const) {
+        if (typeof body?.[f] === 'number' && Number.isFinite(body[f])) patch[f] = body[f];
       }
-      // builtins are never in the imported list, so setScale 404s them too
-      if (!characters.setScale(id, body.scale)) {
+      if (Object.keys(patch).length === 0) {
+        return send(400, { error: 'need at least one finite number: scale, seatOffset, chairHeight' });
+      }
+      // builtins are never in the imported list, so adjust 404s them too
+      if (!characters.adjust(id, patch)) {
         return send(404, { error: 'not an imported character' });
       }
       publishCatalog();

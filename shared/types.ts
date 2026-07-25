@@ -79,6 +79,10 @@ export interface CharacterEntry {
   rev?: number;
   /** runtime size multiplier for imported characters (user-tuned); absent = 1 */
   scale?: number;
+  /** vertical offset of the character alone (plants them on the chair seat); absent = 0 */
+  seatOffset?: number;
+  /** vertical offset of chair + character as a unit (lines hands up with the desk); absent = 0 */
+  chairHeight?: number;
 }
 
 export interface CharacterCatalog {
