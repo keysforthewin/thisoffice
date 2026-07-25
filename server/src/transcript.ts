@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { Office } from './office.ts';
 import type { ScreenStreamer } from './streamer.ts';
 import { summarizePrompt, nameNewHire } from './summarizer.ts';
+import type { Employee } from '../../shared/types.ts';
 
 /**
  * Turns raw Claude Code transcript JSONL lines into office activity.
@@ -12,11 +13,15 @@ import { summarizePrompt, nameNewHire } from './summarizer.ts';
  */
 
 interface Activity {
-  key: string; // sessionId:toolUseId
-  employeeId: string;
+  key: string; // sessionId:toolUseId (or sessionId:<uuid> for boss replies)
+  employeeId: string | null;
   tool: string;
   isTask: boolean;
   agentFile?: string;
+  /** set while waiting in the office work queue */
+  pendingTitle?: string;
+  buffer?: string[];
+  doneWhileQueued?: boolean;
 }
 
 interface TrackedTask {
@@ -48,11 +53,31 @@ export class Transcripts {
   /** toolUseId -> TaskUpdate input awaiting confirmation */
   private pendingTaskUpdates = new Map<string, { project: string; taskId: string; status?: string; subject?: string }>();
   private replySeq = 0;
+  /** activity key -> queued activity awaiting an employee */
+  private queued = new Map<string, Activity>();
 
   constructor(
     private office: Office,
     private streamer: ScreenStreamer,
-  ) {}
+  ) {
+    office.onAssign((key, employee) => this.onQueuedAssigned(key, employee));
+  }
+
+  private emitTo(activity: Activity, text: string) {
+    if (activity.employeeId) this.streamer.enqueue(activity.employeeId, text);
+    else activity.buffer?.push(text);
+  }
+
+  private onQueuedAssigned(key: string, employee: Employee) {
+    const activity = this.queued.get(key);
+    if (!activity) return;
+    this.queued.delete(key);
+    activity.employeeId = employee.id;
+    this.office.monitor(employee.id, { clear: true, title: activity.pendingTitle ?? '' });
+    if (activity.buffer?.length) this.streamer.enqueue(employee.id, activity.buffer.join('\n'));
+    activity.buffer = undefined;
+    if (activity.doneWhileQueued) this.office.finish(key);
+  }
 
   fileAppeared(file: string) {
     if (!isSubagentFile(file)) return;
@@ -158,7 +183,18 @@ export class Transcripts {
     this.touchBoss();
     const key = `${sessionId}:${line.uuid ?? `reply-${++this.replySeq}`}`;
     const { employee, hired } = this.office.assign(key, 'Reporting to the Boss');
-    if (!employee) return; // TODO(task 5): buffer queued activity
+    if (!employee) {
+      this.queued.set(key, {
+        key,
+        employeeId: null,
+        tool: 'reply',
+        isTask: false,
+        pendingTitle: `Reporting to the Boss · ${project}`,
+        buffer: [parts.join('\n')],
+        doneWhileQueued: true,
+      });
+      return;
+    }
     if (hired) {
       nameNewHire('Reporting to the Boss').then((name) => {
         if (name) this.office.rename(employee.id, name);
@@ -199,8 +235,17 @@ export class Transcripts {
     const isTask = name === 'Task' || name === 'Agent';
     const label = isTask ? `Agent: ${input.description ?? input.subagent_type ?? 'subagent'}` : name;
     const { employee, hired } = this.office.assign(`${sessionId}:${toolUseId}`, label);
-    if (!employee) return; // TODO(task 5): buffer queued activity
-    const activity: Activity = { key: `${sessionId}:${toolUseId}`, employeeId: employee.id, tool: name, isTask };
+    const activity: Activity = {
+      key: `${sessionId}:${toolUseId}`,
+      employeeId: employee?.id ?? null,
+      tool: name,
+      isTask,
+    };
+    if (!employee) {
+      activity.pendingTitle = `${label} · ${project}`;
+      activity.buffer = [];
+      this.queued.set(activity.key, activity);
+    }
     this.activities.set(toolUseId, activity);
 
     let attachFile: string | undefined;
@@ -215,14 +260,18 @@ export class Transcripts {
       }
     }
 
-    if (hired) {
-      nameNewHire(label).then((name) => {
-        if (name) this.office.rename(employee.id, name);
+    if (hired && employee) {
+      nameNewHire(label).then((n) => {
+        if (n) this.office.rename(employee.id, n);
       });
     }
 
-    this.office.monitor(employee.id, { clear: true, title: `${label} · ${project}` });
-    this.streamer.enqueue(employee.id, inputPreview(name, input));
+    if (employee) {
+      this.office.monitor(employee.id, { clear: true, title: `${label} · ${project}` });
+      this.streamer.enqueue(employee.id, inputPreview(name, input));
+    } else {
+      this.emitTo(activity, inputPreview(name, input));
+    }
 
     // Attach (and replay any buffered lines) only after the clear/title/input
     // preview are queued, so a pooled file's backlog renders after them, not before.
@@ -271,8 +320,9 @@ export class Transcripts {
     }
 
     const text = extractText(result.content) || '(no output)';
-    this.streamer.enqueue(activity.employeeId, text + '\n\n✓ done');
-    this.office.finish(activity.key);
+    this.emitTo(activity, text + '\n\n✓ done');
+    if (activity.employeeId) this.office.finish(activity.key);
+    else activity.doneWhileQueued = true;
   }
 
   private taskMap(project: string): Map<string, TrackedTask> {
@@ -296,11 +346,11 @@ export class Transcripts {
     if (line.type === 'assistant') {
       for (const b of contentBlocks(line.message?.content)) {
         if (b.type === 'text' && b.text?.trim()) {
-          this.streamer.enqueue(activity.employeeId, b.text.trim());
+          this.emitTo(activity, b.text.trim());
         } else if (b.type === 'thinking' && b.thinking?.trim()) {
-          this.streamer.enqueue(activity.employeeId, '💭 ' + b.thinking.trim());
+          this.emitTo(activity, '💭 ' + b.thinking.trim());
         } else if (b.type === 'tool_use') {
-          this.streamer.enqueue(activity.employeeId, `> ${b.name} ${oneLine(inputPreview(b.name, b.input ?? {}))}`);
+          this.emitTo(activity, `> ${b.name} ${oneLine(inputPreview(b.name, b.input ?? {}))}`);
         }
       }
       return;
@@ -309,7 +359,7 @@ export class Transcripts {
       for (const b of contentBlocks(line.message?.content)) {
         if (b.type !== 'tool_result') continue;
         const text = extractText(b.content);
-        if (text) this.streamer.enqueue(activity.employeeId, text);
+        if (text) this.emitTo(activity, text);
       }
     }
   }

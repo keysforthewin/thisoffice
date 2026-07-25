@@ -15,16 +15,23 @@ function line(obj: unknown): string {
   return JSON.stringify(obj);
 }
 
-function makeHarness() {
+function makeHarness(opts: { queue?: boolean } = {}) {
   const enqueued: Array<{ id: string; text: string }> = [];
   const monitors: any[] = [];
   const finished: string[] = [];
   let seq = 0;
+  let onAssignCb: ((key: string, employee: any) => void) | null = null;
   const office = {
-    assign: vi.fn((key: string, task: string) => ({
-      employee: { id: `emp-${++seq}`, name: 'E', seat: seq, variant: 'Knight', hiredAt: '', status: 'working', task },
-      hired: false,
-    })),
+    onAssign: vi.fn((cb: (key: string, employee: any) => void) => {
+      onAssignCb = cb;
+    }),
+    assign: vi.fn((key: string, task: string) => {
+      if (opts.queue) return { employee: null, hired: false };
+      return {
+        employee: { id: `emp-${++seq}`, name: 'E', seat: seq, variant: 'Knight', hiredAt: '', status: 'working', task },
+        hired: false,
+      };
+    }),
     finish: vi.fn((key: string) => finished.push(key)),
     monitor: vi.fn((target: string, opts: any) => monitors.push({ target, ...opts })),
     setBossStatus: vi.fn(),
@@ -41,7 +48,9 @@ function makeHarness() {
     stop: vi.fn(),
   } as unknown as ScreenStreamer;
   const transcripts = new Transcripts(office, streamer);
-  return { transcripts, office, enqueued, monitors, finished };
+  const pickup = (key: string, id = 'emp-9') =>
+    onAssignCb?.(key, { id, name: 'Q', seat: 9, variant: 'Knight', hiredAt: '', status: 'working', task: null });
+  return { transcripts, office, enqueued, monitors, finished, pickup };
 }
 
 function startBash(t: Transcripts, id = 'tu-1') {
@@ -278,5 +287,66 @@ describe('finished agent files', () => {
     expect(enqueued).toHaveLength(countBefore); // not streamed
     expect((transcripts as any).bufferedLines.get(AGENT)).toBeUndefined(); // not buffered
     expect(enqueued.map((e) => e.text)).not.toContain('late straggler line');
+  });
+});
+
+describe('queued activities', () => {
+  it('buffers a queued tool activity untruncated and replays on pickup, finishing after replay', () => {
+    const h = makeHarness({ queue: true });
+    startBash(h.transcripts);
+    expect(h.enqueued).toEqual([]); // nothing streamed while queued
+    const big = Array.from({ length: 400 }, (_, i) => `row ${i}`).join('\n');
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'user',
+        sessionId: 'sess-1',
+        message: { content: [{ type: 'tool_result', tool_use_id: 'tu-1', content: big }] },
+      }),
+    ]);
+    expect(h.finished).toEqual([]); // finish deferred while queued
+    h.pickup('sess-1:tu-1');
+    expect(h.monitors.at(-1)).toMatchObject({ target: 'emp-9', clear: true, title: 'Bash · myapp' });
+    const replay = h.enqueued.map((e) => e.text).join('\n');
+    expect(replay).toContain('$ npm test');
+    expect(replay).toContain('row 0');
+    expect(replay).toContain('row 399');
+    expect(replay).toContain('✓ done');
+    expect(h.finished).toEqual(['sess-1:tu-1']);
+  });
+
+  it('queued boss replies buffer and finish on pickup', () => {
+    const h = makeHarness({ queue: true });
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        uuid: 'msg-q',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'text', text: 'All done, boss.' }] },
+      }),
+    ]);
+    expect(h.enqueued).toEqual([]);
+    h.pickup('sess-1:msg-q');
+    expect(h.enqueued.map((e) => e.text).join('\n')).toContain('All done, boss.');
+    expect(h.finished).toEqual(['sess-1:msg-q']);
+  });
+
+  it('subagent lines for a queued Task buffer through to the replay', () => {
+    const h = makeHarness({ queue: true });
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'tool_use', id: 'tu-task', name: 'Task', input: { description: 'explore' } }] },
+      }),
+    ]);
+    h.transcripts.fileAppeared(AGENT);
+    h.transcripts.handleLines(AGENT, [
+      line({ type: 'assistant', message: { content: [{ type: 'text', text: 'agent says hi' }] } }),
+    ]);
+    expect(h.enqueued).toEqual([]);
+    h.pickup('sess-1:tu-task');
+    expect(h.enqueued.map((e) => e.text).join('\n')).toContain('agent says hi');
   });
 });
