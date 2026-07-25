@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import { useTexture } from '@react-three/drei';
 import { vistaBoxFaces } from './vistaGeometry.ts';
@@ -6,31 +6,39 @@ import { vistaBoxFaces } from './vistaGeometry.ts';
 /** All positions are in the window opening's local frame: opening center at the
  *  origin, outside = -z. Tuned by eye; adjust freely. `cy` drops the whole box
  *  so the city extends below the sill (we're high in an office tower). */
-interface LayerCfg { url: string; z: number; w: number; h: number; y: number }
+interface LayerCfg { url: string; z: number; w: number; h: number; x: number; y: number }
 interface VistaCfg {
-  box: { w: number; h: number; d: number; cy: number };
+  box: { w: number; h: number; d: number; cx: number; cy: number };
   faceColors: { top: string; bottom: string };
   far: string;
   layers: LayerCfg[];
 }
 
 const CFG: Record<'back' | 'left', VistaCfg> = {
+  // The back box and its layers are shifted +x (cx / layer x) so that no part of
+  // this vista crosses the left wall plane — world x = -7.6, which is local
+  // x ≈ -3.8 for this opening (opening centre is at world x = -3.8). The left
+  // window's own box occupies everything outboard of that plane, so the two
+  // boxes must never interpenetrate: if they did, each box's faces and layers
+  // would be visible through the *other* window. Every back-vista element here
+  // stays at local x ≥ -3.7 (world x ≥ -7.5). Future movable-window work must
+  // preserve this invariant.
   back: {
-    box: { w: 32, h: 20, d: 24, cy: 0 },
+    box: { w: 32, h: 20, d: 24, cx: 12.3, cy: 0 },
     faceColors: { top: '#8b87ba', bottom: '#16121a' },
     far: '/vista/back-far.jpg',
     layers: [
-      { url: '/vista/back-mid.png', z: -11, w: 16, h: 9, y: -2.8 },
-      { url: '/vista/back-near.png', z: -4.5, w: 10, h: 6, y: -2.2 },
+      { url: '/vista/back-mid.png', z: -11, w: 16, h: 9, x: 4.4, y: -2.8 },
+      { url: '/vista/back-near.png', z: -4.5, w: 10, h: 6, x: 1.4, y: -2.2 },
     ],
   },
   left: {
-    box: { w: 32, h: 20, d: 24, cy: 0 },
+    box: { w: 32, h: 20, d: 24, cx: 0, cy: 0 },
     faceColors: { top: '#8b87ba', bottom: '#16121a' },
     far: '/vista/left-far.jpg',
     layers: [
-      { url: '/vista/left-mid.png', z: -11, w: 16, h: 9, y: -2.8 },
-      { url: '/vista/left-near.png', z: -4.5, w: 10, h: 6, y: -2.2 },
+      { url: '/vista/left-mid.png', z: -11, w: 16, h: 9, x: 0, y: -2.8 },
+      { url: '/vista/left-near.png', z: -4.5, w: 10, h: 6, x: 0, y: -2.2 },
     ],
   },
 };
@@ -58,9 +66,10 @@ export function WindowVista({ id }: { id: 'back' | 'left' }) {
     t.needsUpdate = true;
     return t;
   }, [far]);
+  useEffect(() => () => farMirror.dispose(), [farMirror]);
   return (
     <group position={[0, cfg.box.cy, 0]}>
-      {vistaBoxFaces(cfg.box.w, cfg.box.h, cfg.box.d).map((f) => (
+      {vistaBoxFaces(cfg.box.w, cfg.box.h, cfg.box.d, cfg.box.cx).map((f) => (
         <mesh key={f.kind} position={f.position} rotation={f.rotation}>
           <planeGeometry args={f.size} />
           {f.kind === 'back' ? (
@@ -73,7 +82,7 @@ export function WindowVista({ id }: { id: 'back' | 'left' }) {
         </mesh>
       ))}
       {cfg.layers.map((l, i) => (
-        <mesh key={l.url} position={[0, l.y, l.z]}>
+        <mesh key={l.url} position={[l.x, l.y, l.z]}>
           <planeGeometry args={[l.w, l.h]} />
           <meshBasicMaterial map={layerTex[i]} alphaTest={0.5} fog={false} />
         </mesh>
