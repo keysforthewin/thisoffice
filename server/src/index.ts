@@ -105,6 +105,7 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/api/settings' && req.method === 'PUT') {
       const body = await readBody();
       office.setBoss({ name: body.name, variant: body.variant });
+      if (body.staffing) office.setStaffing(body.staffing);
       return send(200, { ok: true });
     }
     if (url.pathname === '/api/employees' && req.method === 'POST') {

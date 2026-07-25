@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { CharacterCatalog, Employee, OfficeState, InboxItem, TodoItem, ServerMsg, WorkerStatus } from '../../shared/types.ts';
+import type { CharacterCatalog, Employee, OfficeState, InboxItem, TodoItem, ServerMsg, WorkerStatus, StaffingSettings } from '../../shared/types.ts';
 import { CHARACTER_VARIANTS } from '../../shared/types.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -10,9 +10,12 @@ const DATA_FILE = path.join(DATA_DIR, 'office.json');
 
 const INBOX_MAX = 8;
 
+const DEFAULT_STAFFING: StaffingSettings = { minEmployees: 3, maxEmployees: 12 };
+
 interface PersistedState {
   boss: { name: string; variant: string };
   employees: Array<Pick<Employee, 'id' | 'name' | 'seat' | 'variant' | 'hiredAt'>>;
+  staffing?: StaffingSettings;
 }
 
 type Listener = (msg: ServerMsg) => void;
@@ -129,6 +132,7 @@ export class Office {
       employees: persisted.employees.map((e) => ({ ...e, status: 'idle' as WorkerStatus, task: null })),
       inbox: [],
       todos: null,
+      staffing: { ...DEFAULT_STAFFING, ...persisted.staffing },
     };
   }
 
@@ -136,6 +140,7 @@ export class Office {
     const persisted: PersistedState = {
       boss: this.state.boss,
       employees: this.state.employees.map(({ id, name, seat, variant, hiredAt }) => ({ id, name, seat, variant, hiredAt })),
+      staffing: this.state.staffing,
     };
     fs.mkdirSync(DATA_DIR, { recursive: true });
     fs.writeFileSync(DATA_FILE, JSON.stringify(persisted, null, 2));
@@ -310,6 +315,16 @@ export class Office {
   setBoss(cfg: Partial<{ name: string; variant: string }>): void {
     if (typeof cfg.name === 'string') this.state.boss.name = cfg.name;
     if (typeof cfg.variant === 'string') this.state.boss.variant = cfg.variant;
+    this.save();
+    this.broadcastState();
+  }
+
+  setStaffing(cfg: Partial<StaffingSettings>) {
+    const s = { ...this.state.staffing };
+    if (Number.isInteger(cfg.minEmployees)) s.minEmployees = Math.max(1, cfg.minEmployees!);
+    if (Number.isInteger(cfg.maxEmployees)) s.maxEmployees = Math.max(1, cfg.maxEmployees!);
+    if (s.minEmployees > s.maxEmployees) s.minEmployees = s.maxEmployees;
+    this.state.staffing = s;
     this.save();
     this.broadcastState();
   }

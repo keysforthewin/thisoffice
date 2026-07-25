@@ -16,6 +16,11 @@ export interface BossConfig {
   variant: string;
 }
 
+export interface StaffingSettings {
+  minEmployees: number;
+  maxEmployees: number;
+}
+
 export interface InboxItem {
   id: string;
   project: string;
@@ -34,6 +39,7 @@ export interface OfficeState {
   employees: Employee[];
   inbox: InboxItem[];
   todos: { project: string; items: TodoItem[] } | null;
+  staffing: StaffingSettings;
 }
 
 /** Messages from server to client */

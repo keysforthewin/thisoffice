@@ -78,3 +78,29 @@ describe('Office drain-aware lifecycle', () => {
     expect(plain.getState().employees.find((e) => e.id === a.id)!.status).toBe('idle');
   });
 });
+
+describe('staffing settings', () => {
+  it('defaults to min 3 / max 12', () => {
+    const office = makeOffice();
+    expect(office.getState().staffing).toEqual({ minEmployees: 3, maxEmployees: 12 });
+  });
+
+  it('setStaffing applies valid values and persists via save', () => {
+    const office = makeOffice();
+    let saved = 0;
+    (office as any).save = () => saved++;
+    office.setStaffing({ minEmployees: 2, maxEmployees: 8 });
+    expect(office.getState().staffing).toEqual({ minEmployees: 2, maxEmployees: 8 });
+    expect(saved).toBe(1);
+  });
+
+  it('ignores non-integers and floors min at 1; min clamps down to max', () => {
+    const office = makeOffice();
+    office.setStaffing({ minEmployees: 2.5 as any, maxEmployees: NaN as any });
+    expect(office.getState().staffing).toEqual({ minEmployees: 3, maxEmployees: 12 });
+    office.setStaffing({ minEmployees: 0 });
+    expect(office.getState().staffing.minEmployees).toBe(1);
+    office.setStaffing({ minEmployees: 6, maxEmployees: 4 });
+    expect(office.getState().staffing).toEqual({ minEmployees: 4, maxEmployees: 4 });
+  });
+});
