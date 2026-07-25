@@ -79,4 +79,24 @@ describe('ScreenStreamer', () => {
     s.enqueue('emp-1', '');
     expect(s.isDraining('emp-1')).toBe(false);
   });
+
+  it('pressure multiplies the drain rate', () => {
+    const s = new ScreenStreamer(hooks, 150);
+    s.enqueue('emp-1', Array.from({ length: 30 }, (_, i) => `l${i}`).join('\n'));
+    s.setPressure(2); // 3× speed: accrual 0.5 * 3 = 1.5 lines/tick
+    vi.advanceTimersByTime(150);
+    expect(emitted[0].text.split('\n')).toHaveLength(1); // floor(1.5)
+    vi.advanceTimersByTime(150);
+    expect(emitted[1].text.split('\n')).toHaveLength(2); // acc 0.5+1.5 → 2 more
+    vi.advanceTimersByTime(150 * 18);
+    expect(s.isDraining('emp-1')).toBe(false); // 30 lines at ~1.5/tick ≈ 20 ticks
+  });
+
+  it('negative pressure clamps to zero (baseline pace)', () => {
+    const s = new ScreenStreamer(hooks, 150);
+    s.setPressure(-5);
+    s.enqueue('emp-1', 'a\nb');
+    vi.advanceTimersByTime(300); // 2 ticks at baseline 0.5/tick → 1 line
+    expect(emitted).toHaveLength(1);
+  });
 });

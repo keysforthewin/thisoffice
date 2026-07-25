@@ -23,6 +23,7 @@ interface Queue {
 export class ScreenStreamer {
   private queues = new Map<string, Queue>();
   private timer: NodeJS.Timeout | null = null;
+  private pressure = 0;
 
   constructor(
     private hooks: StreamerHooks,
@@ -42,6 +43,11 @@ export class ScreenStreamer {
     return this.queues.has(employeeId);
   }
 
+  /** Backlog pressure from the office work queue: N waiting jobs → screens drain (1+N)× faster. */
+  setPressure(n: number) {
+    this.pressure = Math.max(0, n);
+  }
+
   /** Drop an employee's queue without a drained() callback (employee removed). */
   clear(employeeId: string) {
     this.queues.delete(employeeId);
@@ -54,7 +60,7 @@ export class ScreenStreamer {
 
   private tick() {
     for (const [id, q] of this.queues) {
-      q.acc += Math.max(0.5, q.rate);
+      q.acc += Math.max(0.5, q.rate) * (1 + this.pressure);
       const n = Math.min(q.lines.length, Math.floor(q.acc));
       if (n > 0) {
         q.acc -= n;
