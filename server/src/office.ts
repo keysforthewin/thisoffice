@@ -224,8 +224,10 @@ export class Office {
   }
 
   /**
-   * Assign the activity to an idle employee, hiring a new one if the office is full.
-   * Returns the employee. New hires get a placeholder name; caller may rename async.
+   * Assign the activity to an idle employee, hiring a new one if under max headcount.
+   * At max headcount the activity is queued and `employee` is null; the caller should
+   * drop the work for now (a queued job is later picked up via `onAssign`).
+   * New hires get a placeholder name; caller may rename async.
    */
   assign(activityKey: string, task: string): { employee: Employee | null; hired: boolean } {
     const existing = this.assignments.get(activityKey);
