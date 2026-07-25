@@ -18,6 +18,7 @@ import {
   resolveWallOffset,
   snapPose,
   wallOffsetRange,
+  WALL_ITEMS,
 } from './buildLayout.ts';
 
 const { width } = roomDims(3);
@@ -159,9 +160,32 @@ describe('resolveFurniture', () => {
 describe('wall items', () => {
   it('defaults match the historical hardcoded offsets', () => {
     expect(defaultWallOffset('windowBack', 3)).toBeCloseTo(-width / 4, 6);
-    expect(defaultWallOffset('windowLeft', 3)).toBeCloseTo(4.5, 6);
+    // was 4.5 before the TV moved in; 1.5 keeps window and TV non-colliding at every room size
+    expect(defaultWallOffset('windowLeft', 3)).toBeCloseTo(1.5, 6);
     expect(defaultWallOffset('wallArt', 3)).toBeCloseTo(width / 4 + 0.5, 6);
     expect(defaultWallOffset('pictureFrame', 3)).toBeCloseTo(0, 6);
+  });
+
+  it('has a tv item on the left wall, above cactusBig near the back corner', () => {
+    expect(WALL_ITEMS.find((w) => w.id === 'tv')).toMatchObject({ wall: 'left', halfW: 1.5 });
+    // world z = BACK_Z + 1.9 = -6.5 (span [-8.0, -5.0]), independent of room size
+    for (const maxSeat of [3, 12]) {
+      const { centerZ } = roomDims(maxSeat);
+      const ox = defaultWallOffset('tv', maxSeat);
+      expect(centerZ - ox).toBeCloseTo(BACK_Z + 1.9, 6);
+    }
+  });
+
+  it('the tv and windowLeft defaults are both valid placements at small and large room sizes', () => {
+    for (const maxSeat of [3, 12]) {
+      expect(isWallPlacementValid(undefined, 'tv', defaultWallOffset('tv', maxSeat), maxSeat)).toBe(true);
+      expect(isWallPlacementValid(undefined, 'windowLeft', defaultWallOffset('windowLeft', maxSeat), maxSeat)).toBe(true);
+    }
+  });
+
+  it('rejects moving windowLeft onto the tv span', () => {
+    // within windowLeft's own legal range, but overlapping the tv's default span
+    expect(isWallPlacementValid(undefined, 'windowLeft', 4.5, 3)).toBe(false);
   });
 
   it('resolveWallOffset returns the override when in range', () => {

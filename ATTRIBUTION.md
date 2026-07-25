@@ -18,6 +18,11 @@ everyone. If you use them too, consider supporting the project.
 - **KayKit Character Animations 1.1 (Free)** — https://kaylousberg.itch.io/kaykit-character-animations
   (`web/public/models/characters/_lib/` — Rig_Medium General + Simulation sets; provides Idle_A and Sit_Chair_Idle for new-style characters)
 
+## Bundled furniture — Kenney
+
+- **Kenney Furniture Kit** — CC0, https://kenney.nl/assets/furniture-kit
+  (`web/public/models/furniture/televisionModern.glb` — the wall-mounted usage-stats TV)
+
 ## User-imported characters — Mixamo (not distributed)
 
 The app can import characters you download yourself from [Adobe Mixamo](https://www.mixamo.com)

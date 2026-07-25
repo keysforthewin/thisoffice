@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { MONITOR_IMAGE_MARKER, type CharacterCatalog, type ItemPose, type OfficeLayout, type OfficeState, type ServerMsg } from '../../shared/types.ts';
+import { MONITOR_IMAGE_MARKER, type CharacterCatalog, type ItemPose, type OfficeLayout, type OfficeState, type ServerMsg, type UsageStats } from '../../shared/types.ts';
 import { boardContent } from './scene/whiteboardContent.ts';
 import { activityTtl } from './scene/movieShots.ts';
 import { appendHistory } from './scene/monitorScrollback.ts';
@@ -72,6 +72,7 @@ export interface BuildHold {
 
 interface AppStore {
   office: OfficeState | null;
+  stats: UsageStats | null;
   monitors: Record<string, MonitorContent>;
   /** bumps every time a monitor changes so screens know to redraw */
   monitorVersion: Record<string, number>;
@@ -113,6 +114,8 @@ let whiteboardKey: string | null = null;
 let inboxKey: string | null = null;
 /** id of the newest status item last seen; keyed on id so summarizer text rewrites don't re-stamp */
 let statusKey: string | null = null;
+/** last-seen stats snapshot key; guards against re-stamping the TV on the connect replay */
+let tvStatsKey: string | null = null;
 
 /** stamp `key` as active now, dropping entries that have already fallen outside the movie camera's window */
 function stampActivity(lastActivity: Record<string, number>, key: string): Record<string, number> {
@@ -126,6 +129,7 @@ function stampActivity(lastActivity: Record<string, number>, key: string): Recor
 
 export const useStore = create<AppStore>((set, get) => ({
   office: null,
+  stats: null,
   monitors: {},
   monitorVersion: {},
   monitorHistory: {},
@@ -162,6 +166,14 @@ export const useStore = create<AppStore>((set, get) => ({
     }
     if (msg.type === 'catalog') {
       set({ catalog: msg.catalog });
+      return;
+    }
+    if (msg.type === 'stats') {
+      const key = JSON.stringify(msg.stats);
+      const prevKey = tvStatsKey;
+      tvStatsKey = key;
+      const lastActivity = prevKey !== null && prevKey !== key ? stampActivity(get().lastActivity, 'tv') : get().lastActivity;
+      set({ stats: msg.stats, lastActivity });
       return;
     }
     if (msg.type === 'monitor') {
@@ -257,4 +269,9 @@ export function resetInboxKeyForTest() {
 /** test-only: forget the cached status tail id so the next state msg counts as "first" */
 export function resetStatusKeyForTest() {
   statusKey = null;
+}
+
+/** test-only: forget the cached stats key so the next stats msg counts as "first" */
+export function resetTvStatsKeyForTest() {
+  tvStatsKey = null;
 }

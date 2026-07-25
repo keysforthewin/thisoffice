@@ -1,4 +1,4 @@
-import type { ModelTokens } from '../../shared/types.ts';
+import type { ModelTokens } from './types.ts';
 
 /**
  * Static USD-per-million-token price table, as of July 2026. Prices drift —

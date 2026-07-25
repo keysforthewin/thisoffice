@@ -3,6 +3,7 @@ import { useTexture } from '@react-three/drei';
 import { useStore } from '../store.ts';
 import { Desk, FurnitureModel } from './Desk.tsx';
 import { Whiteboard, StatusBoard } from './Whiteboard.tsx';
+import { WallTV } from './WallTV.tsx';
 import { roomDims, whiteboardTransform, statusBoardTransform, BACK_Z } from './layout.ts';
 import { resolveFurniture, WALL_ITEMS } from './buildLayout.ts';
 import { BuildHandle, WallHandle, displayPose, useWallOffset } from './build.tsx';
@@ -111,6 +112,7 @@ export function Office() {
   const leftOx = useWallOffset('windowLeft', maxSeat);
   const artOx = useWallOffset('wallArt', maxSeat);
   const frameOx = useWallOffset('pictureFrame', maxSeat);
+  const tvOx = useWallOffset('tv', maxSeat);
   const wallItem = (id: string) => WALL_ITEMS.find((w) => w.id === id)!;
 
   return (
@@ -142,7 +144,9 @@ export function Office() {
         {buildMode && (
           <WallHandle id="windowLeft" wall="left" ox={leftOx} oy={2.1 - height / 2} w={3.8} h={2.1} />
         )}
+        {buildMode && <WallHandle id="tv" wall="left" ox={tvOx} oy={2.2 - height / 2} w={3.0} h={1.8} />}
       </group>
+      <WallTV position={[-width / 2 + 0.07, 2.2, centerZ - tvOx]} rotationY={Math.PI / 2} />
       {/* right wall (whiteboard wall) */}
       <mesh receiveShadow position={[width / 2, height / 2, centerZ]} rotation={[0, -Math.PI / 2, 0]}>
         <planeGeometry args={[depth, height]} />

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { StatsAggregator } from './stats.ts';
-import { estCostUSD } from './pricing.ts';
+import { estCostUSD } from '../../shared/pricing.ts';
 
 let dir: string;
 let file: string;

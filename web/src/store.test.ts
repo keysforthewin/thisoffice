@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { OfficeState } from '../../shared/types.ts';
+import type { OfficeState, UsageStats } from '../../shared/types.ts';
 import {
   enterFocusMode,
   resetInboxKeyForTest,
   resetStatusKeyForTest,
+  resetTvStatsKeyForTest,
   resetWhiteboardKeyForTest,
   shouldExitFocusOnMissedClick,
   useStore,
@@ -172,7 +173,8 @@ describe('lastActivity stamping', () => {
     resetWhiteboardKeyForTest();
     resetInboxKeyForTest();
     resetStatusKeyForTest();
-    useStore.setState({ office: null, monitors: {}, monitorVersion: {}, lastActivity: {} });
+    resetTvStatsKeyForTest();
+    useStore.setState({ office: null, stats: null, monitors: {}, monitorVersion: {}, lastActivity: {} });
   });
   afterEach(() => vi.useRealTimers());
 
@@ -282,6 +284,39 @@ describe('lastActivity stamping', () => {
     } as Partial<OfficeState>);
     useStore.getState().applyServerMsg({ type: 'state', state: summarized });
     expect(useStore.getState().lastActivity['boss']).toBe(1_002_000);
+  });
+
+  it('sets stats and stamps the tv on a stats message, but not on re-broadcast of identical stats', () => {
+    const stats: UsageStats = {
+      trackingSince: new Date().toISOString(),
+      tokensByModel: {},
+      toolCalls: {},
+      prompts: 1,
+      sessions: 0,
+      subagents: 0,
+      webSearches: 0,
+      webFetches: 0,
+      turns: 0,
+      turnMsTotal: 0,
+      longestTurnMs: 0,
+      peakHeadcount: 0,
+      hires: 0,
+      byDay: {},
+      hourCounts: {},
+    };
+    useStore.getState().applyServerMsg({ type: 'stats', stats });
+    expect(useStore.getState().stats).toEqual(stats);
+    expect(useStore.getState().lastActivity['tv']).toBeUndefined(); // first message never re-stamps
+
+    vi.setSystemTime(1_005_000);
+    const changed = { ...stats, prompts: 2 };
+    useStore.getState().applyServerMsg({ type: 'stats', stats: changed });
+    expect(useStore.getState().lastActivity['tv']).toBe(1_005_000);
+
+    // identical broadcast again → no re-stamp
+    vi.setSystemTime(1_009_000);
+    useStore.getState().applyServerMsg({ type: 'stats', stats: changed });
+    expect(useStore.getState().lastActivity['tv']).toBe(1_005_000);
   });
 });
 

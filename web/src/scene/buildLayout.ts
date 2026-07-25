@@ -259,6 +259,7 @@ export const WALL_ITEMS: WallItemDef[] = [
   { id: 'windowLeft', wall: 'left', halfW: 1.9 },
   { id: 'wallArt', wall: 'back', halfW: 1.0 },
   { id: 'pictureFrame', wall: 'back', halfW: 0.6 },
+  { id: 'tv', wall: 'left', halfW: 1.5 },
 ];
 
 function wallItem(id: string): WallItemDef | undefined {
@@ -271,11 +272,18 @@ export function defaultWallOffset(id: string, maxSeat: number): number {
     case 'windowBack':
       return -width / 4;
     case 'windowLeft':
-      return 4.5;
+      // was 4.5: at minimum room size that overlapped the TV's corner, so 1.5
+      // keeps window and TV non-colliding at every room size.
+      return 1.5;
     case 'wallArt':
       return width / 4 + 0.5;
     case 'pictureFrame':
       return 0;
+    case 'tv':
+      // room-relative to the BACK end: left-wall `ox` maps to world z = centerZ - ox,
+      // so this puts the TV center at world z = BACK_Z + 1.9 = -6.5 (span [-8.0, -5.0]),
+      // above cactusBig at (-6.8, -7.6).
+      return roomDims(maxSeat).depth / 2 - 1.9;
     default:
       return 0;
   }
