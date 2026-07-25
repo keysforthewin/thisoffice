@@ -122,7 +122,7 @@ describe('shouldExitFocusOnMissedClick', () => {
 
 describe('patchCharacter', () => {
   it('patchCharacter optimistically patches any adjustment field', () => {
-    // seed a catalog the same way the existing setCharacterScale test does
+    // seed a catalog the same way the existing catalog-seeding tests do
     useStore.getState().applyServerMsg({
       type: 'catalog',
       catalog: {

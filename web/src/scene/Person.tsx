@@ -90,8 +90,8 @@ export function Person({ variant, working, position = [0, 0, 0], rotationY = 0, 
     }
     tagGroup.current?.position.set(headLocal.x, headLocal.y + TAG_LIFT, headLocal.z);
     if (collider.current) {
-      collider.current.position.set(headLocal.x, headLocal.y / 2, headLocal.z);
-      collider.current.scale.set(1.0 * scale, Math.max(headLocal.y, 0.1), 0.8 * scale);
+      collider.current.position.set(headLocal.x, (seatOffset + headLocal.y) / 2, headLocal.z);
+      collider.current.scale.set(1.0 * scale, Math.max(headLocal.y - seatOffset, 0.1), 0.8 * scale);
     }
   });
 
