@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import type { OfficeState } from '../../../shared/types.ts';
 import { roomDims, whiteboardTransform, statusBoardTransform } from './layout.ts';
-import { resolveSeat } from './buildLayout.ts';
+import { resolveSeat, resolveWallOffset } from './buildLayout.ts';
+import { TV_SCREEN_W, TV_SCREEN_H } from './WallTV.tsx';
 
 export const ACTIVE_WINDOW_MS = 10_000;
 
@@ -11,7 +12,7 @@ export const ACTIVE_WINDOW_MS = 10_000;
  * survive the min shot hold + cut cadence (14s), and the status board stays a
  * cut target for minutes after an update.
  */
-const ACTIVITY_TTL_MS: Record<string, number> = { boss: 14_000, whiteboard: 14_000, statusboard: 150_000 };
+const ACTIVITY_TTL_MS: Record<string, number> = { boss: 14_000, whiteboard: 14_000, statusboard: 150_000, tv: 150_000 };
 const WALL_BOARD_TTL_MS = 14_000;
 
 export function activityTtl(key: string): number {
@@ -178,10 +179,45 @@ export function hasLineOfSight(camPos: THREE.Vector3, subject: Subject, office: 
   return true;
 }
 
-/** Wall-mounted board subjects on the right wall, all readable from −x. */
-const WALL_BOARDS: Record<string, (maxSeat: number) => { position: THREE.Vector3 }> = {
-  whiteboard: whiteboardTransform,
-  statusboard: statusBoardTransform,
+/** A wall-mounted board subject: everything needed to place, size, and orient it. */
+interface WallBoardDef {
+  center(office: OfficeState | null): THREE.Vector3;
+  /** unit, readable-from direction */
+  normal: THREE.Vector3;
+  width: number;
+  height: number;
+}
+
+/** World-space center of the TV, mirroring Office.tsx's placement (which owns the
+ *  authoritative render): left wall, layout-draggable along z via resolveWallOffset. */
+function tvCenter(office: OfficeState | null): THREE.Vector3 {
+  const ms = maxSeat(office);
+  const { width, centerZ } = roomDims(ms);
+  const ox = resolveWallOffset(office?.layout, 'tv', ms);
+  return new THREE.Vector3(-width / 2 + 0.07, 2.2, centerZ - ox);
+}
+
+/** Wall-mounted board subjects: whiteboard/statusboard on the right wall (readable
+ *  from −x), the stats tv on the left wall (readable from +x). */
+const WALL_BOARDS: Record<string, WallBoardDef> = {
+  whiteboard: {
+    center: (office) => whiteboardTransform(maxSeat(office)).position.clone(),
+    normal: new THREE.Vector3(-1, 0, 0),
+    width: WHITEBOARD_W,
+    height: WHITEBOARD_H,
+  },
+  statusboard: {
+    center: (office) => statusBoardTransform(maxSeat(office)).position.clone(),
+    normal: new THREE.Vector3(-1, 0, 0),
+    width: WHITEBOARD_W,
+    height: WHITEBOARD_H,
+  },
+  tv: {
+    center: tvCenter,
+    normal: new THREE.Vector3(1, 0, 0),
+    width: TV_SCREEN_W,
+    height: TV_SCREEN_H,
+  },
 };
 
 export function isWallBoard(key: string): boolean {
@@ -191,8 +227,7 @@ export function isWallBoard(key: string): boolean {
 export function subjectFor(key: string, office: OfficeState | null): Subject | null {
   const board = WALL_BOARDS[key];
   if (board) {
-    const b = board(maxSeat(office));
-    return { key, center: b.position.clone(), normal: new THREE.Vector3(-1, 0, 0), width: WHITEBOARD_W, height: WHITEBOARD_H };
+    return { key, center: board.center(office), normal: board.normal.clone(), width: board.width, height: board.height };
   }
   let seat: number | null = null;
   if (key === 'boss') seat = 0;

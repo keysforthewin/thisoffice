@@ -43,6 +43,10 @@ export function usePovList(): Pov[] {
     povs.push({ label: 'Whiteboard', position: wb.camera, lookAt: wb.lookAt });
     const sb = statusBoardTransform(maxSeat);
     povs.push({ label: 'Status Board', position: sb.camera, lookAt: sb.lookAt });
+    // tv is a draggable wall item, so its spot comes from the same layout-aware
+    // subject the movie camera uses rather than a fixed transform.
+    const tv = subjectFor('tv', office);
+    if (tv) povs.push({ label: 'Stats TV', position: tv.center.clone().addScaledVector(tv.normal, 3.4), lookAt: tv.center.clone() });
     return povs;
   }, [office]);
 }

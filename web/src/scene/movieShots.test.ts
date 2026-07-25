@@ -13,6 +13,7 @@ import {
   groupByFacing,
   groupShot,
   hasLineOfSight,
+  isWallBoard,
   MIN_SHOT_DIST,
   pickShot,
   SINGLE_POOL,
@@ -90,6 +91,7 @@ describe('activeKeys / activeSetKey', () => {
     expect(activityTtl('boss')).toBe(14_000);
     expect(activityTtl('whiteboard')).toBe(14_000);
     expect(activityTtl('statusboard')).toBe(150_000);
+    expect(activityTtl('tv')).toBe(150_000);
     expect(activityTtl('e1')).toBe(ACTIVE_WINDOW_MS);
   });
   it('the two wall boards resolve as distinct non-overlapping subjects on the right wall', () => {
@@ -144,6 +146,59 @@ describe('subjectFor', () => {
     expect(s.center.x).toBeCloseTo(2.0);
     expect(s.center.z).toBeCloseTo(4.0 + 0.35);
     expect(s.normal.z).toBeCloseTo(-1);
+  });
+
+  it('whiteboard / statusboard face -x and are 3.2x1.95, unchanged by the tv refactor', () => {
+    const office = makeOffice();
+    for (const key of ['whiteboard', 'statusboard']) {
+      const s = subjectFor(key, office)!;
+      expect(s.normal.toArray()).toEqual([-1, 0, 0]);
+      expect(s.width).toBe(3.2);
+      expect(s.height).toBe(1.95);
+    }
+  });
+
+  it('the tv is a wall board on the LEFT wall, facing +x, sized to the rendered screen', () => {
+    const office = makeOffice();
+    const s = subjectFor('tv', office)!;
+    expect(s.normal.toArray()).toEqual([1, 0, 0]);
+    expect(s.width).toBe(2.6);
+    expect(s.height).toBe(1.46);
+    expect(s.center.x).toBeLessThan(0);
+    expect(isWallBoard('tv')).toBe(true);
+  });
+
+  it('the tv default offset is anchored to the back wall (stable z, stable x) as maxSeat/room size grows', () => {
+    // defaultWallOffset('tv', maxSeat) = depth/2 - 1.9, i.e. world z = centerZ - ox
+    // is pinned to BACK_Z + 1.9 regardless of how far the room grows at the front —
+    // both x (off the left wall) and z should hold steady across two very different maxSeat values.
+    const small = subjectFor('tv', makeOffice({ employees: [makeEmployee({ id: 'e1', seat: 1 })] }))!;
+    const big = subjectFor(
+      'tv',
+      makeOffice({ employees: Array.from({ length: 9 }, (_, i) => makeEmployee({ id: `e${i}`, seat: i + 1 })) }),
+    )!;
+    expect(small.center.z).toBeCloseTo(big.center.z, 6);
+    expect(small.center.x).toBeCloseTo(big.center.x, 6);
+    // and the two room sizes actually differ (sanity check the fixture is meaningful)
+    expect(roomDims(3).depth).not.toBeCloseTo(roomDims(9).depth, 1);
+    // matches the raw formula the layout/render side uses directly
+    for (const ms of [3, 9]) {
+      const { width, depth, centerZ } = roomDims(ms);
+      const expectedZ = centerZ - (depth / 2 - 1.9);
+      const s = subjectFor('tv', makeOffice({ employees: Array.from({ length: ms }, (_, i) => makeEmployee({ id: `e${i}`, seat: i + 1 })) }))!;
+      expect(s.center.z).toBeCloseTo(expectedZ, 6);
+      expect(s.center.x).toBeCloseTo(-width / 2 + 0.07, 6);
+    }
+  });
+
+  it('a layout override for the tv wall offset moves its subject center', () => {
+    const office = makeOffice();
+    const moved = makeOffice({ layout: { wallItems: { tv: 0 } } });
+    const s0 = subjectFor('tv', office)!;
+    const s1 = subjectFor('tv', moved)!;
+    expect(s1.center.z).not.toBeCloseTo(s0.center.z, 1);
+    // x stays pinned to the left wall regardless of the along-wall offset
+    expect(s1.center.x).toBeCloseTo(s0.center.x, 6);
   });
 });
 
@@ -329,6 +384,32 @@ describe('archetype shot selection', () => {
       expect(shot.position.clone().sub(subject.center).dot(subject.normal)).toBeGreaterThan(0);
     }
     expect(sawPan).toBe(true);
+  });
+
+  it('boardPan also works for the tv (a +x-facing left-wall board): camera stays in front of the screen', () => {
+    const office = makeOffice();
+    const now = Date.now();
+    const subject = subjectFor('tv', office)!;
+    let sawPan = false;
+    for (let i = 0; i < 40 && !sawPan; i++) {
+      const shot = pickShot(ctx({ office, lastActivity: { tv: now }, now, rng: rng(i + 700), cutIndex: i }));
+      if (shot.archetype !== 'boardPan') continue;
+      sawPan = true;
+      expect(shot.lookAtEnd).toBeDefined();
+      // camera sits on the readable (+x) side of the tv
+      expect(shot.position.clone().sub(subject.center).dot(subject.normal)).toBeGreaterThan(0);
+      expect(shot.position.x).toBeGreaterThan(subject.center.x);
+    }
+    expect(sawPan).toBe(true);
+  });
+
+  it('a closeUpShot on the tv sits in front of its +x-facing screen', () => {
+    const office = makeOffice();
+    const subject = subjectFor('tv', office)!;
+    for (let i = 0; i < 10; i++) {
+      const shot = closeUpShot(subject, FOV, ASPECT, rng(i), office);
+      expect(shot.position.x).toBeGreaterThan(subject.center.x);
+    }
   });
 
   it('pickShot is deterministic under a seeded rng', () => {

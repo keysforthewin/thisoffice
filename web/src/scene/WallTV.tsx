@@ -21,6 +21,11 @@ const TV_SCALE = 3.8;
 const TV_HALF_HEIGHT = (0.45475 * TV_SCALE) / 2;
 const TV_HALF_DEPTH = 0.0642 * TV_SCALE;
 
+/** Screen plane dimensions — shared with movieShots.ts so the wall-board subject
+ *  registry can't drift from what's actually rendered. */
+export const TV_SCREEN_W = 2.6;
+export const TV_SCREEN_H = 1.46;
+
 interface Props {
   position: [number, number, number];
   rotationY?: number;
@@ -59,7 +64,7 @@ export function WallTV({ position, rotationY = 0 }: Props) {
       />
       {/* screen: 16:9 plane just in front of the (flush-to-wall) panel face */}
       <mesh position={[0, 0, 0.03]}>
-        <planeGeometry args={[2.6, 1.46]} />
+        <planeGeometry args={[TV_SCREEN_W, TV_SCREEN_H]} />
         <meshBasicMaterial map={texture} toneMapped={false} />
       </mesh>
     </group>
