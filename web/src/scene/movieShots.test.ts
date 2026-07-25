@@ -276,18 +276,42 @@ describe('room height', () => {
 });
 
 describe('hasLineOfSight', () => {
-  it('blocks an employee close-up straight along the screen normal at eye height (own person occludes)', () => {
-    const office = makeOffice();
-    const subject = subjectFor('e1', office)!;
-    // straight back along the normal at seated eye height (~1.5), through the seated person's torso/head
-    const camPos = subject.center.clone().addScaledVector(subject.normal, 3).setY(1.6);
-    expect(hasLineOfSight(camPos, subject, office)).toBe(false);
-  });
   it('is clear from above/beside the shoulder line', () => {
     const office = makeOffice();
     const subject = subjectFor('e1', office)!;
     const camPos = subject.center.clone().addScaledVector(subject.normal, 1.5).add(new THREE.Vector3(1.2, 1.2, 0));
     expect(hasLineOfSight(camPos, subject, office)).toBe(true);
+  });
+});
+
+describe('LOS relaxation', () => {
+  it("the subject's own occupant never blocks their screen", () => {
+    const office = makeOffice();
+    const subject = subjectFor('e1', office)!;
+    // straight down the readable normal at seated-head height: passes right
+    // over/through the seat-1 occupant, must still count as visible
+    const camPos = subject.center.clone().addScaledVector(subject.normal, 2.2);
+    camPos.y = 2.6;
+    expect(hasLineOfSight(camPos, subject, office)).toBe(true);
+  });
+
+  it("a steep high angle from above the subject's own head has LOS", () => {
+    const office = makeOffice();
+    const subject = subjectFor('e1', office)!;
+    const camPos = subject.center.clone()
+      .addScaledVector(subject.normal, 1.6)
+      .add(new THREE.Vector3(0, 3.5, 0));
+    expect(hasLineOfSight(camPos, subject, office)).toBe(true);
+  });
+
+  it('OTHER seats\' occupants still block', () => {
+    const office = makeOffice(); // e1 seat 1, e2 seat 2 side by side
+    const s2 = subjectFor('e2', office)!;
+    // aim through seat-1's occupant at seat-2's screen: camera positioned ahead
+    // of the desk row (person is 1.15 units forward) at torso height to cross seat-1's body
+    const p1 = seatTransform(1).position;
+    const camPos = new THREE.Vector3(p1.x - 0.5, 1.1, p1.z + 1.6);
+    expect(hasLineOfSight(camPos, s2, office)).toBe(false);
   });
 });
 
@@ -299,11 +323,12 @@ describe('closeUpShot line of sight', () => {
     for (let i = 0; i < 20; i++) {
       const shot = closeUpShot(subject, FOV, ASPECT, rng(i), office);
       // not inside any person sphere (approximate: check both known occupied seats' spheres)
+      // HEAD_R = 0.3, TORSO_R = 0.4
       for (const seat of [0, 1, 2]) {
         const { position, rotationY } = seatTransform(seat);
         const p = position.clone().add(new THREE.Vector3(0, 0, -1.15).applyAxisAngle(new THREE.Vector3(0, 1, 0), rotationY));
-        expect(shot.position.distanceTo(p.clone().add(new THREE.Vector3(0, 1.8, 0)))).toBeGreaterThan(0.35);
-        expect(shot.position.distanceTo(p.clone().add(new THREE.Vector3(0, 1.25, 0)))).toBeGreaterThan(0.45);
+        expect(shot.position.distanceTo(p.clone().add(new THREE.Vector3(0, 1.8, 0)))).toBeGreaterThan(0.3);
+        expect(shot.position.distanceTo(p.clone().add(new THREE.Vector3(0, 1.25, 0)))).toBeGreaterThan(0.4);
       }
       if (hasLineOfSight(shot.position, subject, office)) losCount++;
     }

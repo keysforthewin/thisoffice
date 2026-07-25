@@ -4,6 +4,10 @@ import { roomDims, seatTransform, whiteboardTransform } from './layout.ts';
 
 export const ACTIVE_WINDOW_MS = 10_000;
 
+/** Body sphere radii for LOS line-of-sight checking. */
+const HEAD_R = 0.3;
+const TORSO_R = 0.4;
+
 /** Monitor plane inside the desk group (see Desk.tsx / MonitorScreen.tsx). */
 const MONITOR_OFFSET = new THREE.Vector3(0, 1.66, 0.35);
 const MONITOR_W = 1.35;
@@ -119,8 +123,8 @@ export function segmentHitsBox(a: THREE.Vector3, b: THREE.Vector3, box: THREE.Bo
 function isInsideOccluder(pos: THREE.Vector3, office: OfficeState | null): boolean {
   for (const seat of occupiedSeats(office)) {
     const p = personPosition(seat);
-    if (pos.distanceTo(p.clone().add(new THREE.Vector3(0, 1.8, 0))) <= 0.35) return true;
-    if (pos.distanceTo(p.clone().add(new THREE.Vector3(0, 1.25, 0))) <= 0.45) return true;
+    if (pos.distanceTo(p.clone().add(new THREE.Vector3(0, 1.8, 0))) <= HEAD_R + 0.05) return true;
+    if (pos.distanceTo(p.clone().add(new THREE.Vector3(0, 1.25, 0))) <= TORSO_R + 0.05) return true;
   }
   for (const seat of occupiedSeats(office)) {
     if (monitorAABB(seat).containsPoint(pos)) return true;
@@ -129,19 +133,20 @@ function isInsideOccluder(pos: THREE.Vector3, office: OfficeState | null): boole
 }
 
 /**
- * Does camPos see subject.center? Blocked by any occupied seat's person (head/torso
- * spheres) or by any OTHER seat's monitor panel (the subject's own monitor is skipped
- * since the segment ends on it).
+ * Does camPos see subject.center? Blocked by any other occupied seat's person (head/torso
+ * spheres) or by any OTHER seat's monitor panel. The subject's own seat occupant never
+ * blocks their own screen (over-the-shoulder camera angles).
  */
 export function hasLineOfSight(camPos: THREE.Vector3, subject: Subject, office: OfficeState | null): boolean {
+  const ownSeat = seatForKey(subject.key, office);
   for (const seat of occupiedSeats(office)) {
+    if (ownSeat !== null && seat === ownSeat) continue; // over-the-shoulder is the point
     const p = personPosition(seat);
     const head = p.clone().add(new THREE.Vector3(0, 1.8, 0));
     const torso = p.clone().add(new THREE.Vector3(0, 1.25, 0));
-    if (segmentHitsSphere(camPos, subject.center, head, 0.35)) return false;
-    if (segmentHitsSphere(camPos, subject.center, torso, 0.45)) return false;
+    if (segmentHitsSphere(camPos, subject.center, head, HEAD_R)) return false;
+    if (segmentHitsSphere(camPos, subject.center, torso, TORSO_R)) return false;
   }
-  const ownSeat = seatForKey(subject.key, office);
   for (const seat of occupiedSeats(office)) {
     if (ownSeat !== null && seat === ownSeat) continue;
     if (segmentHitsBox(camPos, subject.center, monitorAABB(seat))) return false;
