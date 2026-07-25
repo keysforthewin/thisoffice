@@ -37,7 +37,7 @@ describe('Office + ScreenStreamer + Transcripts integration (real classes, fake 
   afterEach(() => vi.useRealTimers());
 
   it('a queued job is picked up, streams its buffered content, and the office drains back to all-idle', () => {
-    const office = new Office(() => ['Knight', 'Mage', 'Rogue'], 60_000);
+    const office = new Office(() => ['Knight', 'Mage', 'Rogue'], 60_000, '/nonexistent/office.json');
     (office as any).save = () => {};
 
     const monitorMsgs: Extract<ServerMsg, { type: 'monitor' }>[] = [];

@@ -91,6 +91,7 @@ export class Office {
   constructor(
     variantPoolProvider?: () => string[],
     private idleFireMs = IDLE_FIRE_MS,
+    private dataFile = DATA_FILE,
   ) {
     this.variantPool = variantPoolProvider?.() ?? loadVariantPool();
     if (!this.variantPool.length) this.variantPool = loadVariantPool();
@@ -184,7 +185,7 @@ export class Office {
   private load(): OfficeState {
     let persisted: PersistedState | null = null;
     try {
-      persisted = JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8'));
+      persisted = JSON.parse(fs.readFileSync(this.dataFile, 'utf-8'));
     } catch {
       /* first run */
     }
@@ -217,7 +218,7 @@ export class Office {
       staffing: this.state.staffing,
     };
     fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(DATA_FILE, JSON.stringify(persisted, null, 2));
+    fs.writeFileSync(this.dataFile, JSON.stringify(persisted, null, 2));
   }
 
   subscribe(fn: Listener): () => void {

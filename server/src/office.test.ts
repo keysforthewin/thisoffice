@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Office, clampStaffing } from './office.ts';
 
 function makeOffice() {
-  const office = new Office(() => ['Knight', 'Mage', 'Rogue']);
+  const office = new Office(() => ['Knight', 'Mage', 'Rogue'], undefined, '/nonexistent/office.json');
   (office as any).save = () => {}; // keep tests off the real data file
   return office;
 }
@@ -209,7 +209,7 @@ describe('idle eviction', () => {
   afterEach(() => vi.useRealTimers());
 
   function makeEvictionOffice() {
-    const office = new Office(() => ['Knight', 'Mage', 'Rogue'], 60_000);
+    const office = new Office(() => ['Knight', 'Mage', 'Rogue'], 60_000, '/nonexistent/office.json');
     (office as any).save = () => {};
     office.attachStreamer({ isDraining: () => false, clear: () => {}, setPressure: () => {} });
     return office;
