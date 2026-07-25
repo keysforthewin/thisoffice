@@ -1,5 +1,7 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
+import { useFrame } from '@react-three/fiber';
+import { NO_RAYCAST, isTagFullyVisible } from './nametagVisibility.ts';
 
 interface Props {
   name: string;
@@ -7,6 +9,8 @@ interface Props {
   /** world-space height of the tag */
   height?: number;
   accent?: string;
+  /** exempts the owner's body collider from the occlusion check */
+  ignore?: (obj: THREE.Object3D) => boolean;
 }
 
 const FONT_PX = 64;
@@ -15,7 +19,7 @@ const PAD_Y = 22;
 const FONT = `600 ${FONT_PX}px system-ui, -apple-system, sans-serif`;
 
 /** A floating name pill above a character's head. Sprites always face the camera. */
-export function NameTag({ name, position = [0, 0, 0], height = 0.22, accent = '#7ee787' }: Props) {
+export function NameTag({ name, position = [0, 0, 0], height = 0.22, accent = '#7ee787', ignore }: Props) {
   const { texture, aspect } = useMemo(() => {
     const measure = document.createElement('canvas').getContext('2d')!;
     measure.font = FONT;
@@ -53,28 +57,45 @@ export function NameTag({ name, position = [0, 0, 0], height = 0.22, accent = '#
 
   const scale: [number, number, number] = [height * aspect, height, 1];
 
+  const sprite = useRef<THREE.Sprite>(null);
+  const material = useRef<THREE.SpriteMaterial>(null);
+  const opacity = useRef(1);
+  const center = useMemo(() => new THREE.Vector3(), []);
+
+  // All-or-nothing occlusion: show the tag only when the whole quad has a
+  // clear line from the camera past everything except characters (which
+  // opt out of raycasting — see NO_RAYCAST in Person.tsx). The material
+  // ignores depth, so a visible tag draws through characters in front of it.
+  useFrame(({ camera, scene }, delta) => {
+    if (!sprite.current || !material.current) return;
+    sprite.current.getWorldPosition(center);
+    const target = isTagFullyVisible(
+      scene,
+      camera.getWorldPosition(new THREE.Vector3()),
+      camera.getWorldQuaternion(new THREE.Quaternion()),
+      center,
+      scale[0],
+      scale[1],
+      ignore
+    )
+      ? 1
+      : 0;
+    // Fast fade instead of a hard toggle so borderline angles don't flicker.
+    opacity.current = THREE.MathUtils.damp(opacity.current, target, 25, delta);
+    material.current.opacity = opacity.current;
+    sprite.current.visible = opacity.current > 0.02;
+  });
+
   return (
-    <>
-      {/* Pass A: normal depth-tested draw — occluded by walls, desks, monitors,
-          and any other real geometry, same as a physical object would be. */}
-      <sprite position={position} scale={scale} renderOrder={10}>
-        <spriteMaterial map={texture} transparent toneMapped={false} depthTest />
-      </sprite>
-      {/* Pass B: draws only where a character wrote stencil==1 (see Person.tsx),
-          ignoring depth — so the tag shows through a character standing in
-          front of it, but still not through walls/furniture (which don't
-          write the stencil bit). */}
-      <sprite position={position} scale={scale} renderOrder={11}>
-        <spriteMaterial
-          map={texture}
-          transparent
-          toneMapped={false}
-          depthTest={false}
-          stencilWrite={false}
-          stencilFunc={THREE.EqualStencilFunc}
-          stencilRef={1}
-        />
-      </sprite>
-    </>
+    <sprite ref={sprite} position={position} scale={scale} renderOrder={10} raycast={NO_RAYCAST}>
+      <spriteMaterial
+        ref={material}
+        map={texture}
+        transparent
+        toneMapped={false}
+        depthTest={false}
+        depthWrite={false}
+      />
+    </sprite>
   );
 }

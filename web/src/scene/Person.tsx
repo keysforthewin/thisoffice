@@ -1,7 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
+import { useFrame } from '@react-three/fiber';
 import { useAnimations } from '@react-three/drei';
 import { useStore } from '../store.ts';
+import { NameTag } from './NameTag.tsx';
+import { NO_RAYCAST, findHeadBone } from './nametagVisibility.ts';
 import { catalogEntry, resolveClip } from '../characters/catalog.ts';
 import { useCharacterModel, preloadCharacter } from '../characters/useCharacterModel.ts';
 
@@ -10,9 +13,21 @@ interface Props {
   working: boolean;
   position?: [number, number, number];
   rotationY?: number;
+  name?: string;
+  accent?: string;
 }
 
-export function Person({ variant, working, position = [0, 0, 0], rotationY = 0 }: Props) {
+// Bone-pivot → crown allowance: crown bones (HeadTop_End) are already at the
+// top of the skull; a plain head pivot sits at the neck, so add skull height.
+const CROWN_BONE = /top|end/i;
+const SKULL_ABOVE_CROWN = 0.04;
+const SKULL_ABOVE_HEAD_PIVOT = 0.3;
+/** "a few inches" of air, plus half the tag pill so its bottom edge clears. */
+const TAG_LIFT = 0.12 + 0.11;
+/** Tag height above the person origin when the rig has no head bone. */
+const FALLBACK_HEAD_TOP = 2.1;
+
+export function Person({ variant, working, position = [0, 0, 0], rotationY = 0, name, accent }: Props) {
   const catalog = useStore((s) => s.catalog);
   const entry = catalogEntry(catalog, variant);
   const { clone, clips } = useCharacterModel(variant, entry);
@@ -25,18 +40,9 @@ export function Person({ variant, working, position = [0, 0, 0], rotationY = 0 }
         child.castShadow = true;
         child.frustumCulled = false; // skinned mesh bounds don't follow the sit pose
 
-        // Write a stencil bit on every character material so NameTag's second
-        // pass can punch through characters (but nothing else). clone(true)
-        // shares materials across character clones, so this applies once per
-        // material and affects all characters — that's the intent.
-        const mat = (child as THREE.Mesh).material;
-        const mats = Array.isArray(mat) ? mat : [mat];
-        for (const m of mats) {
-          m.stencilWrite = true;
-          m.stencilRef = 1;
-          m.stencilFunc = THREE.AlwaysStencilFunc;
-          m.stencilZPass = THREE.ReplaceStencilOp;
-        }
+        // Characters never occlude nametags: opt out of raycasting so the
+        // tag visibility check (nametagVisibility.ts) sees through them.
+        child.raycast = NO_RAYCAST;
       }
     });
   }, [clone]);
@@ -61,9 +67,46 @@ export function Person({ variant, working, position = [0, 0, 0], rotationY = 0 }
     if (sit) sit.timeScale = working ? 2.2 : 0.6;
   }, [sit, working]);
 
+  const scale = entry?.scale ?? 1;
+  const headBone = useMemo(() => findHeadBone(clone), [clone]);
+  const tagGroup = useRef<THREE.Group>(null);
+  const collider = useRef<THREE.Mesh>(null);
+  const headLocal = useMemo(() => new THREE.Vector3(), []);
+  const ignoreOwn = useCallback((obj: THREE.Object3D) => obj === collider.current, []);
+
+  // Follow the animated head each frame: place the tag a few inches above the
+  // crown, and size the invisible body collider (which occludes OTHER people's
+  // tags — this person's own meshes are NO_RAYCAST, see below) to match.
+  useFrame(() => {
+    if (!group.current) return;
+    if (headBone) {
+      headBone.getWorldPosition(headLocal);
+      group.current.worldToLocal(headLocal);
+      const skull = CROWN_BONE.test(headBone.name) ? SKULL_ABOVE_CROWN : SKULL_ABOVE_HEAD_PIVOT;
+      headLocal.y += skull * scale;
+    } else {
+      headLocal.set(0, FALLBACK_HEAD_TOP * scale, 0);
+    }
+    tagGroup.current?.position.set(headLocal.x, headLocal.y + TAG_LIFT, headLocal.z);
+    if (collider.current) {
+      collider.current.position.set(headLocal.x, headLocal.y / 2, headLocal.z);
+      collider.current.scale.set(1.0 * scale, Math.max(headLocal.y, 0.1), 0.8 * scale);
+    }
+  });
+
   return (
     <group ref={group} position={position} rotation={[0, rotationY, 0]}>
-      <primitive object={clone} scale={entry?.scale ?? 1} />
+      <primitive object={clone} scale={scale} />
+      {/* Invisible body box: the raycaster still hits visible=false meshes, so
+          this stands in for the (NO_RAYCAST) character when occluding tags. */}
+      <mesh ref={collider} visible={false}>
+        <boxGeometry />
+      </mesh>
+      {name && (
+        <group ref={tagGroup}>
+          <NameTag name={name} accent={accent} ignore={ignoreOwn} />
+        </group>
+      )}
     </group>
   );
 }

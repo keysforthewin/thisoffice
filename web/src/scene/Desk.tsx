@@ -3,7 +3,6 @@ import * as THREE from 'three';
 import type { ThreeElements } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
 import { MonitorScreen } from './MonitorScreen.tsx';
-import { NameTag } from './NameTag.tsx';
 import { Person } from './Person.tsx';
 import { seatTransform } from './layout.ts';
 
@@ -61,14 +60,15 @@ export function Desk({ seat, variant, working, monitorTarget, name, fallbackTitl
       {/* key: remount on variant change — the mixer caches PropertyBindings by (root uuid,
           track name), so an in-place model swap leaves the new rig driven by bindings to the
           old clone's bones (T-pose). KayKit rigs share track names, so every swap collides. */}
-      <Person key={variant} variant={variant} working={working} position={[0, 0.02, -1.15]} rotationY={0} />
-      {name && (
-        <NameTag
-          name={name}
-          position={[0, 2.35, -1.15]}
-          accent={boss ? '#d2a8ff' : working ? '#7ee787' : '#8b949e'}
-        />
-      )}
+      <Person
+        key={variant}
+        variant={variant}
+        working={working}
+        position={[0, 0.02, -1.15]}
+        rotationY={0}
+        name={name}
+        accent={boss ? '#d2a8ff' : working ? '#7ee787' : '#8b949e'}
+      />
     </group>
   );
 }
