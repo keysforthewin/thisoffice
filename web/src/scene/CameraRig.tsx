@@ -166,6 +166,7 @@ function FreeFlyControls() {
     // exponential smoothing so starts/stops feel weighty rather than instant
     velocity.current.lerp(tmpWish, 1 - Math.exp(-delta * 12));
     camera.position.addScaledVector(velocity.current, delta);
+    clampToRoom(camera.position, useStore.getState().office);
   });
 
   return null;

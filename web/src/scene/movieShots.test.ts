@@ -189,11 +189,11 @@ describe('shots', () => {
 
 function roomBounds(office: OfficeState | null) {
   const maxSeat = Math.max(3, ...(office?.employees.map((e) => e.seat) ?? []));
-  const { width, depth, centerZ } = roomDims(maxSeat);
+  const { width, depth, centerZ, height } = roomDims(maxSeat);
   const backZ = centerZ - depth / 2;
   const frontZ = centerZ + depth / 2;
   return {
-    yMin: 0.4, yMax: 3.9,
+    yMin: 0.4, yMax: height - 0.3,
     xMin: -(width / 2 - 0.3), xMax: width / 2 - 0.3,
     zMin: backZ + 0.3, zMax: frontZ - 0.3,
   };
@@ -259,6 +259,19 @@ describe('segmentHitsBox', () => {
   });
   it('detects a miss when the segment ends short of the box', () => {
     expect(segmentHitsBox(new THREE.Vector3(-5, 0, 0), new THREE.Vector3(-2, 0, 0), box)).toBe(false);
+  });
+});
+
+describe('room height', () => {
+  it('roomDims exposes a 7.5-unit ceiling', () => {
+    expect(roomDims(3).height).toBe(7.5);
+  });
+
+  it('clampToRoom allows positions up to just under the ceiling', () => {
+    const pos = clampToRoom(new THREE.Vector3(0, 100, 0), makeOffice());
+    expect(pos.y).toBeCloseTo(7.5 - 0.3);
+    const low = clampToRoom(new THREE.Vector3(0, -5, 0), makeOffice());
+    expect(low.y).toBeCloseTo(0.4);
   });
 });
 

@@ -10,6 +10,7 @@ const COL_SPACING = 3.4;
 const ROW_SPACING = 3.6;
 const FIRST_ROW_Z = 0.6;
 export const BOSS_Z = -4.6;
+export const ROOM_HEIGHT = 7.5;
 
 export interface SeatTransform {
   position: THREE.Vector3;
@@ -49,5 +50,5 @@ export function roomDims(maxSeat: number) {
   const depth = frontZ - BACK_Z;
   const width = COLS * COL_SPACING + 5;
   const centerZ = (frontZ + BACK_Z) / 2;
-  return { width, depth, centerZ };
+  return { width, depth, centerZ, height: ROOM_HEIGHT };
 }

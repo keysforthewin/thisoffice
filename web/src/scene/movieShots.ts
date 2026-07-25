@@ -49,10 +49,10 @@ function maxSeat(office: OfficeState | null): number {
 
 /** Keep a camera position above the floor, under the wall tops, and inside the walls. */
 export function clampToRoom(pos: THREE.Vector3, office: OfficeState | null): THREE.Vector3 {
-  const { width, depth, centerZ } = roomDims(maxSeat(office));
+  const { width, depth, centerZ, height } = roomDims(maxSeat(office));
   const backZ = centerZ - depth / 2;
   const frontZ = centerZ + depth / 2;
-  pos.y = THREE.MathUtils.clamp(pos.y, 0.4, 3.9);
+  pos.y = THREE.MathUtils.clamp(pos.y, 0.4, height - 0.3);
   pos.x = THREE.MathUtils.clamp(pos.x, -(width / 2 - 0.3), width / 2 - 0.3);
   pos.z = THREE.MathUtils.clamp(pos.z, backZ + 0.3, frontZ - 0.3);
   return pos;
