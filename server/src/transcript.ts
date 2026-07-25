@@ -38,6 +38,8 @@ export class Transcripts {
   private unmatchedAgentFiles = new Map<string, string[]>();
   /** file -> parsed lines held until the file is matched to an activity */
   private bufferedLines = new Map<string, any[]>();
+  /** agent transcript files whose activity already finished; further lines are dropped */
+  private finishedAgentFiles = new Set<string>();
   private bossIdleTimer: NodeJS.Timeout | null = null;
   /** task-list tracking (TaskCreate/TaskUpdate tools), per project */
   private tasks = new Map<string, Map<string, TrackedTask>>();
@@ -88,7 +90,7 @@ export class Transcripts {
       if (agentActivity || isSubagentFile(file)) {
         if (agentActivity) {
           this.handleSubagentLine(agentActivity, line);
-        } else {
+        } else if (!this.finishedAgentFiles.has(file)) {
           const buf = this.bufferedLines.get(file) ?? [];
           if (buf.length < MAX_BUFFERED_LINES) buf.push(line);
           this.bufferedLines.set(file, buf);
@@ -199,10 +201,11 @@ export class Transcripts {
     const activity: Activity = { key: `${sessionId}:${toolUseId}`, employeeId: employee.id, tool: name, isTask };
     this.activities.set(toolUseId, activity);
 
+    let attachFile: string | undefined;
     if (isTask) {
       const file = this.unmatchedAgentFiles.get(sessionId)?.shift();
       if (file) {
-        this.attachAgentFile(activity, file);
+        attachFile = file;
       } else {
         const pending = this.pendingTasks.get(sessionId) ?? [];
         pending.push(activity);
@@ -218,6 +221,12 @@ export class Transcripts {
 
     this.office.monitor(employee.id, { clear: true, title: `${label} · ${project}` });
     this.streamer.enqueue(employee.id, inputPreview(name, input));
+
+    // Attach (and replay any buffered lines) only after the clear/title/input
+    // preview are queued, so a pooled file's backlog renders after them, not before.
+    if (attachFile) {
+      this.attachAgentFile(activity, attachFile);
+    }
   }
 
   private finishTool(result: any) {
@@ -253,6 +262,7 @@ export class Transcripts {
     if (activity.agentFile) {
       this.agentFiles.delete(activity.agentFile);
       this.bufferedLines.delete(activity.agentFile);
+      this.finishedAgentFiles.add(activity.agentFile);
     }
     for (const [sid, list] of this.pendingTasks) {
       this.pendingTasks.set(sid, list.filter((a) => a !== activity));

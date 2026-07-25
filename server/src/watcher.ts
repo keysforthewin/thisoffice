@@ -65,11 +65,15 @@ export function startWatcher(office: Office) {
 
   watcher.on('add', (file, stats) => {
     if (!file.endsWith('.jsonl')) return;
-    // Files that existed before we started: skip their history.
+    // Files that existed before we started: skip their history, and don't
+    // announce them — pre-existing subagent files must not poison the
+    // unmatchedAgentFiles pool for a session that's already past that Task.
     const isNew = stats ? stats.mtimeMs > startTime - 5000 : false;
     offsets.set(file, isNew ? 0 : (stats?.size ?? 0));
-    transcripts.fileAppeared(file);
-    if (isNew) readNew(file);
+    if (isNew) {
+      transcripts.fileAppeared(file);
+      readNew(file);
+    }
   });
 
   watcher.on('change', (file) => {

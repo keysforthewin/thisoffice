@@ -217,4 +217,66 @@ describe('subagent attachment race', () => {
     transcripts.handleLines(AGENT, lines);
     expect((transcripts as any).bufferedLines.get(AGENT)).toHaveLength(500);
   });
+
+  it('replayed buffered lines land after the clear/title/input preview (file-before-tool_use order)', () => {
+    const { transcripts, enqueued } = makeHarness();
+    transcripts.fileAppeared(AGENT);
+    transcripts.handleLines(AGENT, [agentText]); // buffered, no activity yet
+    transcripts.handleLines(MAIN, [taskLine]);
+    const texts = enqueued.map((e) => e.text);
+    const previewIdx = texts.findIndex((t) => t === 'explore');
+    const replayIdx = texts.indexOf('hello from agent');
+    expect(previewIdx).toBeGreaterThanOrEqual(0);
+    expect(replayIdx).toBeGreaterThan(previewIdx);
+  });
+
+  it('a file never announced via fileAppeared is not attached at Task start; the input preview still streams, and a later fileAppeared attaches it', () => {
+    const { transcripts, enqueued, monitors } = makeHarness();
+    // Task tool_use arrives, but the pre-existing subagent file was never
+    // announced (simulating the watcher's isNew gate skipping it).
+    transcripts.handleLines(MAIN, [taskLine]);
+    expect((transcripts as any).pendingTasks.get('sess-1')).toHaveLength(1);
+    expect((transcripts as any).agentFiles.has(AGENT)).toBe(false);
+    // Screen still gets its clear/title + input preview even with no file attached yet.
+    expect(monitors[0]).toMatchObject({ clear: true, title: 'Agent: explore · myapp' });
+    expect(enqueued.map((e) => e.text)).toContain('explore');
+
+    // The normal live flow still works: a later fileAppeared attaches it.
+    transcripts.fileAppeared(AGENT);
+    expect((transcripts as any).agentFiles.has(AGENT)).toBe(true);
+    transcripts.handleLines(AGENT, [agentText]);
+    expect(enqueued.map((e) => e.text)).toContain('hello from agent');
+  });
+});
+
+describe('finished agent files', () => {
+  it('drops (does not stream or buffer) lines that arrive on an agent file after its Task finished', () => {
+    const { transcripts, enqueued } = makeHarness();
+    transcripts.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'tool_use', id: 'tu-task', name: 'Task', input: { description: 'explore' } }] },
+      }),
+    ]);
+    transcripts.fileAppeared(AGENT);
+    transcripts.handleLines(MAIN, [
+      line({
+        type: 'user',
+        sessionId: 'sess-1',
+        message: { content: [{ type: 'tool_result', tool_use_id: 'tu-task', content: 'done exploring' }] },
+      }),
+    ]);
+    const countBefore = enqueued.length;
+
+    // A trailing flush lands on the now-finished agent file.
+    transcripts.handleLines(AGENT, [
+      line({ type: 'assistant', message: { content: [{ type: 'text', text: 'late straggler line' }] } }),
+    ]);
+
+    expect(enqueued).toHaveLength(countBefore); // not streamed
+    expect((transcripts as any).bufferedLines.get(AGENT)).toBeUndefined(); // not buffered
+    expect(enqueued.map((e) => e.text)).not.toContain('late straggler line');
+  });
 });
