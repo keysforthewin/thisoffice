@@ -12,6 +12,8 @@ const INBOX_MAX = 8;
 
 const DEFAULT_STAFFING: StaffingSettings = { minEmployees: 3, maxEmployees: 12 };
 
+const IDLE_FIRE_MS = 60_000;
+
 interface PersistedState {
   boss: { name: string; variant: string };
   employees: Array<Pick<Employee, 'id' | 'name' | 'seat' | 'variant' | 'hiredAt'>>;
@@ -75,11 +77,43 @@ export class Office {
   /** activities waiting for a free employee (at max headcount) */
   private workQueue: Array<{ key: string; label: string }> = [];
   private assignCb: ((key: string, employee: Employee) => void) | null = null;
+  private idleTimers = new Map<string, NodeJS.Timeout>();
 
-  constructor(variantPoolProvider?: () => string[]) {
+  constructor(
+    variantPoolProvider?: () => string[],
+    private idleFireMs = IDLE_FIRE_MS,
+  ) {
     this.variantPool = variantPoolProvider?.() ?? loadVariantPool();
     if (!this.variantPool.length) this.variantPool = loadVariantPool();
     this.state = this.load();
+    for (const e of this.state.employees) this.scheduleIdleTimer(e.id);
+  }
+
+  private scheduleIdleTimer(id: string) {
+    this.clearIdleTimer(id);
+    const t = setTimeout(() => this.fireIfIdle(id), this.idleFireMs);
+    t.unref?.();
+    this.idleTimers.set(id, t);
+  }
+
+  private clearIdleTimer(id: string) {
+    const t = this.idleTimers.get(id);
+    if (t) clearTimeout(t);
+    this.idleTimers.delete(id);
+  }
+
+  /** Idle for the full window: let them go, unless they're part of the core staff. */
+  private fireIfIdle(id: string) {
+    this.idleTimers.delete(id);
+    const emp = this.state.employees.find((e) => e.id === id);
+    if (!emp || emp.status !== 'idle') return;
+    if (this.state.employees.length <= this.state.staffing.minEmployees) return;
+    const protectedIds = [...this.state.employees]
+      .sort((a, b) => a.seat - b.seat)
+      .slice(0, this.state.staffing.minEmployees)
+      .map((e) => e.id);
+    if (protectedIds.includes(id)) return;
+    this.remove(id);
   }
 
   /** Refresh the pool of variants used for auto-assigning new hires. */
@@ -112,6 +146,7 @@ export class Office {
     if (!emp) return;
     const job = this.workQueue.shift();
     if (job) {
+      this.clearIdleTimer(emp.id);
       this.syncPressure();
       emp.status = 'working';
       emp.task = job.label;
@@ -122,6 +157,7 @@ export class Office {
     }
     emp.status = 'idle';
     emp.task = null;
+    this.scheduleIdleTimer(emp.id);
     this.broadcastState();
   }
 
@@ -248,6 +284,7 @@ export class Office {
       employee = this.hire();
       hired = true;
     }
+    this.clearIdleTimer(employee.id);
     employee.status = 'working';
     employee.task = task;
     this.assignments.set(activityKey, employee.id);
@@ -308,6 +345,7 @@ export class Office {
       task: null,
     };
     this.state.employees.push(employee);
+    this.scheduleIdleTimer(employee.id);
     this.save();
     return employee;
   }
@@ -335,6 +373,7 @@ export class Office {
     this.state.employees = this.state.employees.filter((e) => e.id !== id);
     for (const [key, empId] of this.assignments) if (empId === id) this.assignments.delete(key);
     if (this.state.employees.length === before) return false;
+    this.clearIdleTimer(id);
     this.streamer?.clear(id);
     this.pendingIdle.delete(id);
     this.save();

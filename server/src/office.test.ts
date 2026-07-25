@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Office } from './office.ts';
 
 function makeOffice() {
@@ -169,5 +169,54 @@ describe('work queue', () => {
     draining.delete(first.id);
     office.notifyDrained(first.id);
     expect(assigned).toEqual(['s:q1']);
+  });
+});
+
+describe('idle eviction', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function makeEvictionOffice() {
+    const office = new Office(() => ['Knight', 'Mage', 'Rogue'], 60_000);
+    (office as any).save = () => {};
+    office.attachStreamer({ isDraining: () => false, clear: () => {}, setPressure: () => {} });
+    return office;
+  }
+
+  it('evicts an auto-hired employee after 60s idle, never below min or the protected seats', () => {
+    const office = makeEvictionOffice();
+    const baseline = office.getState().employees.length;
+    // occupy everyone so a new hire happens, then free it
+    const keys = office.getState().employees.map((e, i) => `s:t${i}`);
+    keys.forEach((k) => office.assign(k, 'Bash'));
+    const extra = office.assign('s:new', 'Read').employee!; // hired
+    office.finish('s:new'); // idle → timer starts
+    keys.forEach((k) => office.finish(k));
+    vi.advanceTimersByTime(60_001);
+    const after = office.getState().employees;
+    expect(after.find((e) => e.id === extra.id)).toBeUndefined(); // extra evicted
+    expect(after.length).toBeGreaterThanOrEqual(office.getState().staffing.minEmployees);
+    // protected lowest seats survive even though idle for over a minute
+    const protectedIds = [...after].sort((a, b) => a.seat - b.seat).slice(0, 3).map((e) => e.id);
+    vi.advanceTimersByTime(120_000);
+    for (const id of protectedIds) {
+      expect(office.getState().employees.find((e) => e.id === id)).toBeDefined();
+    }
+  });
+
+  it('a working employee is never evicted; timer clears on assignment', () => {
+    const office = makeEvictionOffice();
+    const a = office.assign('s:t1', 'Bash').employee!;
+    vi.advanceTimersByTime(120_000);
+    expect(office.getState().employees.find((e) => e.id === a.id)).toBeDefined();
+    expect(office.getState().employees.find((e) => e.id === a.id)!.status).toBe('working');
+  });
+
+  it('timers from construction evict leftover extras with no activity at all', () => {
+    const office = makeEvictionOffice();
+    const before = office.getState().employees.length;
+    office.hireManual(); // 1 extra, idle from birth
+    vi.advanceTimersByTime(60_001);
+    expect(office.getState().employees.length).toBe(Math.max(before, office.getState().staffing.minEmployees));
   });
 });
