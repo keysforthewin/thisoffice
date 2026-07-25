@@ -4,6 +4,7 @@ import { useStore } from '../store.ts';
 import { Desk, FurnitureModel } from './Desk.tsx';
 import { Whiteboard } from './Whiteboard.tsx';
 import { roomDims, whiteboardTransform, BACK_Z } from './layout.ts';
+import { wallStrips } from './wallOpenings.ts';
 
 function WallArt({ url, position }: { url: string; position: [number, number, number] }) {
   const texture = useTexture(url);
@@ -21,6 +22,68 @@ function WallArt({ url, position }: { url: string; position: [number, number, nu
   );
 }
 
+/** A wall plane built from solid strips around a window opening, plus glass + mullions. */
+function WallWithWindow({ w, h, ox, oy, ow, oh }: { w: number; h: number; ox: number; oy: number; ow: number; oh: number }) {
+  return (
+    <group>
+      {wallStrips(w, h, ox, oy, ow, oh).map((r, i) => (
+        <mesh key={i} receiveShadow position={[r.x, r.y, 0]}>
+          <planeGeometry args={[r.w, r.h]} />
+          <meshStandardMaterial color="#5c5a68" roughness={1} />
+        </mesh>
+      ))}
+      {/* glass: barely-there tint so the skybox reads through */}
+      <mesh position={[ox, oy, 0.01]}>
+        <planeGeometry args={[ow, oh]} />
+        <meshBasicMaterial color="#aac4d8" transparent opacity={0.1} depthWrite={false} />
+      </mesh>
+      {/* mullions */}
+      <mesh position={[ox, oy, 0.02]}>
+        <boxGeometry args={[0.08, oh, 0.03]} />
+        <meshStandardMaterial color="#4a4450" />
+      </mesh>
+      <mesh position={[ox, oy, 0.02]}>
+        <boxGeometry args={[ow, 0.08, 0.03]} />
+        <meshStandardMaterial color="#4a4450" />
+      </mesh>
+      {/* frame */}
+      <mesh position={[ox, oy, 0.005]}>
+        <boxGeometry args={[ow + 0.12, oh + 0.12, 0.02]} />
+        <meshStandardMaterial color="#4a4450" />
+      </mesh>
+    </group>
+  );
+}
+
+/** Hanging ceiling fixture: rod + housing + emissive panel + point light. */
+function CeilingLight({ position, castShadow = false }: { position: [number, number, number]; castShadow?: boolean }) {
+  return (
+    <group position={position}>
+      <mesh position={[0, -0.5, 0]}>
+        <cylinderGeometry args={[0.02, 0.02, 1.0]} />
+        <meshStandardMaterial color="#26242c" />
+      </mesh>
+      <mesh position={[0, -1.05, 0]} castShadow={false}>
+        <boxGeometry args={[1.7, 0.1, 0.45]} />
+        <meshStandardMaterial color="#2b2b30" metalness={0.4} roughness={0.5} />
+      </mesh>
+      <mesh position={[0, -1.11, 0]} rotation={[Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[1.6, 0.38]} />
+        <meshBasicMaterial color="#fff7e6" />
+      </mesh>
+      <pointLight
+        color="#f4f1e8"
+        intensity={22}
+        distance={20}
+        decay={2}
+        position={[0, -1.3, 0]}
+        castShadow={castShadow}
+        {...(castShadow ? { 'shadow-mapSize': [1024, 1024] as [number, number], 'shadow-bias': -0.002 } : {})}
+      />
+    </group>
+  );
+}
+
 export function Office() {
   const office = useStore((s) => s.office);
 
@@ -28,9 +91,8 @@ export function Office() {
     () => Math.max(3, ...(office?.employees.map((e) => e.seat) ?? [])),
     [office]
   );
-  const { width, depth, centerZ } = roomDims(maxSeat);
+  const { width, depth, centerZ, height } = roomDims(maxSeat);
   const backZ = BACK_Z;
-  const wallH = 4.2;
 
   return (
     <group>
@@ -39,53 +101,33 @@ export function Office() {
         <planeGeometry args={[width, depth]} />
         <meshStandardMaterial color="#8a6f52" roughness={0.85} />
       </mesh>
-      {/* back wall (behind the boss) */}
-      <mesh receiveShadow position={[0, wallH / 2, backZ]}>
-        <planeGeometry args={[width, wallH]} />
-        <meshStandardMaterial color="#5c5a68" roughness={1} />
-      </mesh>
-      {/* side walls */}
-      <mesh receiveShadow position={[-width / 2, wallH / 2, centerZ]} rotation={[0, Math.PI / 2, 0]}>
-        <planeGeometry args={[depth, wallH]} />
-        <meshStandardMaterial color="#665f6e" roughness={1} />
-      </mesh>
-      <mesh receiveShadow position={[width / 2, wallH / 2, centerZ]} rotation={[0, -Math.PI / 2, 0]}>
-        <planeGeometry args={[depth, wallH]} />
-        <meshStandardMaterial color="#665f6e" roughness={1} />
-      </mesh>
-      {/* window on the back wall: dusk sky + warm spill light */}
-      <group position={[-width / 4, 2.1, backZ + 0.03]}>
-        <mesh>
-          <planeGeometry args={[3.6, 1.9]} />
-          <meshBasicMaterial color="#ffc98a" />
-        </mesh>
-        <mesh position={[0, 0, 0.01]}>
-          <planeGeometry args={[3.3, 1.6]} />
-          <meshBasicMaterial color="#ffe7c2" />
-        </mesh>
-        {/* mullions */}
-        <mesh position={[0, 0, 0.02]}>
-          <boxGeometry args={[0.08, 1.9, 0.03]} />
-          <meshStandardMaterial color="#4a4450" />
-        </mesh>
-        <mesh position={[0, 0, 0.02]}>
-          <boxGeometry args={[3.6, 0.08, 0.03]} />
-          <meshStandardMaterial color="#4a4450" />
-        </mesh>
-        <pointLight color="#ffd9a0" intensity={14} distance={12} decay={2} position={[0, 0, 1]} />
+      {/* back wall (behind the boss), with a transparent window onto the skybox */}
+      <group position={[0, height / 2, backZ]}>
+        <WallWithWindow w={width} h={height} ox={-width / 4} oy={2.1 - height / 2} ow={3.6} oh={1.9} />
       </group>
+      {/* warm spill through the back window (kept from the old fake window) */}
+      <pointLight color="#ffd9a0" intensity={14} distance={12} decay={2} position={[-width / 4, 2.1, backZ + 1]} />
 
-      {/* overhead office lighting: one fixtureless source at ceiling center */}
-      <pointLight
-        castShadow
-        color="#f4f1e8"
-        intensity={40}
-        distance={22}
-        decay={2}
-        position={[0, wallH - 0.3, centerZ]}
-        shadow-mapSize={[1024, 1024]}
-        shadow-bias={-0.002}
-      />
+      {/* left wall, with a transparent window onto the skybox (windows face outward like before) */}
+      <group position={[-width / 2, height / 2, centerZ]} rotation={[0, Math.PI / 2, 0]}>
+        <WallWithWindow w={depth} h={height} ox={1.0} oy={2.1 - height / 2} ow={3.6} oh={1.9} />
+      </group>
+      {/* right wall (whiteboard wall) */}
+      <mesh receiveShadow position={[width / 2, height / 2, centerZ]} rotation={[0, -Math.PI / 2, 0]}>
+        <planeGeometry args={[depth, height]} />
+        <meshStandardMaterial color="#665f6e" roughness={1} />
+      </mesh>
+
+      {/* ceiling, high above the room */}
+      <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, height, centerZ]} receiveShadow>
+        <planeGeometry args={[width, depth]} />
+        <meshStandardMaterial color="#3d3a44" roughness={1} />
+      </mesh>
+      {/* hanging fixtures: one shadow-caster, three fill */}
+      <CeilingLight position={[-width / 4, height, centerZ - depth / 4]} castShadow />
+      <CeilingLight position={[width / 4, height, centerZ - depth / 4]} />
+      <CeilingLight position={[-width / 4, height, centerZ + depth / 4]} />
+      <CeilingLight position={[width / 4, height, centerZ + depth / 4]} />
 
       {/* decor — same KayKit furniture set */}
       <FurnitureModel url="/models/furniture/rug_rectangle_A.gltf" position={[0, 0.005, centerZ + 0.5]} scale={[2.2, 1, 2.2]} />
