@@ -37,11 +37,11 @@ describe('clampScale', () => {
   });
 });
 
-describe('CharacterStore.setScale', () => {
+describe('CharacterStore.adjust scale', () => {
   it('returns false for ids that are not imported characters', () => {
     const store = new CharacterStore();
-    expect(store.setScale('Knight', 2)).toBe(false); // builtin, not in imported list
-    expect(store.setScale('no_such_character_xyz', 2)).toBe(false);
+    expect(store.adjust('Knight', { scale: 2 })).toBe(false); // builtin, not in imported list
+    expect(store.adjust('no_such_character_xyz', { scale: 2 })).toBe(false);
   });
 });
 
@@ -78,7 +78,7 @@ describe('CharacterStore.adjust', () => {
     expect(entry.chairHeight).toBe(-0.2);
   });
 
-  it('returns false for unknown ids and leaves other fields alone', () => {
+  it('returns false for unknown ids', () => {
     const store = new CharacterStore(tempDir);
     expect(store.adjust('nope', { seatOffset: 0.1 })).toBe(false);
   });

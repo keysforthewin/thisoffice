@@ -166,10 +166,6 @@ export class CharacterStore {
     return true;
   }
 
-  setScale(id: string, scale: number): boolean {
-    return this.adjust(id, { scale });
-  }
-
   remove(id: string): boolean {
     const before = this.imported.length;
     this.imported = this.imported.filter((m) => m.id !== id);
