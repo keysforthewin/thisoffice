@@ -17,6 +17,12 @@ interface PersistedState {
 
 type Listener = (msg: ServerMsg) => void;
 
+/** Narrow view of ScreenStreamer so Office never imports it (avoids a cycle). */
+export interface ScreenStream {
+  isDraining(id: string): boolean;
+  clear(id: string): void;
+}
+
 const DEFAULT_EMPLOYEE_NAMES = ['Pat Chindexer', 'Sam Greppleton', 'Dee Bugger'];
 
 /** Names for manually hired employees, same pun energy as the defaults */
@@ -59,6 +65,9 @@ export class Office {
   private assignments = new Map<string, string>();
   private inboxSeq = 0;
   private variantPool: string[];
+  private streamer: ScreenStream | null = null;
+  /** employees whose activity finished but whose screen is still streaming */
+  private pendingIdle = new Set<string>();
 
   constructor(variantPoolProvider?: () => string[]) {
     this.variantPool = variantPoolProvider?.() ?? loadVariantPool();
@@ -69,6 +78,25 @@ export class Office {
   /** Refresh the pool of variants used for auto-assigning new hires. */
   setVariantPool(ids: string[]) {
     if (ids.length) this.variantPool = ids;
+  }
+
+  attachStreamer(s: ScreenStream) {
+    this.streamer = s;
+  }
+
+  /** Called when an employee's screen queue empties; completes a deferred finish. */
+  notifyDrained(employeeId: string) {
+    if (!this.pendingIdle.delete(employeeId)) return;
+    if ([...this.assignments.values()].includes(employeeId)) return;
+    this.setIdle(employeeId);
+  }
+
+  private setIdle(employeeId: string) {
+    const emp = this.state.employees.find((e) => e.id === employeeId);
+    if (!emp) return;
+    emp.status = 'idle';
+    emp.task = null;
+    this.broadcastState();
   }
 
   /** Broadcast a refreshed character catalog to all connected clients. */
@@ -178,7 +206,7 @@ export class Office {
       return { employee: emp, hired: false };
     }
     let employee = this.state.employees
-      .filter((e) => e.status === 'idle')
+      .filter((e) => e.status === 'idle' && !this.streamer?.isDraining(e.id))
       .sort((a, b) => a.seat - b.seat)[0];
     let hired = false;
     if (!employee) {
@@ -192,17 +220,20 @@ export class Office {
     return { employee, hired };
   }
 
-  /** Mark the activity done; employee goes idle (screen keeps last output client-side). */
+  /**
+   * Mark the activity done. The employee goes idle once their screen has
+   * finished streaming (immediately if it already has).
+   */
   finish(activityKey: string) {
     const empId = this.assignments.get(activityKey);
     if (!empId) return;
     this.assignments.delete(activityKey);
-    const emp = this.state.employees.find((e) => e.id === empId);
-    if (emp && ![...this.assignments.values()].includes(empId)) {
-      emp.status = 'idle';
-      emp.task = null;
+    if ([...this.assignments.values()].includes(empId)) return;
+    if (this.streamer?.isDraining(empId)) {
+      this.pendingIdle.add(empId);
+      return;
     }
-    this.broadcastState();
+    this.setIdle(empId);
   }
 
   employeeFor(activityKey: string): Employee | undefined {
@@ -269,6 +300,8 @@ export class Office {
     this.state.employees = this.state.employees.filter((e) => e.id !== id);
     for (const [key, empId] of this.assignments) if (empId === id) this.assignments.delete(key);
     if (this.state.employees.length === before) return false;
+    this.streamer?.clear(id);
+    this.pendingIdle.delete(id);
     this.save();
     this.broadcastState();
     return true;
