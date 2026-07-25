@@ -68,6 +68,7 @@ export function Person({ variant, working, position = [0, 0, 0], rotationY = 0, 
   }, [sit, working]);
 
   const scale = entry?.scale ?? 1;
+  const seatOffset = entry?.seatOffset ?? 0;
   const headBone = useMemo(() => findHeadBone(clone), [clone]);
   const tagGroup = useRef<THREE.Group>(null);
   const collider = useRef<THREE.Mesh>(null);
@@ -85,7 +86,7 @@ export function Person({ variant, working, position = [0, 0, 0], rotationY = 0, 
       const skull = CROWN_BONE.test(headBone.name) ? SKULL_ABOVE_CROWN : SKULL_ABOVE_HEAD_PIVOT;
       headLocal.y += skull * scale;
     } else {
-      headLocal.set(0, FALLBACK_HEAD_TOP * scale, 0);
+      headLocal.set(0, FALLBACK_HEAD_TOP * scale + seatOffset, 0);
     }
     tagGroup.current?.position.set(headLocal.x, headLocal.y + TAG_LIFT, headLocal.z);
     if (collider.current) {
@@ -96,7 +97,7 @@ export function Person({ variant, working, position = [0, 0, 0], rotationY = 0, 
 
   return (
     <group ref={group} position={position} rotation={[0, rotationY, 0]}>
-      <primitive object={clone} scale={scale} />
+      <primitive object={clone} scale={scale} position={[0, seatOffset, 0]} />
       {/* Invisible body box: the raycaster still hits visible=false meshes, so
           this stands in for the (NO_RAYCAST) character when occluding tags. */}
       <mesh ref={collider} visible={false}>

@@ -101,7 +101,7 @@ function PreviewModel({ entry }: { entry: CharacterEntry }) {
 /** Log-scale size control for imported characters: 0.1× – 10×, persisted per character. */
 function ScaleSlider({ id }: { id: string }) {
   const scale = useStore((s) => catalogEntry(s.catalog, id)?.scale ?? 1);
-  const setCharacterScale = useStore((s) => s.setCharacterScale);
+  const patchCharacter = useStore((s) => s.patchCharacter);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pending = useRef<number | null>(null);
 
@@ -117,7 +117,7 @@ function ScaleSlider({ id }: { id: string }) {
   }, [id]);
 
   const apply = (value: number) => {
-    setCharacterScale(id, value);
+    patchCharacter(id, { scale: value });
     pending.current = value;
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => persist(value), 300);

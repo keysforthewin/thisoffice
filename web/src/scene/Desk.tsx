@@ -6,6 +6,7 @@ import { MonitorScreen } from './MonitorScreen.tsx';
 import { Person } from './Person.tsx';
 import { seatTransform } from './layout.ts';
 import { useStore } from '../store.ts';
+import { catalogEntry } from '../characters/catalog.ts';
 
 interface Props {
   seat: number;
@@ -43,6 +44,7 @@ export function FurnitureModel({ url, ...props }: { url: string } & ThreeElement
 export function Desk({ seat, variant, working, monitorTarget, name, fallbackTitle, boss }: Props) {
   const { position, rotationY } = seatTransform(seat);
   const deskScale = boss ? 1.15 : 1;
+  const chairHeight = useStore((s) => catalogEntry(s.catalog, variant)?.chairHeight ?? 0);
   // the focus camera parks where this character's head is — hide them while viewing
   const focusedHere = useStore(
     (s) => s.cameraMode.kind === 'focus' && s.cameraMode.target === monitorTarget,
@@ -56,7 +58,7 @@ export function Desk({ seat, variant, working, monitorTarget, name, fallbackTitl
       />
       <FurnitureModel
         url={boss ? '/models/furniture/armchair_pillows.gltf' : '/models/furniture/chair_A.gltf'}
-        position={[0, 0, -1.45]}
+        position={[0, chairHeight, -1.45]}
         rotation={[0, 0, 0]}
       />
       <group position={[0, 1.66, 0.35]}>
@@ -71,7 +73,7 @@ export function Desk({ seat, variant, working, monitorTarget, name, fallbackTitl
           key={variant}
           variant={variant}
           working={working}
-          position={[0, 0.02, -1.15]}
+          position={[0, 0.02 + chairHeight, -1.15]}
           rotationY={0}
           name={name}
           accent={boss ? '#d2a8ff' : working ? '#7ee787' : '#8b949e'}

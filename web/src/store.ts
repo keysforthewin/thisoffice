@@ -72,8 +72,8 @@ interface AppStore {
   setMonitorHover: (target: string | null) => void;
   setSettingsOpen: (v: boolean) => void;
   setCatalog: (c: CharacterCatalog) => void;
-  /** optimistic local patch while the scale slider drags; server broadcast confirms it */
-  setCharacterScale: (id: string, scale: number) => void;
+  /** optimistic local patch while an adjustment slider drags; server broadcast confirms it */
+  patchCharacter: (id: string, patch: { scale?: number; seatOffset?: number; chairHeight?: number }) => void;
 }
 
 let whiteboardKey: string | null = null;
@@ -162,13 +162,13 @@ export const useStore = create<AppStore>((set, get) => ({
     get().monitorHover === monitorHover ? undefined : set({ monitorHover }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
   setCatalog: (catalog) => set({ catalog }),
-  setCharacterScale: (id, scale) =>
+  patchCharacter: (id, patch) =>
     set((s) =>
       s.catalog
         ? {
             catalog: {
               ...s.catalog,
-              characters: s.catalog.characters.map((c) => (c.id === id ? { ...c, scale } : c)),
+              characters: s.catalog.characters.map((c) => (c.id === id ? { ...c, ...patch } : c)),
             },
           }
         : {},

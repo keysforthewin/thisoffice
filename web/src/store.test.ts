@@ -120,6 +120,26 @@ describe('shouldExitFocusOnMissedClick', () => {
   });
 });
 
+describe('patchCharacter', () => {
+  it('patchCharacter optimistically patches any adjustment field', () => {
+    // seed a catalog the same way the existing setCharacterScale test does
+    useStore.getState().applyServerMsg({
+      type: 'catalog',
+      catalog: {
+        version: 1,
+        generatedAt: '',
+        clipAliases: {},
+        characters: [{ id: 'imp', displayName: 'Imp', pack: 'Mixamo', tags: [], rig: 'embedded' }],
+      },
+    } as never);
+    useStore.getState().patchCharacter('imp', { scale: 2, seatOffset: 0.1, chairHeight: -0.2 });
+    const c = useStore.getState().catalog!.characters.find((x) => x.id === 'imp')!;
+    expect(c.scale).toBe(2);
+    expect(c.seatOffset).toBe(0.1);
+    expect(c.chairHeight).toBe(-0.2);
+  });
+});
+
 describe('lastActivity stamping', () => {
   beforeEach(() => {
     vi.useFakeTimers();
