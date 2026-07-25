@@ -288,16 +288,17 @@ describe('LOS relaxation', () => {
   it("the subject's own occupant never blocks their screen", () => {
     const office = makeOffice();
     const subject = subjectFor('e1', office)!;
-    // straight down the readable normal at seated-head height: passes right
-    // over/through the seat-1 occupant, must still count as visible
-    const camPos = subject.center.clone().addScaledVector(subject.normal, 2.2);
-    camPos.y = 2.6;
+    // straight back along readable normal at eye height: segment crosses through
+    // the occupied seat's head (0.17 distance to center, 0.35 old radius) and torso
+    // (0.38 distance, 0.45 old radius) but own occupant is skipped, so LOS is clear
+    const camPos = subject.center.clone().addScaledVector(subject.normal, 3).setY(1.6);
     expect(hasLineOfSight(camPos, subject, office)).toBe(true);
   });
 
   it("a steep high angle from above the subject's own head has LOS", () => {
     const office = makeOffice();
     const subject = subjectFor('e1', office)!;
+    // elevated angle that passes over the occupant, also skipped via own-seat logic
     const camPos = subject.center.clone()
       .addScaledVector(subject.normal, 1.6)
       .add(new THREE.Vector3(0, 3.5, 0));
