@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { useAnimations } from '@react-three/drei';
 import { useStore } from '../store.ts';
@@ -28,7 +28,12 @@ export function Person({ variant, working, position = [0, 0, 0], rotationY = 0 }
     });
   }, [clone]);
 
-  const sit = useMemo(() => resolveClip(actions, 'Sit_Chair_Idle', catalog?.clipAliases), [actions, catalog]);
+  // Resolve in an effect, not render: drei's `actions` getters return null until
+  // the group ref mounts, and a render-time memo would cache that null forever.
+  const [sit, setSit] = useState<THREE.AnimationAction | null>(null);
+  useEffect(() => {
+    setSit(resolveClip(actions, 'Sit_Chair_Idle', catalog?.clipAliases));
+  }, [actions, catalog]);
 
   useEffect(() => {
     if (!sit) return;
