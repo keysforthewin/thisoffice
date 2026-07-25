@@ -75,6 +75,18 @@ export function Office() {
         <pointLight color="#ffd9a0" intensity={14} distance={12} decay={2} position={[0, 0, 1]} />
       </group>
 
+      {/* overhead office lighting: one fixtureless source at ceiling center */}
+      <pointLight
+        castShadow
+        color="#f4f1e8"
+        intensity={40}
+        distance={22}
+        decay={2}
+        position={[0, wallH - 0.3, centerZ]}
+        shadow-mapSize={[1024, 1024]}
+        shadow-bias={-0.002}
+      />
+
       {/* decor — same KayKit furniture set */}
       <FurnitureModel url="/models/furniture/rug_rectangle_A.gltf" position={[0, 0.005, centerZ + 0.5]} scale={[2.2, 1, 2.2]} />
       <FurnitureModel url="/models/furniture/lamp_standing.gltf" position={[width / 2 - 1, 0, backZ + 0.9]} rotation={[0, -Math.PI / 4, 0]} />
@@ -83,6 +95,9 @@ export function Office() {
       <FurnitureModel url="/models/furniture/cactus_medium_A.gltf" position={[-width / 2 + 0.8, 0, backZ + 0.8]} />
       <FurnitureModel url="/models/furniture/cactus_small_A.gltf" position={[-width / 2 + 0.6, 0, centerZ + 2]} />
       <FurnitureModel url="/models/furniture/couch_pillows.gltf" position={[-width / 2 + 0.9, 0, centerZ + 0.6]} rotation={[0, Math.PI / 2, 0]} />
+      {/* lamp next to the couch */}
+      <FurnitureModel url="/models/furniture/lamp_standing.gltf" position={[-width / 2 + 0.7, 0, centerZ - 0.9]} rotation={[0, Math.PI / 3, 0]} />
+      <pointLight color="#ffcf96" intensity={10} distance={9} decay={2} position={[-width / 2 + 0.7, 2.2, centerZ - 0.9]} />
       <WallArt url="/decor/wallart_1.jpg" position={[width / 4 + 0.5, 2.15, backZ + 0.05]} />
       <FurnitureModel url="/models/furniture/pictureframe_medium.gltf" position={[0, 2.25, backZ + 0.04]} />
 

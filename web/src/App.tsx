@@ -46,17 +46,6 @@ export default function App() {
         <fog attach="fog" args={['#141218', 20, 46]} />
         <ambientLight intensity={0.5} color="#ffe9d0" />
         <hemisphereLight args={['#b8c4dc', '#5a4a3a', 0.55]} />
-        <directionalLight
-          castShadow
-          position={[6, 9, 4]}
-          color="#fff1dc"
-          intensity={1.7}
-          shadow-mapSize={[2048, 2048]}
-          shadow-camera-left={-16}
-          shadow-camera-right={16}
-          shadow-camera-top={16}
-          shadow-camera-bottom={-16}
-        />
         <Suspense fallback={null}>
           <Office />
         </Suspense>

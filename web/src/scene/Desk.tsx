@@ -58,7 +58,10 @@ export function Desk({ seat, variant, working, monitorTarget, name, fallbackTitl
       <group position={[0, 1.66, 0.35]}>
         <MonitorScreen target={monitorTarget} working={working} fallbackTitle={fallbackTitle} />
       </group>
-      <Person variant={variant} working={working} position={[0, 0.02, -1.15]} rotationY={0} />
+      {/* key: remount on variant change — the mixer caches PropertyBindings by (root uuid,
+          track name), so an in-place model swap leaves the new rig driven by bindings to the
+          old clone's bones (T-pose). KayKit rigs share track names, so every swap collides. */}
+      <Person key={variant} variant={variant} working={working} position={[0, 0.02, -1.15]} rotationY={0} />
       {name && (
         <NameTag
           name={name}
