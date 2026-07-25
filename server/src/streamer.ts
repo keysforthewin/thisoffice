@@ -10,9 +10,14 @@
  * pressure is even faster.
  */
 
+import { MONITOR_IMAGE_MARKER } from '../../shared/types.ts';
+
 export const BASE_LINES_PER_TICK = 0.15; // 1 line/sec at 150ms ticks (was 0.5 ≈ 3.3/s)
 export const RATCHET_TICKS = 600; // bursts drain in ≤ ~90s (was 300 → 45s)
 export const BOOST_FACTOR = 4; // at max staffing: 0.6 lines/tick ≈ 4 lines/s
+
+/** A screenshot stays on screen this long — the employee "examines" it. */
+export const IMAGE_HOLD_MS = 5000;
 
 export interface StreamerHooks {
   emit(employeeId: string, text: string): void;
@@ -25,6 +30,8 @@ interface Queue {
   acc: number;
   /** lines per tick; ratcheted up at enqueue time so a burst drains in ≤ ~90s */
   rate: number;
+  /** if set, the employee is viewing an image and we hold emissions until this time */
+  holdUntil?: number;
 }
 
 export class ScreenStreamer {
@@ -72,12 +79,30 @@ export class ScreenStreamer {
   }
 
   private tick() {
+    const now = Date.now();
     for (const [id, q] of this.queues) {
+      if (q.holdUntil !== undefined) {
+        if (now < q.holdUntil) continue;          // dwell on the screenshot
+        q.holdUntil = undefined;
+        if (q.lines.length === 0) {
+          this.queues.delete(id);
+          this.hooks.drained(id);
+          continue;
+        }
+      }
       q.acc += Math.max(BASE_LINES_PER_TICK, q.rate) * (1 + this.pressure) * (this.boost ? BOOST_FACTOR : 1);
-      const n = Math.min(q.lines.length, Math.floor(q.acc));
+      let n = Math.min(q.lines.length, Math.floor(q.acc));
+      // an image line ends its chunk: emit up to and including it, then hold
+      const imgIdx = q.lines.slice(0, n).findIndex((l) => l.startsWith(MONITOR_IMAGE_MARKER));
+      if (imgIdx !== -1) n = imgIdx + 1;
       if (n > 0) {
         q.acc -= n;
-        this.hooks.emit(id, q.lines.splice(0, n).join('\n'));
+        const chunk = q.lines.splice(0, n);
+        this.hooks.emit(id, chunk.join('\n'));
+        if (chunk[chunk.length - 1].startsWith(MONITOR_IMAGE_MARKER)) {
+          q.holdUntil = now + IMAGE_HOLD_MS;
+          continue;                                // drained() waits out the hold
+        }
       }
       if (q.lines.length === 0) {
         this.queues.delete(id);

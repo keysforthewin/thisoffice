@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ScreenStreamer, BASE_LINES_PER_TICK, RATCHET_TICKS, BOOST_FACTOR, type StreamerHooks } from './streamer.ts';
+import { ScreenStreamer, BASE_LINES_PER_TICK, RATCHET_TICKS, BOOST_FACTOR, IMAGE_HOLD_MS, type StreamerHooks } from './streamer.ts';
+import { MONITOR_IMAGE_MARKER } from '../../shared/types.ts';
 
 describe('ScreenStreamer', () => {
   let emitted: Array<{ id: string; text: string }>;
@@ -127,5 +128,46 @@ describe('ScreenStreamer', () => {
     vi.advanceTimersByTime(150);
     const total = emitted.flatMap((e) => e.text.split('\n')).length;
     expect(total).toBe(2); // acc 0.2+1.2=1.4 -> 2 more emitted... floor cumulative
+  });
+
+  describe('image dwell', () => {
+    const IMG = `${MONITOR_IMAGE_MARKER}data:image/png;base64,AAAA`;
+
+    it('splits an emission at the image line and holds 5s before resuming', () => {
+      const s = new ScreenStreamer(hooks, 150);
+      // 3000 lines → rate 5/tick, so the first tick would emit 5 lines at once
+      const lines = [`a`, IMG, ...Array.from({ length: 2998 }, (_, i) => `l${i}`)];
+      s.enqueue('emp-1', lines.join('\n'));
+      vi.advanceTimersByTime(150);
+      // emission stopped AT the image line, not the full 5-line chunk
+      expect(emitted).toHaveLength(1);
+      expect(emitted[0].text.split('\n')).toEqual(['a', IMG]);
+      // held: nothing more for 5s
+      vi.advanceTimersByTime(IMAGE_HOLD_MS - 150);
+      expect(emitted).toHaveLength(1);
+      expect(s.isDraining('emp-1')).toBe(true);
+      // resumes after the hold
+      vi.advanceTimersByTime(600);
+      expect(emitted.length).toBeGreaterThan(1);
+    });
+
+    it('defers drained() until the hold expires when the image is last', () => {
+      const s = new ScreenStreamer(hooks, 150);
+      s.enqueue('emp-1', IMG);
+      vi.advanceTimersByTime(150 * Math.ceil(1 / BASE_LINES_PER_TICK));
+      expect(emitted.map((e) => e.text)).toEqual([IMG]);
+      expect(drained).toEqual([]);                    // not yet
+      expect(s.isDraining('emp-1')).toBe(true);       // employee stays working
+      vi.advanceTimersByTime(IMAGE_HOLD_MS + 300);
+      expect(drained).toEqual(['emp-1']);
+      expect(s.isDraining('emp-1')).toBe(false);
+    });
+
+    it('a non-image line is unaffected', () => {
+      const s = new ScreenStreamer(hooks, 150);
+      s.enqueue('emp-1', 'plain');
+      vi.advanceTimersByTime(150 * Math.ceil(1 / BASE_LINES_PER_TICK));
+      expect(drained).toEqual(['emp-1']);
+    });
   });
 });
