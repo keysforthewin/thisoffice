@@ -24,6 +24,19 @@ export function Person({ variant, working, position = [0, 0, 0], rotationY = 0 }
       if ((child as THREE.Mesh).isMesh) {
         child.castShadow = true;
         child.frustumCulled = false; // skinned mesh bounds don't follow the sit pose
+
+        // Write a stencil bit on every character material so NameTag's second
+        // pass can punch through characters (but nothing else). clone(true)
+        // shares materials across character clones, so this applies once per
+        // material and affects all characters — that's the intent.
+        const mat = (child as THREE.Mesh).material;
+        const mats = Array.isArray(mat) ? mat : [mat];
+        for (const m of mats) {
+          m.stencilWrite = true;
+          m.stencilRef = 1;
+          m.stencilFunc = THREE.AlwaysStencilFunc;
+          m.stencilZPass = THREE.ReplaceStencilOp;
+        }
       }
     });
   }, [clone]);

@@ -51,11 +51,30 @@ export function NameTag({ name, position = [0, 0, 0], height = 0.22, accent = '#
 
   useEffect(() => () => texture.dispose(), [texture]);
 
+  const scale: [number, number, number] = [height * aspect, height, 1];
+
   return (
-    // depthTest off + late renderOrder: labels stay readable over monitors,
-    // chairs, and oversized character meshes (some variants are ~2.3u tall)
-    <sprite position={position} scale={[height * aspect, height, 1]} renderOrder={999}>
-      <spriteMaterial map={texture} transparent toneMapped={false} depthTest={false} />
-    </sprite>
+    <>
+      {/* Pass A: normal depth-tested draw — occluded by walls, desks, monitors,
+          and any other real geometry, same as a physical object would be. */}
+      <sprite position={position} scale={scale} renderOrder={10}>
+        <spriteMaterial map={texture} transparent toneMapped={false} depthTest />
+      </sprite>
+      {/* Pass B: draws only where a character wrote stencil==1 (see Person.tsx),
+          ignoring depth — so the tag shows through a character standing in
+          front of it, but still not through walls/furniture (which don't
+          write the stencil bit). */}
+      <sprite position={position} scale={scale} renderOrder={11}>
+        <spriteMaterial
+          map={texture}
+          transparent
+          toneMapped={false}
+          depthTest={false}
+          stencilWrite={false}
+          stencilFunc={THREE.EqualStencilFunc}
+          stencilRef={1}
+        />
+      </sprite>
+    </>
   );
 }

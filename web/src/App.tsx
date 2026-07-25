@@ -45,7 +45,7 @@ export default function App() {
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
-      <Canvas shadows camera={{ position: [7.5, 6.5, 9], fov: 50 }}>
+      <Canvas shadows camera={{ position: [7.5, 6.5, 9], fov: 50 }} gl={{ stencil: true }}>
         <color attach="background" args={['#141218']} />
         <fog attach="fog" args={['#141218', 20, 46]} />
         <ambientLight intensity={0.5} color="#ffe9d0" />
