@@ -98,6 +98,7 @@ export function Office() {
           variant={office.boss.variant}
           working={office.bossStatus === 'working'}
           monitorTarget="boss"
+          name={office.boss.name}
           boss
         />
       )}
@@ -109,6 +110,7 @@ export function Office() {
           variant={e.variant}
           working={e.status === 'working'}
           monitorTarget={e.id}
+          name={e.name}
           fallbackTitle={`${e.name} · idle`}
         />
       ))}

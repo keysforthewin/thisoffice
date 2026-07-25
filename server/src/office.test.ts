@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'node:fs';
 import { Office, clampStaffing } from './office.ts';
 
 function makeOffice() {
@@ -201,6 +202,79 @@ describe('work queue', () => {
     draining.delete(first.id);
     office.notifyDrained(first.id);
     expect(assigned).toEqual(['s:q1']);
+  });
+});
+
+describe('seat identity roster', () => {
+  function fillAndHire(office: Office): { extra: any; keys: string[] } {
+    const keys = office.getState().employees.map((_, i) => `s:t${i}`);
+    keys.forEach((k) => office.assign(k, 'Bash'));
+    const extra = office.assign('s:new', 'Read').employee!;
+    return { extra, keys };
+  }
+
+  it('a rehire into an evicted seat gets the same name and variant back', () => {
+    const office = makeOffice();
+    office.attachStreamer({ isDraining: () => false, clear: () => {}, setPressure: () => {} });
+    const { extra, keys } = fillAndHire(office);
+    office.rename(extra.id, 'Custom Carl');
+    office.setVariant(extra.id, 'Mage');
+    const seat = extra.seat;
+    office.finish('s:new');
+    keys.forEach((k) => office.finish(k));
+    office.remove(extra.id); // same path idle-eviction takes
+
+    keys.forEach((k, i) => office.assign(`s:again${i}`, 'Bash')); // occupy everyone again
+    const rehire = office.assign('s:new2', 'Read').employee!;
+    expect(rehire.seat).toBe(seat); // lowest free seat is reused
+    expect(rehire.name).toBe('Custom Carl');
+    expect(rehire.variant).toBe('Mage');
+  });
+
+  it('hire fills the lowest free seat, not max+1', () => {
+    const office = makeOffice();
+    office.attachStreamer({ isDraining: () => false, clear: () => {}, setPressure: () => {} });
+    const gapSeat = office.getState().employees[0].seat; // seat 1
+    const gapId = office.getState().employees[0].id;
+    office.remove(gapId);
+    const hired = office.hireManual();
+    expect(hired.seat).toBe(gapSeat);
+  });
+
+  it('hireManual restores a remembered identity instead of randomizing', () => {
+    const office = makeOffice();
+    const first = office.getState().employees.find((e) => e.seat === 1)!;
+    office.rename(first.id, 'Custom Cass');
+    office.remove(first.id);
+    const rehire = office.hireManual();
+    expect(rehire.seat).toBe(1);
+    expect(rehire.name).toBe('Custom Cass');
+    expect(rehire.variant).toBe(first.variant);
+  });
+
+  it('roster round-trips through save/load', () => {
+    const office = makeOffice();
+    let persisted: any;
+    (office as any).save = function () {
+      persisted = {
+        boss: this.state.boss,
+        employees: this.state.employees.map(({ id, name, seat, variant, hiredAt }: any) => ({ id, name, seat, variant, hiredAt })),
+        staffing: this.state.staffing,
+        roster: [...this.roster.entries()].map(([seat, r]: any) => ({ seat, ...r })),
+      };
+    };
+    const first = office.getState().employees.find((e) => e.seat === 1)!;
+    office.rename(first.id, 'Custom Codi');
+    office.remove(first.id); // seat 1 gone from employees, but kept in roster
+    expect(persisted.roster).toContainEqual({ seat: 1, name: 'Custom Codi', variant: first.variant });
+
+    // boot a new office from that file: rehire restores the identity
+    vi.spyOn(fs, 'readFileSync').mockReturnValueOnce(JSON.stringify(persisted));
+    const reloaded = new Office(() => ['Knight', 'Mage', 'Rogue'], undefined, '/nonexistent/office.json');
+    (reloaded as any).save = () => {};
+    const rehire = reloaded.hireManual();
+    expect(rehire.seat).toBe(1);
+    expect(rehire.name).toBe('Custom Codi');
   });
 });
 

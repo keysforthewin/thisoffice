@@ -42,6 +42,14 @@ export interface OfficeState {
   staffing: StaffingSettings;
 }
 
+/**
+ * Prefix for a monitor stream line that carries an image data-URL instead of
+ * text (e.g. a PNG an agent Read). Travels through the normal streamer queue
+ * so it stays ordered with the surrounding text; the client store intercepts
+ * it and shows the image on that monitor instead of appending a line.
+ */
+export const MONITOR_IMAGE_MARKER = '⟦IMG⟧';
+
 /** Messages from server to client */
 export type ServerMsg =
   | { type: 'state'; state: OfficeState }

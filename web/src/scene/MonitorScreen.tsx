@@ -31,10 +31,30 @@ export function MonitorScreen({ target, working, fallbackTitle, width = 1.35, he
   }, []);
 
   const drawn = useRef({ version: -1, at: 0, blink: false });
+  const img = useRef<{ url: string; el: HTMLImageElement; loaded: boolean } | null>(null);
 
   useFrame(({ clock }) => {
     const t = clock.elapsedTime * 1000;
     if (t - drawn.current.at < REDRAW_MS) return;
+
+    // Load screenshots/images the worker Read (arrives as a data URL in the store).
+    const imageUrl = useStore.getState().monitors[target]?.image;
+    if (imageUrl !== img.current?.url) {
+      if (imageUrl) {
+        const el = new Image();
+        const entry = { url: imageUrl, el, loaded: false };
+        el.onload = () => {
+          entry.loaded = true;
+          drawn.current.version = -1; // force redraw with the image
+        };
+        el.src = imageUrl;
+        img.current = entry;
+      } else {
+        img.current = null;
+      }
+      drawn.current.version = -1;
+    }
+
     const isBoss = target === 'boss';
     const version =
       (useStore.getState().monitorVersion[target] ?? 0) +
@@ -43,7 +63,15 @@ export function MonitorScreen({ target, working, fallbackTitle, width = 1.35, he
     if (version === drawn.current.version) return;
     drawn.current = { version, at: t, blink: !drawn.current.blink };
     if (isBoss) drawBossScreen(ctx, drawn.current.blink);
-    else drawToolScreen(ctx, target, working, fallbackTitle, drawn.current.blink);
+    else
+      drawToolScreen(
+        ctx,
+        target,
+        working,
+        fallbackTitle,
+        drawn.current.blink,
+        img.current?.loaded ? img.current.el : null
+      );
     texture.needsUpdate = true;
   });
 
@@ -98,11 +126,17 @@ function drawToolScreen(
   target: string,
   working: boolean,
   fallbackTitle: string | undefined,
-  blink: boolean
+  blink: boolean,
+  image: HTMLImageElement | null
 ) {
   const mon = useStore.getState().monitors[target];
   const title = mon?.title || fallbackTitle || 'idle';
   base(ctx, title, working ? '#7ee787' : '#8b949e');
+
+  if (image) {
+    drawImageBody(ctx, image, mon?.lines ?? []);
+    return;
+  }
 
   const lines = wrap(mon?.lines ?? [], MAX_COLS).slice(-MAX_ROWS);
   ctx.fillStyle = '#c9d1d9';
@@ -118,6 +152,27 @@ function drawToolScreen(
       ctx.fillStyle = '#7ee787';
       ctx.fillRect(MARGIN, y - 11, 8, 13);
     }
+  }
+}
+
+/** Contain-fit the Read image below the title bar, latest activity in a strip at the bottom. */
+function drawImageBody(ctx: CanvasRenderingContext2D, image: HTMLImageElement, lines: string[]) {
+  const areaY = TITLE_H;
+  const areaH = H - TITLE_H;
+  const scale = Math.min(W / image.width, areaH / image.height);
+  const w = image.width * scale;
+  const h = image.height * scale;
+  ctx.drawImage(image, (W - w) / 2, areaY + (areaH - h) / 2, w, h);
+
+  const recent = lines.filter((l) => l.trim()).slice(-2);
+  if (recent.length) {
+    const stripH = LINE_H * recent.length + 8;
+    ctx.fillStyle = 'rgba(11, 15, 20, 0.75)';
+    ctx.fillRect(0, H - stripH, W, stripH);
+    ctx.fillStyle = '#c9d1d9';
+    recent.forEach((line, i) => {
+      ctx.fillText(clip(line, MAX_COLS), MARGIN, H - stripH + LINE_H * (i + 1) - 3);
+    });
   }
 }
 

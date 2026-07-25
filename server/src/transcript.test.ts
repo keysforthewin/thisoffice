@@ -86,6 +86,33 @@ describe('main-session tool flow', () => {
     expect(finished).toEqual(['sess-1:tu-1']);
   });
 
+  it('emits image blocks from a Read tool_result as marker lines, before the text', () => {
+    const { transcripts, enqueued } = makeHarness();
+    transcripts.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'tool_use', id: 'tu-img', name: 'Read', input: { file_path: '/tmp/shot.png' } }] },
+      }),
+      line({
+        type: 'user',
+        sessionId: 'sess-1',
+        message: {
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'tu-img',
+              content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }],
+            },
+          ],
+        },
+      }),
+    ]);
+    expect(enqueued[1].text).toBe('⟦IMG⟧data:image/png;base64,AAAA');
+    expect(enqueued[2].text).toContain('✓ done');
+  });
+
   it('clear/title still go directly to office.monitor on start', () => {
     const { transcripts, monitors } = makeHarness();
     startBash(transcripts);

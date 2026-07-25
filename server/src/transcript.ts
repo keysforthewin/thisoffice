@@ -2,7 +2,7 @@ import path from 'node:path';
 import type { Office } from './office.ts';
 import type { ScreenStreamer } from './streamer.ts';
 import { summarizePrompt, nameNewHire } from './summarizer.ts';
-import type { Employee } from '../../shared/types.ts';
+import { MONITOR_IMAGE_MARKER, type Employee } from '../../shared/types.ts';
 
 /**
  * Turns raw Claude Code transcript JSONL lines into office activity.
@@ -201,7 +201,8 @@ export class Transcripts {
       });
       return;
     }
-    if (hired) {
+    // only name genuinely new hires; a rehire into a remembered seat keeps their name
+    if (hired && employee.name === 'New Hire') {
       nameNewHire('Reporting to the Boss').then((name) => {
         if (name) this.office.rename(employee.id, name);
       });
@@ -266,7 +267,7 @@ export class Transcripts {
       }
     }
 
-    if (hired && employee) {
+    if (hired && employee && employee.name === 'New Hire') {
       nameNewHire(label).then((n) => {
         if (n) this.office.rename(employee.id, n);
       });
@@ -325,6 +326,9 @@ export class Transcripts {
       this.pendingTasks.set(sid, list.filter((a) => a !== activity));
     }
 
+    for (const img of extractImages(result.content)) {
+      this.emitTo(activity, MONITOR_IMAGE_MARKER + img);
+    }
     const text = extractText(result.content) || '(no output)';
     this.emitTo(activity, text + '\n\n✓ done');
     if (activity.employeeId) this.office.finish(activity.key);
@@ -364,6 +368,9 @@ export class Transcripts {
     if (line.type === 'user') {
       for (const b of contentBlocks(line.message?.content)) {
         if (b.type !== 'tool_result') continue;
+        for (const img of extractImages(b.content)) {
+          this.emitTo(activity, MONITOR_IMAGE_MARKER + img);
+        }
         const text = extractText(b.content);
         if (text) this.emitTo(activity, text);
       }
@@ -400,6 +407,13 @@ function extractText(content: any): string {
     .map((b) => b.text ?? '')
     .join('\n')
     .trim();
+}
+
+/** Base64 image blocks in a tool_result (e.g. Read on a PNG) as data URLs. */
+function extractImages(content: any): string[] {
+  return contentBlocks(content)
+    .filter((b) => b.type === 'image' && b.source?.type === 'base64' && b.source.data)
+    .map((b) => `data:${b.source.media_type ?? 'image/png'};base64,${b.source.data}`);
 }
 
 function oneLine(s: string): string {

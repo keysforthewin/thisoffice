@@ -27,6 +27,8 @@ interface PersistedState {
   boss: { name: string; variant: string };
   employees: Array<Pick<Employee, 'id' | 'name' | 'seat' | 'variant' | 'hiredAt'>>;
   staffing?: StaffingSettings;
+  /** per-seat identity memory: an evicted seat's occupant returns with the same name/model */
+  roster?: Array<{ seat: number; name: string; variant: string }>;
 }
 
 type Listener = (msg: ServerMsg) => void;
@@ -87,6 +89,8 @@ export class Office {
   private workQueue: Array<{ key: string; label: string }> = [];
   private assignCb: ((key: string, employee: Employee) => void) | null = null;
   private idleTimers = new Map<string, NodeJS.Timeout>();
+  /** seat -> remembered identity; survives idle-eviction so rehires come back as the same person */
+  private roster = new Map<number, { name: string; variant: string }>();
 
   constructor(
     variantPoolProvider?: () => string[],
@@ -201,6 +205,13 @@ export class Office {
         })),
       };
     }
+    for (const r of persisted.roster ?? []) {
+      if (Number.isInteger(r.seat) && r.seat > 0 && r.name && r.variant) {
+        this.roster.set(r.seat, { name: r.name, variant: r.variant });
+      }
+    }
+    // current occupants are the freshest identity for their seat (also seeds legacy files)
+    for (const e of persisted.employees) this.roster.set(e.seat, { name: e.name, variant: e.variant });
     return {
       boss: persisted.boss,
       bossStatus: 'idle',
@@ -216,6 +227,9 @@ export class Office {
       boss: this.state.boss,
       employees: this.state.employees.map(({ id, name, seat, variant, hiredAt }) => ({ id, name, seat, variant, hiredAt })),
       staffing: this.state.staffing,
+      roster: [...this.roster.entries()]
+        .sort(([a], [b]) => a - b)
+        .map(([seat, r]) => ({ seat, ...r })),
     };
     fs.mkdirSync(DATA_DIR, { recursive: true });
     fs.writeFileSync(this.dataFile, JSON.stringify(persisted, null, 2));
@@ -330,37 +344,50 @@ export class Office {
     return this.state.employees.find((e) => e.id === id);
   }
 
-  /** Settings-panel hire: random name + random character; editable afterwards. */
+  /** Settings-panel hire: remembered identity if the seat has one, else random; editable afterwards. */
   hireManual(): Employee {
-    const usedNames = new Set(this.state.employees.map((e) => e.name));
-    const fresh = HIRE_NAMES.filter((n) => !usedNames.has(n));
-    const names = fresh.length ? fresh : HIRE_NAMES;
     const employee = this.hire();
-    employee.name = names[Math.floor(Math.random() * names.length)];
-    const usedVariants = new Set([this.state.boss.variant, ...this.state.employees.map((e) => e.variant)]);
-    const unusedVariants = this.variantPool.filter((v) => !usedVariants.has(v));
-    const variants = unusedVariants.length ? unusedVariants : this.variantPool;
-    employee.variant = variants[Math.floor(Math.random() * variants.length)];
+    if (employee.name === 'New Hire') {
+      const usedNames = new Set(this.state.employees.map((e) => e.name));
+      const fresh = HIRE_NAMES.filter((n) => !usedNames.has(n));
+      const names = fresh.length ? fresh : HIRE_NAMES;
+      employee.name = names[Math.floor(Math.random() * names.length)];
+      const usedVariants = new Set([this.state.boss.variant, ...this.state.employees.map((e) => e.variant)]);
+      const unusedVariants = this.variantPool.filter((v) => !usedVariants.has(v));
+      const variants = unusedVariants.length ? unusedVariants : this.variantPool;
+      employee.variant = variants[Math.floor(Math.random() * variants.length)];
+      this.remember(employee);
+    }
     this.save();
     this.broadcastState();
     return employee;
   }
 
+  private remember(emp: Employee) {
+    this.roster.set(emp.seat, { name: emp.name, variant: emp.variant });
+  }
+
   private hire(): Employee {
-    const seat = Math.max(0, ...this.state.employees.map((e) => e.seat)) + 1;
+    // lowest free seat, so an evicted seat's remembered occupant comes back
+    const usedSeats = new Set(this.state.employees.map((e) => e.seat));
+    let seat = 1;
+    while (usedSeats.has(seat)) seat++;
+    const remembered = this.roster.get(seat);
     const usedVariants = new Set([this.state.boss.variant, ...this.state.employees.map((e) => e.variant)]);
     const variant =
+      remembered?.variant ??
       this.variantPool.find((v) => !usedVariants.has(v)) ??
       this.variantPool[seat % this.variantPool.length];
     const employee: Employee = {
       id: `emp-${Date.now()}-${seat}`,
-      name: 'New Hire',
+      name: remembered?.name ?? 'New Hire',
       seat,
       variant,
       hiredAt: new Date().toISOString(),
       status: 'idle',
       task: null,
     };
+    this.remember(employee);
     this.state.employees.push(employee);
     this.scheduleIdleTimer(employee.id);
     this.save();
@@ -371,6 +398,7 @@ export class Office {
     const emp = this.state.employees.find((e) => e.id === id);
     if (!emp) return false;
     emp.name = name;
+    this.remember(emp);
     this.save();
     this.broadcastState();
     return true;
@@ -380,6 +408,7 @@ export class Office {
     const emp = this.state.employees.find((e) => e.id === id);
     if (!emp) return false;
     emp.variant = variant;
+    this.remember(emp);
     this.save();
     this.broadcastState();
     return true;

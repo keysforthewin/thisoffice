@@ -1,9 +1,11 @@
 import { create } from 'zustand';
-import type { CharacterCatalog, OfficeState, ServerMsg } from '../../shared/types.ts';
+import { MONITOR_IMAGE_MARKER, type CharacterCatalog, type OfficeState, type ServerMsg } from '../../shared/types.ts';
 
 export interface MonitorContent {
   title: string;
   lines: string[];
+  /** data URL of an image the worker looked at (e.g. Read on a PNG); shown until the next clear */
+  image?: string;
 }
 
 const MONITOR_MAX_LINES = 200;
@@ -48,11 +50,22 @@ export const useStore = create<AppStore>((set, get) => ({
     }
     if (msg.type === 'monitor') {
       const monitors = { ...get().monitors };
-      const prev = msg.clear ? { title: '', lines: [] } : (monitors[msg.target] ?? { title: '', lines: [] });
-      const lines = msg.append
-        ? [...prev.lines, ...msg.append.split('\n')].slice(-MONITOR_MAX_LINES)
-        : prev.lines;
-      monitors[msg.target] = { title: msg.title ?? prev.title, lines };
+      const prev: MonitorContent = msg.clear
+        ? { title: '', lines: [] }
+        : (monitors[msg.target] ?? { title: '', lines: [] });
+      let image = prev.image;
+      let lines = prev.lines;
+      if (msg.append) {
+        const appended = msg.append.split('\n').filter((l) => {
+          // require a real image payload: session text ABOUT the marker (e.g. this
+          // very feature being discussed on a monitor) must not hijack the screen
+          if (!l.startsWith(MONITOR_IMAGE_MARKER + 'data:image/')) return true;
+          image = l.slice(MONITOR_IMAGE_MARKER.length);
+          return false;
+        });
+        lines = [...prev.lines, ...appended].slice(-MONITOR_MAX_LINES);
+      }
+      monitors[msg.target] = { title: msg.title ?? prev.title, lines, image };
       const monitorVersion = { ...get().monitorVersion };
       monitorVersion[msg.target] = (monitorVersion[msg.target] ?? 0) + 1;
       set({ monitors, monitorVersion });

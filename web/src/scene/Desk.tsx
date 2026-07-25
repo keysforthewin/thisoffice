@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import type { ThreeElements } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
 import { MonitorScreen } from './MonitorScreen.tsx';
+import { NameTag } from './NameTag.tsx';
 import { Person } from './Person.tsx';
 import { seatTransform } from './layout.ts';
 
@@ -11,6 +12,7 @@ interface Props {
   variant: string;
   working: boolean;
   monitorTarget: string; // 'boss' or employee id
+  name?: string;
   fallbackTitle?: string;
   boss?: boolean;
 }
@@ -38,7 +40,7 @@ export function FurnitureModel({ url, ...props }: { url: string } & ThreeElement
  * A workstation: table + chair + monitor + seated character.
  * Local space: desk faces +z (screen readable from -z, i.e. from behind the chair).
  */
-export function Desk({ seat, variant, working, monitorTarget, fallbackTitle, boss }: Props) {
+export function Desk({ seat, variant, working, monitorTarget, name, fallbackTitle, boss }: Props) {
   const { position, rotationY } = seatTransform(seat);
   const deskScale = boss ? 1.15 : 1;
 
@@ -57,6 +59,13 @@ export function Desk({ seat, variant, working, monitorTarget, fallbackTitle, bos
         <MonitorScreen target={monitorTarget} working={working} fallbackTitle={fallbackTitle} />
       </group>
       <Person variant={variant} working={working} position={[0, 0.02, -1.15]} rotationY={0} />
+      {name && (
+        <NameTag
+          name={name}
+          position={[0, 2.35, -1.15]}
+          accent={boss ? '#d2a8ff' : working ? '#7ee787' : '#8b949e'}
+        />
+      )}
     </group>
   );
 }
