@@ -158,6 +158,7 @@ export class Transcripts {
     this.touchBoss();
     const key = `${sessionId}:${line.uuid ?? `reply-${++this.replySeq}`}`;
     const { employee, hired } = this.office.assign(key, 'Reporting to the Boss');
+    if (!employee) return; // TODO(task 5): buffer queued activity
     if (hired) {
       nameNewHire('Reporting to the Boss').then((name) => {
         if (name) this.office.rename(employee.id, name);
@@ -198,6 +199,7 @@ export class Transcripts {
     const isTask = name === 'Task' || name === 'Agent';
     const label = isTask ? `Agent: ${input.description ?? input.subagent_type ?? 'subagent'}` : name;
     const { employee, hired } = this.office.assign(`${sessionId}:${toolUseId}`, label);
+    if (!employee) return; // TODO(task 5): buffer queued activity
     const activity: Activity = { key: `${sessionId}:${toolUseId}`, employeeId: employee.id, tool: name, isTask };
     this.activities.set(toolUseId, activity);
 

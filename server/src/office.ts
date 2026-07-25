@@ -24,6 +24,7 @@ type Listener = (msg: ServerMsg) => void;
 export interface ScreenStream {
   isDraining(id: string): boolean;
   clear(id: string): void;
+  setPressure(n: number): void;
 }
 
 const DEFAULT_EMPLOYEE_NAMES = ['Pat Chindexer', 'Sam Greppleton', 'Dee Bugger'];
@@ -71,6 +72,9 @@ export class Office {
   private streamer: ScreenStream | null = null;
   /** employees whose activity finished but whose screen is still streaming */
   private pendingIdle = new Set<string>();
+  /** activities waiting for a free employee (at max headcount) */
+  private workQueue: Array<{ key: string; label: string }> = [];
+  private assignCb: ((key: string, employee: Employee) => void) | null = null;
 
   constructor(variantPoolProvider?: () => string[]) {
     this.variantPool = variantPoolProvider?.() ?? loadVariantPool();
@@ -87,6 +91,15 @@ export class Office {
     this.streamer = s;
   }
 
+  /** Transcripts registers to replay buffered content when a queued job is picked up. */
+  onAssign(cb: (key: string, employee: Employee) => void) {
+    this.assignCb = cb;
+  }
+
+  private syncPressure() {
+    this.streamer?.setPressure(this.workQueue.length);
+  }
+
   /** Called when an employee's screen queue empties; completes a deferred finish. */
   notifyDrained(employeeId: string) {
     if (!this.pendingIdle.delete(employeeId)) return;
@@ -97,6 +110,16 @@ export class Office {
   private setIdle(employeeId: string) {
     const emp = this.state.employees.find((e) => e.id === employeeId);
     if (!emp) return;
+    const job = this.workQueue.shift();
+    if (job) {
+      this.syncPressure();
+      emp.status = 'working';
+      emp.task = job.label;
+      this.assignments.set(job.key, emp.id);
+      this.broadcastState();
+      this.assignCb?.(job.key, emp);
+      return;
+    }
     emp.status = 'idle';
     emp.task = null;
     this.broadcastState();
@@ -204,7 +227,7 @@ export class Office {
    * Assign the activity to an idle employee, hiring a new one if the office is full.
    * Returns the employee. New hires get a placeholder name; caller may rename async.
    */
-  assign(activityKey: string, task: string): { employee: Employee; hired: boolean } {
+  assign(activityKey: string, task: string): { employee: Employee | null; hired: boolean } {
     const existing = this.assignments.get(activityKey);
     if (existing) {
       const emp = this.state.employees.find((e) => e.id === existing)!;
@@ -215,6 +238,11 @@ export class Office {
       .sort((a, b) => a.seat - b.seat)[0];
     let hired = false;
     if (!employee) {
+      if (this.state.employees.length >= this.state.staffing.maxEmployees) {
+        this.workQueue.push({ key: activityKey, label: task });
+        this.syncPressure();
+        return { employee: null, hired: false };
+      }
       employee = this.hire();
       hired = true;
     }

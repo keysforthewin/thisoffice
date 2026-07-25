@@ -11,27 +11,30 @@ describe('Office drain-aware lifecycle', () => {
   let office: Office;
   let draining: Set<string>;
   let cleared: string[];
+  let pressures: number[];
 
   beforeEach(() => {
     office = makeOffice();
     draining = new Set();
     cleared = [];
+    pressures = [];
     office.attachStreamer({
       isDraining: (id) => draining.has(id),
       clear: (id) => cleared.push(id),
+      setPressure: (n) => pressures.push(n),
     });
   });
 
   it('assign skips employees whose screen is still draining', () => {
-    const a = office.assign('s:t1', 'Bash').employee;
+    const a = office.assign('s:t1', 'Bash').employee!;
     office.finish('s:t1'); // idle again, not draining
     draining.add(a.id);
-    const b = office.assign('s:t2', 'Read').employee;
+    const b = office.assign('s:t2', 'Read').employee!;
     expect(b.id).not.toBe(a.id);
   });
 
   it('finish defers idle until notifyDrained when streaming', () => {
-    const a = office.assign('s:t1', 'Bash').employee;
+    const a = office.assign('s:t1', 'Bash').employee!;
     draining.add(a.id);
     office.finish('s:t1');
     expect(office.getState().employees.find((e) => e.id === a.id)!.status).toBe('working');
@@ -41,19 +44,19 @@ describe('Office drain-aware lifecycle', () => {
   });
 
   it('finish goes idle immediately when not streaming', () => {
-    const a = office.assign('s:t1', 'Bash').employee;
+    const a = office.assign('s:t1', 'Bash').employee!;
     office.finish('s:t1');
     expect(office.getState().employees.find((e) => e.id === a.id)!.status).toBe('idle');
   });
 
   it('notifyDrained without a pending finish is a no-op', () => {
-    const a = office.assign('s:t1', 'Bash').employee;
+    const a = office.assign('s:t1', 'Bash').employee!;
     office.notifyDrained(a.id);
     expect(office.getState().employees.find((e) => e.id === a.id)!.status).toBe('working');
   });
 
   it('notifyDrained keeps the employee working if another activity is still assigned', () => {
-    const a = office.assign('s:t1', 'Bash').employee;
+    const a = office.assign('s:t1', 'Bash').employee!;
     // hire everyone else out of the way so t2 lands on a new employee, then
     // force-reassign t2 to a by making a the only idle one is fiddly; instead
     // assign a second activity directly to the same employee via the map:
@@ -66,14 +69,14 @@ describe('Office drain-aware lifecycle', () => {
   });
 
   it('remove clears the streamer queue for that employee', () => {
-    const a = office.assign('s:t1', 'Bash').employee;
+    const a = office.assign('s:t1', 'Bash').employee!;
     office.remove(a.id);
     expect(cleared).toContain(a.id);
   });
 
   it('works with no streamer attached (assign/finish behave as before)', () => {
     const plain = makeOffice();
-    const a = plain.assign('s:t1', 'Bash').employee;
+    const a = plain.assign('s:t1', 'Bash').employee!;
     plain.finish('s:t1');
     expect(plain.getState().employees.find((e) => e.id === a.id)!.status).toBe('idle');
   });
@@ -102,5 +105,69 @@ describe('staffing settings', () => {
     expect(office.getState().staffing.minEmployees).toBe(1);
     office.setStaffing({ minEmployees: 6, maxEmployees: 4 });
     expect(office.getState().staffing).toEqual({ minEmployees: 4, maxEmployees: 4 });
+  });
+});
+
+describe('work queue', () => {
+  let draining: Set<string>;
+  let pressures: number[];
+
+  function makeQueueOffice() {
+    const office = makeOffice();
+    draining = new Set();
+    pressures = [];
+    office.attachStreamer({
+      isDraining: (id) => draining.has(id),
+      clear: () => {},
+      setPressure: (n) => pressures.push(n),
+    });
+    return office;
+  }
+
+  it('queues work at max headcount and reports pressure', () => {
+    const office = makeQueueOffice();
+    office.setStaffing({ minEmployees: 1, maxEmployees: office.getState().employees.length }); // cap at current size
+    const n = office.getState().employees.length;
+    for (let i = 0; i < n; i++) expect(office.assign(`s:t${i}`, 'Bash').employee).not.toBeNull();
+    const overflow = office.assign('s:overflow', 'Read');
+    expect(overflow.employee).toBeNull();
+    expect(office.getState().employees.length).toBe(n); // no hire
+    expect(pressures.at(-1)).toBe(1);
+  });
+
+  it('a freeing employee picks up the queue head; onAssign fires; pressure drops', () => {
+    const office = makeQueueOffice();
+    office.setStaffing({ minEmployees: 1, maxEmployees: office.getState().employees.length });
+    const n = office.getState().employees.length;
+    const first = office.assign('s:t0', 'Bash').employee!;
+    for (let i = 1; i < n; i++) office.assign(`s:t${i}`, 'Bash');
+    office.assign('s:q1', 'Grep');
+    const assigned: Array<{ key: string; id: string }> = [];
+    office.onAssign((key, emp) => assigned.push({ key, id: emp.id }));
+    office.finish('s:t0'); // not draining → setIdle → dequeues
+    expect(assigned).toEqual([{ key: 's:q1', id: first.id }]);
+    const emp = office.getState().employees.find((e) => e.id === first.id)!;
+    expect(emp.status).toBe('working');
+    expect(emp.task).toBe('Grep');
+    expect(pressures.at(-1)).toBe(0);
+    office.finish('s:q1');
+    expect(office.getState().employees.find((e) => e.id === first.id)!.status).toBe('idle');
+  });
+
+  it('drain-deferred finish also dequeues on notifyDrained', () => {
+    const office = makeQueueOffice();
+    office.setStaffing({ minEmployees: 1, maxEmployees: office.getState().employees.length });
+    const n = office.getState().employees.length;
+    const first = office.assign('s:t0', 'Bash').employee!;
+    for (let i = 1; i < n; i++) office.assign(`s:t${i}`, 'Bash');
+    office.assign('s:q1', 'Grep');
+    const assigned: string[] = [];
+    office.onAssign((key) => assigned.push(key));
+    draining.add(first.id);
+    office.finish('s:t0'); // deferred
+    expect(assigned).toEqual([]);
+    draining.delete(first.id);
+    office.notifyDrained(first.id);
+    expect(assigned).toEqual(['s:q1']);
   });
 });
