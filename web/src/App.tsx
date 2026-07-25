@@ -21,7 +21,7 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
       const cur = useStore.getState().cameraMode;
       if (e.key === 'm' || e.key === 'M') {
         setMode(cur.kind === 'movie' ? { kind: 'free' } : { kind: 'movie' });

@@ -44,7 +44,7 @@ export function MovieCamera() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  useFrame((state, delta) => {
+  useFrame((_, delta) => {
     const now = Date.now();
     const { office, lastActivity } = useStore.getState();
     const key = activeSetKey(lastActivity, now);
