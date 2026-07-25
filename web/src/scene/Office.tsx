@@ -46,11 +46,18 @@ function WallWithWindow({ w, h, ox, oy, ow, oh }: { w: number; h: number; ox: nu
         <boxGeometry args={[ow, 0.08, 0.03]} />
         <meshStandardMaterial color="#4a4450" />
       </mesh>
-      {/* frame */}
-      <mesh position={[ox, oy, 0.005]}>
-        <boxGeometry args={[ow + 0.12, oh + 0.12, 0.02]} />
-        <meshStandardMaterial color="#4a4450" />
-      </mesh>
+      {/* frame: four border pieces — a single slab here would fill the opening */}
+      {[
+        [ox, oy + oh / 2 + 0.03, ow + 0.12, 0.06],
+        [ox, oy - oh / 2 - 0.03, ow + 0.12, 0.06],
+        [ox - ow / 2 - 0.03, oy, 0.06, oh],
+        [ox + ow / 2 + 0.03, oy, 0.06, oh],
+      ].map(([x, y, fw, fh], i) => (
+        <mesh key={`f${i}`} position={[x, y, 0.005]}>
+          <boxGeometry args={[fw, fh, 0.02]} />
+          <meshStandardMaterial color="#4a4450" />
+        </mesh>
+      ))}
     </group>
   );
 }
@@ -118,10 +125,10 @@ export function Office() {
         <meshStandardMaterial color="#665f6e" roughness={1} />
       </mesh>
 
-      {/* ceiling, high above the room */}
-      <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, height, centerZ]} receiveShadow>
+      {/* ceiling: unlit material so the downward fixtures can't splash light onto it */}
+      <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, height, centerZ]}>
         <planeGeometry args={[width, depth]} />
-        <meshStandardMaterial color="#3d3a44" roughness={1} />
+        <meshBasicMaterial color="#2a2731" />
       </mesh>
       {/* hanging fixtures: one shadow-caster, three fill */}
       <CeilingLight position={[-width / 4, height, centerZ - depth / 4]} castShadow />
