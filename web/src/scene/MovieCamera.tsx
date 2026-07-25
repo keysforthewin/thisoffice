@@ -73,7 +73,7 @@ export function MovieCamera() {
     tmpPos.copy(s.position);
     tmpPos.x += SHAKE_AMP * (Math.sin(t * 0.23) * 0.6 + Math.sin(t * 0.41 + 1.3) * 0.4);
     tmpPos.y += SHAKE_AMP * (Math.sin(t * 0.31 + 0.7) * 0.6 + Math.sin(t * 0.53 + 2.1) * 0.4);
-    tmpPos.z += SHAKE_AMP * (Math.sin(t * 0.19 + 2.9) * 0.6 + Math.sin(t * 0.37 + 0.4) * 0.4);
+    tmpPos.z += SHAKE_AMP * (Math.sin(t * 0.21 + 2.9) * 0.6 + Math.sin(t * 0.37 + 0.4) * 0.4);
 
     tmpForward.copy(s.lookAt).sub(s.position).normalize();
     tmpRight.crossVectors(tmpForward, UP).normalize();

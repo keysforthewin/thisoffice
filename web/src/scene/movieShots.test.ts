@@ -311,4 +311,21 @@ describe('groupShot with office', () => {
       expectInRoom(shot.position, office);
     }
   });
+
+  it('for 20 seeds in a crowded office (more monitor occluders in play), still front-facing/in-frustum/in-room', () => {
+    // six occupied seats means every candidate direction has several OTHER seats'
+    // monitor AABBs nearby as potential occluders, exercising the ranking logic
+    // (front-facing as a criterion, not a hard pre-filter, over occluder-free candidates)
+    // rather than degenerating into the front-facing-only case a sparse office allows.
+    const office = makeOffice({ employees: [1, 2, 3, 4, 5, 6].map((seat) => makeEmployee({ id: `e${seat}`, seat })) });
+    const subjects = [subjectFor('e1', office)!, subjectFor('e2', office)!];
+    for (let i = 0; i < 20; i++) {
+      const shot = groupShot(subjects, FOV, ASPECT, rng(i), office);
+      for (const s of subjects) {
+        expect(shot.position.clone().sub(s.center).dot(s.normal)).toBeGreaterThan(0);
+        expect(inFrustum(s.center, shot)).toBe(true);
+      }
+      expectInRoom(shot.position, office);
+    }
+  });
 });

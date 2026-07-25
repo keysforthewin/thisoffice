@@ -222,8 +222,10 @@ export function closeUpShot(subject: Subject, fovY: number, aspect: number, rng:
       bestPos = pos;
     }
   }
-  // every candidate was inside an occluder (rare) — fall back to a straight-on shot,
-  // still clamped to the room
+  // Every one of the LOS_CANDIDATES landed inside an occluder (rare — only happens in a
+  // very cramped/crowded room). Fall back to a straight-on shot with NO occluder/LOS
+  // validation, still clamped to the room: this is the one residual corner where a
+  // close-up could clip through a person or monitor.
   bestPos ??= clampToRoom(subject.center.clone().addScaledVector(subject.normal, dist), office);
   return { position: bestPos, lookAt: subject.center.clone() };
 }
@@ -256,28 +258,38 @@ export function groupShot(subjects: Subject[], fovY: number, aspect: number, rng
   const minTan = Math.min(tanY, tanY * aspect);
   const dist = (radius * 1.15) / minTan + radius;
 
-  // among front-facing candidates (existing constraint), prefer one with a clamped,
-  // occluder-free position and line of sight to every subject; fall back to the
-  // front-facing candidate that sees the most subjects
+  // Evaluate occluder/LOS for every candidate (not just front-facing ones), and use
+  // front-facing-ness as a ranking criterion instead of a hard pre-filter, so an
+  // occluder-avoiding-but-imperfectly-facing candidate is never discarded in favor of
+  // an untested one. Tiers, best to worst: (1) fully front-facing AND full LOS — return
+  // immediately; (2) among occluder-free candidates, most front-facing subjects, then
+  // most subjects with LOS. Only every-candidate-inside-an-occluder falls through to an
+  // unvalidated direction below.
   let bestPos: THREE.Vector3 | null = null;
+  let bestFrontFacing = -1;
   let bestSeen = -1;
-  let firstFrontFacingDir: THREE.Vector3 | null = null;
   for (let i = 0; i < LOS_CANDIDATES; i++) {
     const cand = jitterDir(avgNormal, rng, GROUP_YAW, GROUP_PITCH_MIN, GROUP_PITCH_MAX);
-    if (!subjects.every((s) => cand.dot(s.normal) > FRONT_FACING_DOT)) continue;
-    firstFrontFacingDir ??= cand;
     const pos = clampToRoom(centroid.clone().addScaledVector(cand, dist), office);
     if (isInsideOccluder(pos, office)) continue;
+    const frontFacingCount = subjects.filter((s) => cand.dot(s.normal) > FRONT_FACING_DOT).length;
+    const fullyFrontFacing = frontFacingCount === subjects.length;
     const seen = subjects.filter((s) => hasLineOfSight(pos, s, office)).length;
-    if (seen === subjects.length) return { position: pos, lookAt: centroid.clone() };
-    if (seen > bestSeen) {
+    if (fullyFrontFacing && seen === subjects.length) return { position: pos, lookAt: centroid.clone() };
+    if (frontFacingCount > bestFrontFacing || (frontFacingCount === bestFrontFacing && seen > bestSeen)) {
+      bestFrontFacing = frontFacingCount;
       bestSeen = seen;
       bestPos = pos;
     }
   }
-  const fallbackDir = firstFrontFacingDir ?? jitterDir(avgNormal, () => 0.5, 0, GROUP_PITCH_MIN, GROUP_PITCH_MIN);
-  bestPos ??= clampToRoom(centroid.clone().addScaledVector(fallbackDir, dist), office);
-  return { position: bestPos, lookAt: centroid.clone() };
+  if (bestPos) return { position: bestPos, lookAt: centroid.clone() };
+  // Every one of the LOS_CANDIDATES landed inside an occluder (rare — only happens in a
+  // very cramped/crowded room). Fall back to a deterministic, front-leaning direction
+  // with NO occluder/LOS validation: this is the one residual corner where a group shot
+  // could clip through a person or monitor.
+  const fallbackDir = jitterDir(avgNormal, () => 0.5, 0, GROUP_PITCH_MIN, GROUP_PITCH_MIN);
+  const pos = clampToRoom(centroid.clone().addScaledVector(fallbackDir, dist), office);
+  return { position: pos, lookAt: centroid.clone() };
 }
 
 function wideShot(office: OfficeState | null, rng: () => number): Shot {
