@@ -50,9 +50,10 @@ that knowledge drives the assignment rule, and all connected clients render iden
   appends.
 - A single interval ticker (~150 ms). Each tick, for each non-empty queue, emit
   `office.monitor(employeeId, { append })` with the next N lines joined.
-- **Adaptive rate:** baseline ~3 lines/sec (one line every other tick), scaling with
-  backlog — lines per tick `= max(baseline, ceil(backlog / 300))` — so any backlog drains
-  in ≤ ~45 s.
+- **Adaptive rate:** baseline ~3 lines/sec (one line every other tick). Each queue's rate
+  is ratcheted up at enqueue time — `rate = max(rate, backlog / 300)` lines per tick,
+  resetting when the queue drains — so any burst drains in ≤ ~45 s. (Recomputing from
+  current backlog each tick would decay exponentially and never hit the bound.)
 - `isDraining(employeeId): boolean` — queue non-empty.
 - `onDrain(employeeId, cb)` — fires when the queue empties (used to free employees).
 - The ticker idles (clears interval) when all queues are empty.
