@@ -6,7 +6,7 @@ import type { CharacterEntry } from '../../../../shared/types.ts';
 import { useStore } from '../../store.ts';
 import { catalogEntry, resolveClip } from '../../characters/catalog.ts';
 import { useCharacterModel } from '../../characters/useCharacterModel.ts';
-import { FurnitureModel } from '../../scene/Desk.tsx';
+import { FurnitureModel, CHAIR_OFFSET_Z, PERSON_OFFSET_Z, PERSON_LIFT_Y } from '../../scene/Desk.tsx';
 
 export function CharacterPreview({ entry }: { entry?: CharacterEntry }) {
   // debounce so arrow-key scrubbing doesn't fetch every intermediate GLB
@@ -76,8 +76,8 @@ function SeatedPreview({ entry }: { entry: CharacterEntry }) {
   return (
     <group rotation={[0, 0.55, 0]}>
       <FurnitureModel url="/models/furniture/table_medium.gltf" />
-      <FurnitureModel url="/models/furniture/chair_A.gltf" position={[0, chairHeight, -1.45]} />
-      <SeatedModel entry={entry} position={[0, 0.02 + chairHeight, -1.15]} />
+      <FurnitureModel url="/models/furniture/chair_A.gltf" position={[0, chairHeight, CHAIR_OFFSET_Z]} />
+      <SeatedModel entry={entry} position={[0, PERSON_LIFT_Y + chairHeight, PERSON_OFFSET_Z]} />
     </group>
   );
 }

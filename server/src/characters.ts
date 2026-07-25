@@ -58,13 +58,13 @@ export class CharacterStore {
   private imported: ImportedMeta[];
   private dataDir: string;
   private charactersDir: string;
-  private animeDir: string;
+  private animsDir: string;
   private metaFile: string;
 
   constructor(dataDir?: string) {
     this.dataDir = dataDir ?? DEFAULT_DATA_DIR;
     this.charactersDir = path.join(this.dataDir, 'characters');
-    this.animeDir = path.join(this.charactersDir, 'anims');
+    this.animsDir = path.join(this.charactersDir, 'anims');
     this.metaFile = path.join(this.charactersDir, 'imported.json');
     this.imported = this.loadMeta();
   }
@@ -94,7 +94,7 @@ export class CharacterStore {
   }
 
   animPath(slot: AnimSlot): string {
-    return path.join(this.animeDir, `${slot}.fbx`);
+    return path.join(this.animsDir, `${slot}.fbx`);
   }
 
   animStatus(): Record<AnimSlot, boolean> {

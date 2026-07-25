@@ -37,6 +37,12 @@ export function FurnitureModel({ url, ...props }: { url: string } & ThreeElement
   );
 }
 
+/** Seat geometry shared with the character picker preview (CharacterPreview.tsx) so a
+ *  future desk-layout change can't silently desync the two. */
+export const CHAIR_OFFSET_Z = -1.45;
+export const PERSON_OFFSET_Z = -1.15;
+export const PERSON_LIFT_Y = 0.02;
+
 /**
  * A workstation: table + chair + monitor + seated character.
  * Local space: desk faces +z (screen readable from -z, i.e. from behind the chair).
@@ -58,7 +64,7 @@ export function Desk({ seat, variant, working, monitorTarget, name, fallbackTitl
       />
       <FurnitureModel
         url={boss ? '/models/furniture/armchair_pillows.gltf' : '/models/furniture/chair_A.gltf'}
-        position={[0, chairHeight, -1.45]}
+        position={[0, chairHeight, CHAIR_OFFSET_Z]}
         rotation={[0, 0, 0]}
       />
       <group position={[0, 1.66, 0.35]}>
@@ -73,7 +79,7 @@ export function Desk({ seat, variant, working, monitorTarget, name, fallbackTitl
           key={variant}
           variant={variant}
           working={working}
-          position={[0, 0.02 + chairHeight, -1.15]}
+          position={[0, PERSON_LIFT_Y + chairHeight, PERSON_OFFSET_Z]}
           rotationY={0}
           name={name}
           accent={boss ? '#d2a8ff' : working ? '#7ee787' : '#8b949e'}
