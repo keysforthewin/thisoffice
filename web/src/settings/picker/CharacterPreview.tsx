@@ -6,6 +6,7 @@ import type { CharacterEntry } from '../../../../shared/types.ts';
 import { useStore } from '../../store.ts';
 import { catalogEntry, resolveClip } from '../../characters/catalog.ts';
 import { useCharacterModel } from '../../characters/useCharacterModel.ts';
+import { FurnitureModel } from '../../scene/Desk.tsx';
 
 export function CharacterPreview({ entry }: { entry?: CharacterEntry }) {
   // debounce so arrow-key scrubbing doesn't fetch every intermediate GLB
@@ -15,13 +16,16 @@ export function CharacterPreview({ entry }: { entry?: CharacterEntry }) {
     return () => clearTimeout(t);
   }, [entry]);
 
+  const seated = shown?.pack === 'Mixamo';
+
   return (
     <div style={styles.wrap}>
       <div style={styles.canvasBox}>
         <Canvas
+          key={seated ? 'seated' : 'idle'}
           dpr={[1, 1.5]}
-          camera={{ position: [0, 1.9, 4.4], fov: 40 }}
-          onCreated={({ camera }) => camera.lookAt(0, 1.1, 0)}
+          camera={seated ? { position: [3.1, 2.5, -3.3], fov: 40 } : { position: [0, 1.9, 4.4], fov: 40 }}
+          onCreated={({ camera }) => camera.lookAt(0, 1.1, seated ? -0.6 : 0)}
           shadows
         >
           <color attach="background" args={['#12161c']} />
@@ -29,12 +33,12 @@ export function CharacterPreview({ entry }: { entry?: CharacterEntry }) {
           <hemisphereLight args={['#b8c4dc', '#5a4a3a', 0.5]} />
           <directionalLight castShadow position={[2.5, 4, 2.5]} color="#fff1dc" intensity={1.6} />
           <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-            <circleGeometry args={[1.5, 48]} />
+            <circleGeometry args={[seated ? 2.4 : 1.5, 48]} />
             <meshStandardMaterial color="#1b212a" />
           </mesh>
           {shown && (
             <Suspense fallback={null}>
-              <PreviewModel key={shown.id} entry={shown} />
+              {seated ? <SeatedPreview key={shown.id} entry={shown} /> : <PreviewModel key={shown.id} entry={shown} />}
             </Suspense>
           )}
         </Canvas>
@@ -56,9 +60,60 @@ export function CharacterPreview({ entry }: { entry?: CharacterEntry }) {
             ))}
           </div>
         )}
-        {entry?.pack === 'Mixamo' && <ScaleSlider key={entry.id} id={entry.id} />}
+        {entry?.pack === 'Mixamo' && ADJUSTS.map((spec) => (
+          <AdjustSlider key={`${entry.id}:${spec.field}`} id={entry.id} spec={spec} />
+        ))}
       </div>
     </div>
+  );
+}
+
+/** The character sitting at a real desk+chair — same offsets as Desk.tsx — so
+ *  Size / Seat offset / Chair height are judged against desk-top and seat. */
+function SeatedPreview({ entry }: { entry: CharacterEntry }) {
+  const live = useStore((s) => catalogEntry(s.catalog, entry.id));
+  const chairHeight = live?.chairHeight ?? 0;
+  return (
+    <group rotation={[0, 0.55, 0]}>
+      <FurnitureModel url="/models/furniture/table_medium.gltf" />
+      <FurnitureModel url="/models/furniture/chair_A.gltf" position={[0, chairHeight, -1.45]} />
+      <SeatedModel entry={entry} position={[0, 0.02 + chairHeight, -1.15]} />
+    </group>
+  );
+}
+
+function SeatedModel({ entry, position }: { entry: CharacterEntry; position: [number, number, number] }) {
+  const catalog = useStore((s) => s.catalog);
+  const live = catalogEntry(catalog, entry.id);
+  const scale = live?.scale ?? 1;
+  const seatOffset = live?.seatOffset ?? 0;
+  const { clone, clips } = useCharacterModel(entry.id, entry);
+  const group = useRef<THREE.Group>(null);
+  const { actions } = useAnimations(clips, group);
+
+  useEffect(() => {
+    clone.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        child.castShadow = true;
+        child.frustumCulled = false;
+      }
+    });
+  }, [clone]);
+
+  // resolve in an effect, not render — actions are null until the group mounts (see Person.tsx)
+  const [sit, setSit] = useState<THREE.AnimationAction | null>(null);
+  useEffect(() => {
+    setSit(resolveClip(actions, 'Sit_Chair_Idle', catalog?.clipAliases));
+  }, [actions, catalog]);
+  useEffect(() => {
+    sit?.reset().play();
+    return () => { sit?.stop(); };
+  }, [sit]);
+
+  return (
+    <group ref={group} position={position}>
+      <primitive object={clone} scale={scale} position={[0, seatOffset, 0]} />
+    </group>
   );
 }
 
@@ -98,29 +153,47 @@ function PreviewModel({ entry }: { entry: CharacterEntry }) {
   );
 }
 
-/** Log-scale size control for imported characters: 0.1× – 10×, persisted per character. */
-function ScaleSlider({ id }: { id: string }) {
-  const scale = useStore((s) => catalogEntry(s.catalog, id)?.scale ?? 1);
+interface AdjustSpec {
+  field: 'scale' | 'seatOffset' | 'chairHeight';
+  label: string;
+  min: number; max: number; step: number;
+  fallback: number;
+  /** slider-value ↔ real-value mapping (scale is log10; offsets are identity) */
+  toSlider: (v: number) => number;
+  fromSlider: (v: number) => number;
+  format: (v: number) => string;
+}
+
+const ADJUSTS: AdjustSpec[] = [
+  { field: 'scale', label: 'Size', min: -1, max: 1, step: 0.01, fallback: 1,
+    toSlider: Math.log10, fromSlider: (v) => Number((10 ** v).toFixed(2)), format: (v) => `${v.toFixed(2)}×` },
+  { field: 'seatOffset', label: 'Seat offset', min: -0.5, max: 0.5, step: 0.01, fallback: 0,
+    toSlider: (v) => v, fromSlider: (v) => v, format: (v) => v.toFixed(2) },
+  { field: 'chairHeight', label: 'Chair height', min: -0.4, max: 0.4, step: 0.01, fallback: 0,
+    toSlider: (v) => v, fromSlider: (v) => v, format: (v) => v.toFixed(2) },
+];
+
+/** Generalized slider for scale / seatOffset / chairHeight: same debounce/flush/PATCH pattern. */
+function AdjustSlider({ id, spec }: { id: string; spec: AdjustSpec }) {
+  const value = useStore((s) => catalogEntry(s.catalog, id)?.[spec.field] ?? spec.fallback);
   const patchCharacter = useStore((s) => s.patchCharacter);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pending = useRef<number | null>(null);
 
-  const persist = useCallback((value: number) => {
+  const persist = useCallback((v: number) => {
     pending.current = null;
     fetch(`/api/characters/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scale: value }),
-    }).catch(() => {
-      /* slider keeps working locally; next successful PATCH wins */
-    });
-  }, [id]);
+      body: JSON.stringify({ [spec.field]: v }),
+    }).catch(() => { /* slider keeps working locally; next successful PATCH wins */ });
+  }, [id, spec.field]);
 
-  const apply = (value: number) => {
-    patchCharacter(id, { scale: value });
-    pending.current = value;
+  const apply = (v: number) => {
+    patchCharacter(id, { [spec.field]: v });
+    pending.current = v;
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => persist(value), 300);
+    timer.current = setTimeout(() => persist(v), 300);
   };
 
   // flush a pending change when the picker closes mid-debounce
@@ -131,18 +204,13 @@ function ScaleSlider({ id }: { id: string }) {
 
   return (
     <div style={styles.scaleRow}>
-      <span style={styles.scaleLabel}>Size</span>
-      <input
-        type="range"
-        min={-1}
-        max={1}
-        step={0.01}
-        value={Math.log10(scale)}
-        onChange={(e) => apply(Number((10 ** Number(e.target.value)).toFixed(2)))}
-        style={{ flex: 1 }}
-      />
-      <span style={styles.scaleValue}>{scale.toFixed(2)}×</span>
-      <button style={styles.scaleReset} onClick={() => apply(1)} title="Reset to 1×">↺</button>
+      <span style={styles.scaleLabel}>{spec.label}</span>
+      <input type="range" min={spec.min} max={spec.max} step={spec.step}
+        value={spec.toSlider(value)}
+        onChange={(e) => apply(spec.fromSlider(Number(e.target.value)))}
+        style={{ flex: 1 }} />
+      <span style={styles.scaleValue}>{spec.format(value)}</span>
+      <button style={styles.scaleReset} onClick={() => apply(spec.fallback)} title="Reset">↺</button>
     </div>
   );
 }
