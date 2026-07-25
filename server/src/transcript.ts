@@ -25,6 +25,7 @@ interface TrackedTask {
 }
 
 const BOSS_IDLE_MS = 8000;
+const MAX_BUFFERED_LINES = 500;
 
 export class Transcripts {
   /** toolUseId -> activity (toolUseIds are globally unique) */
@@ -33,6 +34,10 @@ export class Transcripts {
   private pendingTasks = new Map<string, Activity[]>();
   /** agent transcript file -> activity */
   private agentFiles = new Map<string, Activity>();
+  /** sessionId -> subagent files that appeared before their Task tool_use */
+  private unmatchedAgentFiles = new Map<string, string[]>();
+  /** file -> parsed lines held until the file is matched to an activity */
+  private bufferedLines = new Map<string, any[]>();
   private bossIdleTimer: NodeJS.Timeout | null = null;
   /** task-list tracking (TaskCreate/TaskUpdate tools), per project */
   private tasks = new Map<string, Map<string, TrackedTask>>();
@@ -49,13 +54,25 @@ export class Transcripts {
 
   fileAppeared(file: string) {
     if (!isSubagentFile(file)) return;
-    // A new subagent transcript: attach it to the oldest unmatched Task of its session.
     const sessionId = sessionIdForSubagentFile(file);
-    const pending = this.pendingTasks.get(sessionId);
-    const activity = pending?.shift();
+    const activity = this.pendingTasks.get(sessionId)?.shift();
     if (activity) {
-      activity.agentFile = file;
-      this.agentFiles.set(file, activity);
+      this.attachAgentFile(activity, file);
+      return;
+    }
+    // Task tool_use hasn't been read yet (event-order race): pool the file.
+    const pool = this.unmatchedAgentFiles.get(sessionId) ?? [];
+    pool.push(file);
+    this.unmatchedAgentFiles.set(sessionId, pool);
+  }
+
+  private attachAgentFile(activity: Activity, file: string) {
+    activity.agentFile = file;
+    this.agentFiles.set(file, activity);
+    const buffered = this.bufferedLines.get(file);
+    if (buffered) {
+      this.bufferedLines.delete(file);
+      for (const l of buffered) this.handleSubagentLine(activity, l);
     }
   }
 
@@ -69,7 +86,13 @@ export class Transcripts {
         continue;
       }
       if (agentActivity || isSubagentFile(file)) {
-        if (agentActivity) this.handleSubagentLine(agentActivity, line);
+        if (agentActivity) {
+          this.handleSubagentLine(agentActivity, line);
+        } else {
+          const buf = this.bufferedLines.get(file) ?? [];
+          if (buf.length < MAX_BUFFERED_LINES) buf.push(line);
+          this.bufferedLines.set(file, buf);
+        }
         continue;
       }
       this.handleMainLine(file, line);
@@ -177,9 +200,14 @@ export class Transcripts {
     this.activities.set(toolUseId, activity);
 
     if (isTask) {
-      const pending = this.pendingTasks.get(sessionId) ?? [];
-      pending.push(activity);
-      this.pendingTasks.set(sessionId, pending);
+      const file = this.unmatchedAgentFiles.get(sessionId)?.shift();
+      if (file) {
+        this.attachAgentFile(activity, file);
+      } else {
+        const pending = this.pendingTasks.get(sessionId) ?? [];
+        pending.push(activity);
+        this.pendingTasks.set(sessionId, pending);
+      }
     }
 
     if (hired) {
@@ -222,7 +250,10 @@ export class Transcripts {
     const activity = this.activities.get(toolUseId);
     if (!activity) return;
     this.activities.delete(toolUseId);
-    if (activity.agentFile) this.agentFiles.delete(activity.agentFile);
+    if (activity.agentFile) {
+      this.agentFiles.delete(activity.agentFile);
+      this.bufferedLines.delete(activity.agentFile);
+    }
     for (const [sid, list] of this.pendingTasks) {
       this.pendingTasks.set(sid, list.filter((a) => a !== activity));
     }

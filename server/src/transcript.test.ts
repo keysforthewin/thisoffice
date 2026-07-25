@@ -179,3 +179,42 @@ describe('boss replies', () => {
     expect(office.assign).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('subagent attachment race', () => {
+  const taskLine = line({
+    type: 'assistant',
+    sessionId: 'sess-1',
+    cwd: '/home/user/code/myapp',
+    message: { content: [{ type: 'tool_use', id: 'tu-task', name: 'Task', input: { description: 'explore' } }] },
+  });
+  const agentText = line({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: 'hello from agent' }] },
+  });
+
+  it('attaches when the file appears BEFORE the Task tool_use, replaying buffered lines', () => {
+    const { transcripts, enqueued } = makeHarness();
+    transcripts.fileAppeared(AGENT);
+    transcripts.handleLines(AGENT, [agentText]); // buffered, no activity yet
+    expect(enqueued).toEqual([]);
+    transcripts.handleLines(MAIN, [taskLine]);
+    const texts = enqueued.map((e) => e.text);
+    expect(texts).toContain('hello from agent'); // replayed on attach
+  });
+
+  it('still attaches when the Task tool_use arrives first (existing order)', () => {
+    const { transcripts, enqueued } = makeHarness();
+    transcripts.handleLines(MAIN, [taskLine]);
+    transcripts.fileAppeared(AGENT);
+    transcripts.handleLines(AGENT, [agentText]);
+    expect(enqueued.map((e) => e.text)).toContain('hello from agent');
+  });
+
+  it('caps the buffer for files that never match', () => {
+    const { transcripts } = makeHarness();
+    transcripts.fileAppeared(AGENT);
+    const lines = Array.from({ length: 600 }, () => agentText);
+    transcripts.handleLines(AGENT, lines);
+    expect((transcripts as any).bufferedLines.get(AGENT)).toHaveLength(500);
+  });
+});
