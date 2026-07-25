@@ -83,6 +83,40 @@ export interface OfficeState {
   layout?: OfficeLayout;
 }
 
+export interface ModelTokens {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+}
+
+export interface DayStats {
+  tokens: number; // input+output added that day (not cache)
+  toolCalls: number;
+  prompts: number;
+}
+
+export interface UsageStats {
+  /** ISO date-time of the first ever launch (persisted; never resets) */
+  trackingSince: string;
+  tokensByModel: Record<string, ModelTokens>;
+  toolCalls: Record<string, number>; // by tool name
+  prompts: number;
+  sessions: number;
+  subagents: number; // Task tool launches
+  webSearches: number;
+  webFetches: number;
+  turns: number;
+  turnMsTotal: number;
+  longestTurnMs: number;
+  peakHeadcount: number;
+  hires: number;
+  /** keyed YYYY-MM-DD, last ~30 days */
+  byDay: Record<string, DayStats>;
+  /** hour-of-day 0-23 → prompt count */
+  hourCounts: Record<string, number>;
+}
+
 /**
  * Prefix for a monitor stream line that carries an image payload instead of
  * text (e.g. a PNG an agent Read) — either a data-URL or a plain http(s) URL
@@ -103,7 +137,8 @@ export type ServerMsg =
       append?: string;
       clear?: boolean;
     }
-  | { type: 'catalog'; catalog: CharacterCatalog };
+  | { type: 'catalog'; catalog: CharacterCatalog }
+  | { type: 'stats'; stats: UsageStats };
 
 export interface CharacterEntry {
   /** GLB basename, doubles as the `variant` string persisted in office.json */
