@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OfficeState } from '../../shared/types.ts';
-import { resetWhiteboardKeyForTest, useStore } from './store.ts';
+import {
+  enterFocusMode,
+  resetWhiteboardKeyForTest,
+  shouldExitFocusOnMissedClick,
+  useStore,
+  type CameraMode,
+  type CameraPose,
+} from './store.ts';
 
 function makeOffice(overrides: Partial<OfficeState> = {}): OfficeState {
   return {
@@ -13,6 +20,105 @@ function makeOffice(overrides: Partial<OfficeState> = {}): OfficeState {
     ...overrides,
   } as OfficeState;
 }
+
+describe('monitor history', () => {
+  beforeEach(() => {
+    useStore.setState({
+      monitors: {},
+      monitorVersion: {},
+      monitorHistory: {},
+      lastActivity: {},
+      cameraMode: { kind: 'free' },
+      focusScroll: 0,
+    });
+  });
+
+  it('survives clear messages, marking the boundary with a divider', () => {
+    const apply = useStore.getState().applyServerMsg;
+    apply({ type: 'monitor', target: 'e1', append: 'a\nb' } as never);
+    apply({ type: 'monitor', target: 'e1', clear: true, title: 'Bash · proj' } as never);
+    apply({ type: 'monitor', target: 'e1', append: 'c' } as never);
+
+    expect(useStore.getState().monitors['e1'].lines).toEqual(['c']);
+    expect(useStore.getState().monitorHistory['e1']).toEqual(['a', 'b', '── Bash · proj ──', 'c']);
+  });
+
+  it('keeps image marker lines out of history', () => {
+    const apply = useStore.getState().applyServerMsg;
+    apply({ type: 'monitor', target: 'e1', append: 'a\n⟦IMG⟧data:image/png;base64,xyz' } as never);
+    expect(useStore.getState().monitorHistory['e1']).toEqual(['a']);
+  });
+
+  it('snaps back to the live tail when leaving focus mode', () => {
+    useStore.setState({
+      cameraMode: { kind: 'focus', target: 'e1', from: { kind: 'free' } },
+      focusScroll: 42,
+    });
+    useStore.getState().setCameraMode({ kind: 'free' });
+    expect(useStore.getState().focusScroll).toBe(0);
+  });
+
+  it('resets focusScroll when entering focus mode', () => {
+    useStore.setState({ focusScroll: 42 });
+    useStore.getState().setCameraMode({ kind: 'focus', target: 'e1', from: { kind: 'free' } });
+    expect(useStore.getState().focusScroll).toBe(0);
+    expect(useStore.getState().cameraMode).toEqual({ kind: 'focus', target: 'e1', from: { kind: 'free' } });
+  });
+});
+
+describe('enterFocusMode', () => {
+  const pose: CameraPose = { position: [1, 2, 3], quaternion: [0, 0, 0, 1] };
+
+  it('remembers the free-camera pose so exit can fly back to it', () => {
+    expect(enterFocusMode({ kind: 'free' }, 'e1', pose)).toEqual({
+      kind: 'focus',
+      target: 'e1',
+      from: { kind: 'free' },
+      returnPose: pose,
+    });
+  });
+
+  it('does not keep a pose when entering from pov or movie (they reposition themselves)', () => {
+    expect(enterFocusMode({ kind: 'movie' }, 'e1', pose)).toEqual({
+      kind: 'focus',
+      target: 'e1',
+      from: { kind: 'movie' },
+      returnPose: undefined,
+    });
+  });
+
+  it('carries the original from-mode and pose when switching monitors', () => {
+    const first = enterFocusMode({ kind: 'free' }, 'e1', pose);
+    const other: CameraPose = { position: [9, 9, 9], quaternion: [0, 1, 0, 0] };
+    expect(enterFocusMode(first, 'e2', other)).toEqual({
+      kind: 'focus',
+      target: 'e2',
+      from: { kind: 'free' },
+      returnPose: pose,
+    });
+  });
+});
+
+describe('shouldExitFocusOnMissedClick', () => {
+  const focus: CameraMode = { kind: 'focus', target: 'e1', from: { kind: 'free' } };
+
+  it('exits when the whole gesture happened while parked in focus (a genuine click-away)', () => {
+    expect(shouldExitFocusOnMissedClick(focus, focus)).toBe(true);
+  });
+
+  it('ignores the miss when the gesture itself entered focus (tap: camera is mid-flight at click time)', () => {
+    expect(shouldExitFocusOnMissedClick(focus, { kind: 'free' })).toBe(false);
+  });
+
+  it('ignores the miss when the gesture switched focus between monitors', () => {
+    const other: CameraMode = { kind: 'focus', target: 'e2', from: { kind: 'free' } };
+    expect(shouldExitFocusOnMissedClick(focus, other)).toBe(false);
+  });
+
+  it('never exits outside focus mode', () => {
+    expect(shouldExitFocusOnMissedClick({ kind: 'free' }, { kind: 'free' })).toBe(false);
+  });
+});
 
 describe('lastActivity stamping', () => {
   beforeEach(() => {

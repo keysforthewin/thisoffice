@@ -93,11 +93,11 @@ export function Office() {
       <pointLight color="#ffcf96" intensity={10} distance={9} decay={2} position={[width / 2 - 1, 2.4, backZ + 1]} />
       <FurnitureModel url="/models/furniture/shelf_A_big.gltf" position={[width / 2 - 0.4, 0, centerZ + 3.2]} rotation={[0, -Math.PI / 2, 0]} />
       <FurnitureModel url="/models/furniture/cactus_medium_A.gltf" position={[-width / 2 + 0.8, 0, backZ + 0.8]} />
-      <FurnitureModel url="/models/furniture/cactus_small_A.gltf" position={[-width / 2 + 0.6, 0, centerZ + 2]} />
+      <FurnitureModel url="/models/furniture/cactus_small_A.gltf" position={[-width / 2 + 0.6, 0, centerZ + 3]} />
       <FurnitureModel url="/models/furniture/couch_pillows.gltf" position={[-width / 2 + 0.9, 0, centerZ + 0.6]} rotation={[0, Math.PI / 2, 0]} />
       {/* lamp next to the couch */}
-      <FurnitureModel url="/models/furniture/lamp_standing.gltf" position={[-width / 2 + 0.7, 0, centerZ - 0.9]} rotation={[0, Math.PI / 3, 0]} />
-      <pointLight color="#ffcf96" intensity={10} distance={9} decay={2} position={[-width / 2 + 0.7, 2.2, centerZ - 0.9]} />
+      <FurnitureModel url="/models/furniture/lamp_standing.gltf" position={[-width / 2 + 0.7, 0, centerZ - 1.7]} rotation={[0, Math.PI / 3, 0]} />
+      <pointLight color="#ffcf96" intensity={10} distance={9} decay={2} position={[-width / 2 + 0.7, 2.2, centerZ - 1.7]} />
       <WallArt url="/decor/wallart_1.jpg" position={[width / 4 + 0.5, 2.15, backZ + 0.05]} />
       <FurnitureModel url="/models/furniture/pictureframe_medium.gltf" position={[0, 2.25, backZ + 0.04]} />
 

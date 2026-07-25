@@ -63,6 +63,12 @@ export function SettingsPanel() {
             value={office.staffing.maxEmployees}
             onCommit={(v) => api('/settings', 'PUT', { staffing: { maxEmployees: v } })}
           />
+          <StaffingInput
+            label="Idle timeout (s, 0 = stay)"
+            value={office.staffing.idleTimeoutSec}
+            min={0}
+            onCommit={(v) => api('/settings', 'PUT', { staffing: { idleTimeoutSec: v } })}
+          />
         </div>
       </div>
     </div>
@@ -103,7 +109,7 @@ function EmployeeRow({ id, name, variant, status }: { id: string; name: string; 
   );
 }
 
-function StaffingInput({ label, value, onCommit }: { label: string; value: number; onCommit: (v: number) => void }) {
+function StaffingInput({ label, value, min = 1, onCommit }: { label: string; value: number; min?: number; onCommit: (v: number) => void }) {
   const [draft, setDraft] = useState<string | null>(null);
   return (
     <label style={{ flex: 1, fontSize: 12, color: '#9aa4b0' }}>
@@ -111,12 +117,12 @@ function StaffingInput({ label, value, onCommit }: { label: string; value: numbe
       <input
         style={{ ...styles.input, width: '100%', marginTop: 4 }}
         type="number"
-        min={1}
+        min={min}
         value={draft ?? String(value)}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => {
           const v = parseInt(draft ?? '', 10);
-          if (Number.isInteger(v) && v >= 1 && v !== value) onCommit(v);
+          if (Number.isInteger(v) && v >= min && v !== value) onCommit(v);
           setDraft(null);
         }}
       />
@@ -130,7 +136,8 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 20,
   },
   panel: {
-    width: 460, maxHeight: '80vh', overflowY: 'auto', background: '#161a20',
+    width: 460, maxWidth: 'calc(100vw - 32px)', boxSizing: 'border-box',
+    maxHeight: '80vh', overflowY: 'auto', overflowX: 'hidden', background: '#161a20',
     color: '#e6e8eb', borderRadius: 12, padding: 20,
     fontFamily: 'system-ui, sans-serif', border: '1px solid #2c333d',
   },
@@ -139,7 +146,8 @@ const styles: Record<string, React.CSSProperties> = {
   sectionTitle: { fontSize: 13, textTransform: 'uppercase', letterSpacing: 1, color: '#9aa4b0', margin: '18px 0 8px' },
   row: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 },
   input: {
-    flex: 1, background: '#0e1116', border: '1px solid #2c333d', color: '#e6e8eb',
+    flex: 1, minWidth: 0, boxSizing: 'border-box',
+    background: '#0e1116', border: '1px solid #2c333d', color: '#e6e8eb',
     borderRadius: 6, padding: '6px 10px', fontSize: 14,
   },
   badge: { fontSize: 11, padding: '3px 8px', borderRadius: 10, color: '#dfe3e8' },

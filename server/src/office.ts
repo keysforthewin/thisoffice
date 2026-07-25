@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { CharacterCatalog, Employee, OfficeState, InboxItem, TodoItem, ServerMsg, WorkerStatus, StaffingSettings } from '../../shared/types.ts';
-import { CHARACTER_VARIANTS } from '../../shared/types.ts';
+import { CHARACTER_VARIANTS, MONITOR_IMAGE_MARKER } from '../../shared/types.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.resolve(__dirname, '../../data');
@@ -10,15 +10,24 @@ const DATA_FILE = path.join(DATA_DIR, 'office.json');
 
 const INBOX_MAX = 8;
 
-const DEFAULT_STAFFING: StaffingSettings = { minEmployees: 3, maxEmployees: 12 };
+const DEFAULT_STAFFING: StaffingSettings = { minEmployees: 3, maxEmployees: 12, idleTimeoutSec: 60 };
 
-const IDLE_FIRE_MS = 60_000;
+/** Enough to refill a monitor (screens show ~16 rows) without keeping full history. */
+const SCREEN_MAX_LINES = 60;
+
+interface ScreenSnapshot {
+  title: string;
+  lines: string[];
+  /** last MONITOR_IMAGE_MARKER line seen since the last clear */
+  image?: string;
+}
 
 /** Clamp a (possibly hand-edited or partial) staffing config to valid integers, min <= max. */
 export function clampStaffing(cfg: Partial<StaffingSettings> | undefined, base: StaffingSettings = DEFAULT_STAFFING): StaffingSettings {
   const s = { ...base };
   if (Number.isInteger(cfg?.minEmployees)) s.minEmployees = Math.max(1, cfg!.minEmployees!);
   if (Number.isInteger(cfg?.maxEmployees)) s.maxEmployees = Math.max(1, cfg!.maxEmployees!);
+  if (Number.isInteger(cfg?.idleTimeoutSec)) s.idleTimeoutSec = Math.max(0, cfg!.idleTimeoutSec!);
   if (s.minEmployees > s.maxEmployees) s.minEmployees = s.maxEmployees;
   return s;
 }
@@ -29,6 +38,10 @@ interface PersistedState {
   staffing?: StaffingSettings;
   /** per-seat identity memory: an evicted seat's occupant returns with the same name/model */
   roster?: Array<{ seat: number; name: string; variant: string }>;
+  /** boss monitor messages; survive server restarts so the boss screen isn't wiped */
+  inbox?: InboxItem[];
+  /** whiteboard todo list; survives server restarts like the inbox */
+  todos?: { project: string; items: TodoItem[] } | null;
 }
 
 type Listener = (msg: ServerMsg) => void;
@@ -38,6 +51,7 @@ export interface ScreenStream {
   isDraining(id: string): boolean;
   clear(id: string): void;
   setPressure(n: number): void;
+  setBoost(on: boolean): void;
 }
 
 const DEFAULT_EMPLOYEE_NAMES = ['Pat Chindexer', 'Sam Greppleton', 'Dee Bugger'];
@@ -91,10 +105,11 @@ export class Office {
   private idleTimers = new Map<string, NodeJS.Timeout>();
   /** seat -> remembered identity; survives idle-eviction so rehires come back as the same person */
   private roster = new Map<number, { name: string; variant: string }>();
+  /** target -> what's on that monitor right now, so a reconnecting client can rebuild it */
+  private screens = new Map<string, ScreenSnapshot>();
 
   constructor(
     variantPoolProvider?: () => string[],
-    private idleFireMs = IDLE_FIRE_MS,
     private dataFile = DATA_FILE,
   ) {
     this.variantPool = variantPoolProvider?.() ?? loadVariantPool();
@@ -105,7 +120,9 @@ export class Office {
 
   private scheduleIdleTimer(id: string) {
     this.clearIdleTimer(id);
-    const t = setTimeout(() => this.fireIfIdle(id), this.idleFireMs);
+    const sec = this.state.staffing.idleTimeoutSec;
+    if (sec === 0) return; // 0 = employees never leave
+    const t = setTimeout(() => this.fireIfIdle(id), sec * 1000);
     t.unref?.();
     this.idleTimers.set(id, t);
   }
@@ -143,6 +160,7 @@ export class Office {
 
   attachStreamer(s: ScreenStream) {
     this.streamer = s;
+    this.syncPressure();
   }
 
   /** Transcripts registers to replay buffered content when a queued job is picked up. */
@@ -152,6 +170,7 @@ export class Office {
 
   private syncPressure() {
     this.streamer?.setPressure(this.workQueue.length);
+    this.streamer?.setBoost(this.state.employees.length >= this.state.staffing.maxEmployees);
   }
 
   /** Called when an employee's screen queue empties; completes a deferred finish. */
@@ -212,12 +231,15 @@ export class Office {
     }
     // current occupants are the freshest identity for their seat (also seeds legacy files)
     for (const e of persisted.employees) this.roster.set(e.seat, { name: e.name, variant: e.variant });
+    const inbox = (persisted.inbox ?? []).filter((i) => i && i.id && typeof i.text === 'string').slice(-INBOX_MAX);
+    // resume the id sequence past restored items so new ids never collide
+    this.inboxSeq = inbox.reduce((max, i) => Math.max(max, parseInt(i.id.replace('inbox-', ''), 10) || 0), 0);
     return {
       boss: persisted.boss,
       bossStatus: 'idle',
       employees: persisted.employees.map((e) => ({ ...e, status: 'idle' as WorkerStatus, task: null })),
-      inbox: [],
-      todos: null,
+      inbox,
+      todos: persisted.todos && Array.isArray(persisted.todos.items) ? persisted.todos : null,
       staffing: clampStaffing(persisted.staffing),
     };
   }
@@ -230,8 +252,10 @@ export class Office {
       roster: [...this.roster.entries()]
         .sort(([a], [b]) => a - b)
         .map(([seat, r]) => ({ seat, ...r })),
+      inbox: this.state.inbox,
+      todos: this.state.todos,
     };
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.mkdirSync(path.dirname(this.dataFile), { recursive: true });
     fs.writeFileSync(this.dataFile, JSON.stringify(persisted, null, 2));
   }
 
@@ -253,7 +277,33 @@ export class Office {
   }
 
   monitor(target: string, opts: { title?: string; append?: string; clear?: boolean }) {
+    const snap: ScreenSnapshot = opts.clear
+      ? { title: '', lines: [] }
+      : (this.screens.get(target) ?? { title: '', lines: [] });
+    if (opts.title !== undefined) snap.title = opts.title;
+    if (opts.append) {
+      for (const l of opts.append.split('\n')) {
+        if (l.startsWith(MONITOR_IMAGE_MARKER + 'data:image/')) snap.image = l;
+        else snap.lines.push(l);
+      }
+      snap.lines = snap.lines.slice(-SCREEN_MAX_LINES);
+    }
+    this.screens.set(target, snap);
     this.emit({ type: 'monitor', target, ...opts });
+  }
+
+  /** One monitor message per screen that rebuilds it as it looks right now (sent to new connections). */
+  screenReplay(): ServerMsg[] {
+    return [...this.screens.entries()].map(([target, s]): ServerMsg => {
+      const lines = s.image ? [...s.lines, s.image] : s.lines;
+      return {
+        type: 'monitor',
+        target,
+        clear: true,
+        title: s.title,
+        ...(lines.length ? { append: lines.join('\n') } : {}),
+      };
+    });
   }
 
   pushInbox(project: string, text: string) {
@@ -264,6 +314,7 @@ export class Office {
       at: new Date().toISOString(),
     };
     this.state.inbox = [...this.state.inbox, item].slice(-INBOX_MAX);
+    this.save();
     this.broadcastState();
   }
 
@@ -271,6 +322,7 @@ export class Office {
     const item = this.state.inbox.find((i) => i.id === id);
     if (!item) return;
     item.text = text;
+    this.save();
     this.broadcastState();
   }
 
@@ -280,6 +332,7 @@ export class Office {
 
   setTodos(project: string, items: TodoItem[]) {
     this.state.todos = { project, items };
+    this.save();
     this.broadcastState();
   }
 
@@ -339,6 +392,15 @@ export class Office {
     this.setIdle(empId);
   }
 
+  /** Drop a still-queued job (e.g. its parent Task finished before it was ever picked up). */
+  cancelQueued(activityKey: string): boolean {
+    const before = this.workQueue.length;
+    this.workQueue = this.workQueue.filter((j) => j.key !== activityKey);
+    if (this.workQueue.length === before) return false;
+    this.syncPressure();
+    return true;
+  }
+
   employeeFor(activityKey: string): Employee | undefined {
     const id = this.assignments.get(activityKey);
     return this.state.employees.find((e) => e.id === id);
@@ -390,6 +452,7 @@ export class Office {
     this.remember(employee);
     this.state.employees.push(employee);
     this.scheduleIdleTimer(employee.id);
+    this.syncPressure();
     this.save();
     return employee;
   }
@@ -421,7 +484,9 @@ export class Office {
     if (this.state.employees.length === before) return false;
     this.clearIdleTimer(id);
     this.streamer?.clear(id);
+    this.screens.delete(id);
     this.pendingIdle.delete(id);
+    this.syncPressure();
     this.save();
     this.broadcastState();
     return true;
@@ -436,6 +501,12 @@ export class Office {
 
   setStaffing(cfg: Partial<StaffingSettings>) {
     this.state.staffing = clampStaffing(cfg, this.state.staffing);
+    this.syncPressure();
+    // re-arm under the new timeout (clears timers when it's 0)
+    for (const e of this.state.employees) {
+      if (e.status === 'idle') this.scheduleIdleTimer(e.id);
+      else this.clearIdleTimer(e.id);
+    }
     this.save();
     this.broadcastState();
   }

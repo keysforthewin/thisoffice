@@ -1,11 +1,18 @@
 /**
  * Paces screen content so monitors "type" instead of dumping.
  *
- * Per-employee FIFO of lines; a shared ticker emits a few lines per second,
- * scaling with backlog so any queue drains in ≤ ~45s (backlog/300 lines per
- * tick). The server owns pacing so it authoritatively knows when a screen is
- * still busy streaming — that drives employee assignment.
+ * Per-employee FIFO of lines; a shared ticker emits about a line per second,
+ * scaling with backlog so any queue drains in ≤ ~90s (backlog/RATCHET_TICKS
+ * lines per tick). The server owns pacing so it authoritatively knows when a
+ * screen is still busy streaming — that drives employee assignment. A
+ * separate `boost` flag (set by the office when staffing hits max) multiplies
+ * everything on top of the backlog ratchet, so a boosted office under
+ * pressure is even faster.
  */
+
+export const BASE_LINES_PER_TICK = 0.15; // 1 line/sec at 150ms ticks (was 0.5 ≈ 3.3/s)
+export const RATCHET_TICKS = 600; // bursts drain in ≤ ~90s (was 300 → 45s)
+export const BOOST_FACTOR = 4; // at max staffing: 0.6 lines/tick ≈ 4 lines/s
 
 export interface StreamerHooks {
   emit(employeeId: string, text: string): void;
@@ -16,7 +23,7 @@ interface Queue {
   lines: string[];
   /** fractional lines accrued but not yet emitted */
   acc: number;
-  /** lines per tick; ratcheted up at enqueue time so a burst drains in ≤ ~45s */
+  /** lines per tick; ratcheted up at enqueue time so a burst drains in ≤ ~90s */
   rate: number;
 }
 
@@ -24,6 +31,7 @@ export class ScreenStreamer {
   private queues = new Map<string, Queue>();
   private timer: NodeJS.Timeout | null = null;
   private pressure = 0;
+  private boost = false;
 
   constructor(
     private hooks: StreamerHooks,
@@ -34,7 +42,7 @@ export class ScreenStreamer {
     if (!text) return;
     const q = this.queues.get(employeeId) ?? { lines: [], acc: 0, rate: 0 };
     q.lines.push(...text.split('\n'));
-    q.rate = Math.max(q.rate, q.lines.length / 300);
+    q.rate = Math.max(q.rate, q.lines.length / RATCHET_TICKS);
     this.queues.set(employeeId, q);
     if (!this.timer) this.timer = setInterval(() => this.tick(), this.tickMs);
   }
@@ -46,6 +54,11 @@ export class ScreenStreamer {
   /** Backlog pressure from the office work queue: N waiting jobs → screens drain (1+N)× faster. */
   setPressure(n: number) {
     this.pressure = Math.max(0, n);
+  }
+
+  /** Office hit max staffing: every screen kicks into high gear (multiplies on top of pressure). */
+  setBoost(on: boolean) {
+    this.boost = on;
   }
 
   /** Drop an employee's queue without a drained() callback (employee removed). */
@@ -60,7 +73,7 @@ export class ScreenStreamer {
 
   private tick() {
     for (const [id, q] of this.queues) {
-      q.acc += Math.max(0.5, q.rate) * (1 + this.pressure);
+      q.acc += Math.max(BASE_LINES_PER_TICK, q.rate) * (1 + this.pressure) * (this.boost ? BOOST_FACTOR : 1);
       const n = Math.min(q.lines.length, Math.floor(q.acc));
       if (n > 0) {
         q.acc -= n;

@@ -131,6 +131,7 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 
 wss.on('connection', (ws: WebSocket) => {
   ws.send(JSON.stringify({ type: 'state', state: office.getState() }));
+  for (const msg of office.screenReplay()) ws.send(JSON.stringify(msg));
 });
 
 office.subscribe((msg) => {

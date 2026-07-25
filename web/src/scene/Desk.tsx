@@ -5,6 +5,7 @@ import { useGLTF } from '@react-three/drei';
 import { MonitorScreen } from './MonitorScreen.tsx';
 import { Person } from './Person.tsx';
 import { seatTransform } from './layout.ts';
+import { useStore } from '../store.ts';
 
 interface Props {
   seat: number;
@@ -42,6 +43,10 @@ export function FurnitureModel({ url, ...props }: { url: string } & ThreeElement
 export function Desk({ seat, variant, working, monitorTarget, name, fallbackTitle, boss }: Props) {
   const { position, rotationY } = seatTransform(seat);
   const deskScale = boss ? 1.15 : 1;
+  // the focus camera parks where this character's head is — hide them while viewing
+  const focusedHere = useStore(
+    (s) => s.cameraMode.kind === 'focus' && s.cameraMode.target === monitorTarget,
+  );
 
   return (
     <group position={position} rotation={[0, rotationY, 0]}>
@@ -60,15 +65,18 @@ export function Desk({ seat, variant, working, monitorTarget, name, fallbackTitl
       {/* key: remount on variant change — the mixer caches PropertyBindings by (root uuid,
           track name), so an in-place model swap leaves the new rig driven by bindings to the
           old clone's bones (T-pose). KayKit rigs share track names, so every swap collides. */}
-      <Person
-        key={variant}
-        variant={variant}
-        working={working}
-        position={[0, 0.02, -1.15]}
-        rotationY={0}
-        name={name}
-        accent={boss ? '#d2a8ff' : working ? '#7ee787' : '#8b949e'}
-      />
+      {/* visible-toggle (not unmount) so the mixer keeps its bindings — see key comment above */}
+      <group visible={!focusedHere}>
+        <Person
+          key={variant}
+          variant={variant}
+          working={working}
+          position={[0, 0.02, -1.15]}
+          rotationY={0}
+          name={name}
+          accent={boss ? '#d2a8ff' : working ? '#7ee787' : '#8b949e'}
+        />
+      </group>
     </group>
   );
 }

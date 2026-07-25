@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
-import { useStore } from '../store.ts';
+import { enterFocusMode, useStore, type CameraPose } from '../store.ts';
 import { seatTransform, whiteboardTransform } from './layout.ts';
 import { MovieCamera } from './MovieCamera.tsx';
+import { clampToRoom, fitDistance, subjectFor } from './movieShots.ts';
+import { clampOffset, wrapLines } from './monitorScrollback.ts';
+import { pickMonitorTarget } from './monitorPicking.ts';
+import { MONITOR_COLS, MONITOR_ROWS } from './MonitorScreen.tsx';
 
 export interface Pov {
   label: string;
@@ -57,8 +61,15 @@ function isTyping(t: EventTarget | null) {
 function FreeFlyControls() {
   const camera = useThree((s) => s.camera);
   const gl = useThree((s) => s.gl);
+  const scene = useThree((s) => s.scene);
+  const raycaster = useRef(new THREE.Raycaster());
   const keys = useRef(new Set<string>());
   const velocity = useRef(new THREE.Vector3());
+  // what the screen-center crosshair is aimed at while pointer-locked
+  const crosshairTarget = () => {
+    raycaster.current.setFromCamera(CENTER_NDC, camera);
+    return pickMonitorTarget(raycaster.current.intersectObjects(scene.children, true));
+  };
   // Yaw/pitch are the source of truth while flying; deriving them back from the
   // quaternion every event is unstable near straight up/down (yaw snaps).
   const look = useRef({ yaw: 0, pitch: 0 });
@@ -71,7 +82,29 @@ function FreeFlyControls() {
 
     const dom = gl.domElement;
     const onPointerDown = () => {
-      if (document.pointerLockElement !== dom) dom.requestPointerLock();
+      const st = useStore.getState();
+      // a monitor click may have flipped us into focus mode on this same event
+      // (R3F's canvas handler runs first) — don't grab the pointer on the way out
+      if (st.cameraMode.kind !== 'free') return;
+      if (document.pointerLockElement === dom) {
+        // first-person: the crosshair is the cursor
+        const target = crosshairTarget();
+        if (target) {
+          const pose: CameraPose = {
+            position: camera.position.toArray() as [number, number, number],
+            quaternion: camera.quaternion.toArray() as [number, number, number, number],
+          };
+          st.setCameraMode(enterFocusMode(st.cameraMode, target, pose));
+        }
+        return;
+      }
+      // the return glide (or a focus visit) may have reoriented the camera
+      // since mount — resync so the first mouse move continues from this view
+      tmpEuler.setFromQuaternion(camera.quaternion);
+      look.current.yaw = tmpEuler.y;
+      look.current.pitch = THREE.MathUtils.clamp(tmpEuler.x, -MAX_PITCH, MAX_PITCH);
+      // Chrome returns a promise that rejects without user activation — harmless, but noisy
+      (dom.requestPointerLock() as unknown as Promise<void> | undefined)?.catch(() => {});
     };
     const onMouseMove = (e: MouseEvent) => {
       if (document.pointerLockElement !== dom) return;
@@ -108,10 +141,15 @@ function FreeFlyControls() {
       window.removeEventListener('blur', onBlur);
       keys.current.clear();
       if (document.pointerLockElement === dom) document.exitPointerLock();
+      useStore.getState().setMonitorHover(null);
     };
   }, [camera, gl]);
 
   useFrame((_, delta) => {
+    // while locked the cursor is hidden — hover tracking moves to the crosshair
+    if (document.pointerLockElement === gl.domElement) {
+      useStore.getState().setMonitorHover(crosshairTarget());
+    }
     const k = keys.current;
     camera.getWorldDirection(tmpDir);
     tmpRight.crossVectors(tmpDir, UP).normalize();
@@ -133,29 +171,121 @@ function FreeFlyControls() {
   return null;
 }
 
+/** Margin for the focus framing: screen nearly fills the frame. */
+const FOCUS_FIT_MARGIN = 1.1;
+const SCROLL_ROWS_PER_TICK = 3;
+
+/**
+ * Wheel → scrollback while the camera is parked on a monitor. The boss screen
+ * renders the inbox (no line history), so its offset stays pinned at 0.
+ */
+function FocusControls({ target }: { target: string }) {
+  const gl = useThree((s) => s.gl);
+
+  useEffect(() => {
+    // race guard: entering focus from a pointer-locked fly cam
+    if (document.pointerLockElement) document.exitPointerLock();
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      if (target === 'boss') return;
+      const st = useStore.getState();
+      const total = wrapLines(st.monitorHistory[target] ?? [], MONITOR_COLS).length;
+      const step = e.deltaY < 0 ? SCROLL_ROWS_PER_TICK : -SCROLL_ROWS_PER_TICK;
+      st.setFocusScroll(clampOffset(st.focusScroll + step, total, MONITOR_ROWS));
+    };
+    const dom = gl.domElement;
+    dom.addEventListener('wheel', onWheel, { passive: false });
+    return () => dom.removeEventListener('wheel', onWheel);
+  }, [gl, target]);
+
+  return null;
+}
+
 export function CameraRig() {
   const mode = useStore((s) => s.cameraMode);
   const povs = usePovList();
+  const office = useStore((s) => s.office);
   const camera = useThree((s) => s.camera);
+  const size = useThree((s) => s.size);
   const lookTarget = useRef(new THREE.Vector3(0, 1, 0));
+  const prevMode = useRef(mode);
+  /** while set, the free camera is flying back to where it was before a monitor click */
+  const glide = useRef<{ position: THREE.Vector3; quaternion: THREE.Quaternion } | null>(null);
 
   const free = mode.kind === 'free';
 
+  useEffect(() => {
+    const prev = prevMode.current;
+    prevMode.current = mode;
+    if (prev.kind === 'focus' && mode.kind === 'free' && prev.returnPose) {
+      glide.current = {
+        position: new THREE.Vector3().fromArray(prev.returnPose.position),
+        quaternion: new THREE.Quaternion().fromArray(prev.returnPose.quaternion),
+      };
+    } else if (mode.kind !== 'free') {
+      glide.current = null;
+    }
+  }, [mode]);
+
+  // the glide is a convenience, never a cage: any deliberate input takes over
+  useEffect(() => {
+    const cancel = () => (glide.current = null);
+    window.addEventListener('pointerdown', cancel);
+    window.addEventListener('keydown', cancel);
+    return () => {
+      window.removeEventListener('pointerdown', cancel);
+      window.removeEventListener('keydown', cancel);
+    };
+  }, []);
+
+  const focusPose = useMemo(() => {
+    if (mode.kind !== 'focus') return null;
+    const subject = subjectFor(mode.target, office);
+    if (!subject) return null;
+    const fovY = THREE.MathUtils.degToRad((camera as THREE.PerspectiveCamera).fov);
+    const dist = fitDistance(subject.width, subject.height, fovY, size.width / size.height, FOCUS_FIT_MARGIN);
+    const position = clampToRoom(subject.center.clone().addScaledVector(subject.normal, dist), office);
+    return { position, lookAt: subject.center };
+  }, [mode, office, camera, size]);
+
+  // focused employee evicted mid-view → fall back to wherever we came from
+  useEffect(() => {
+    if (mode.kind === 'focus' && !focusPose) useStore.getState().setCameraMode(mode.from);
+  }, [mode, focusPose]);
+
   useFrame((_, delta) => {
-    if (mode.kind !== 'pov') return;
-    const pov = povs[Math.min((mode as { kind: 'pov'; index: number }).index, povs.length - 1)];
-    if (!pov) return;
+    if (mode.kind === 'free' && glide.current) {
+      const g = glide.current;
+      const k = 1 - Math.exp(-delta * 4.5);
+      camera.position.lerp(g.position, k);
+      camera.quaternion.slerp(g.quaternion, k);
+      if (camera.position.distanceTo(g.position) < 0.02 && camera.quaternion.angleTo(g.quaternion) < 0.005) {
+        camera.position.copy(g.position);
+        camera.quaternion.copy(g.quaternion);
+        glide.current = null;
+      }
+      return;
+    }
+    let pose: { position: THREE.Vector3; lookAt: THREE.Vector3 } | null = null;
+    if (mode.kind === 'pov') {
+      pose = povs[Math.min(mode.index, povs.length - 1)] ?? null;
+    } else if (mode.kind === 'focus') {
+      pose = focusPose;
+    }
+    if (!pose) return;
     const k = 1 - Math.exp(-delta * 4.5);
-    camera.position.lerp(pov.position, k);
-    lookTarget.current.lerp(pov.lookAt, k);
+    camera.position.lerp(pose.position, k);
+    lookTarget.current.lerp(pose.lookAt, k);
     camera.lookAt(lookTarget.current);
   });
 
   if (mode.kind === 'movie') return <MovieCamera />;
+  if (mode.kind === 'focus') return <FocusControls target={mode.target} />;
   return free ? <FreeFlyControls /> : null;
 }
 
 const UP = new THREE.Vector3(0, 1, 0);
+const CENTER_NDC = new THREE.Vector2(0, 0);
 const tmpDir = new THREE.Vector3();
 const tmpRight = new THREE.Vector3();
 const tmpWish = new THREE.Vector3();

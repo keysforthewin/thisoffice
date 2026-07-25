@@ -1,11 +1,16 @@
 import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
-import { useFrame } from '@react-three/fiber';
-import { useStore } from '../store.ts';
+import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
+import { enterFocusMode, useStore, type CameraPose } from '../store.ts';
+import { visibleRows, wrapLines } from './monitorScrollback.ts';
 
 const W = 512;
 const H = 320;
 const REDRAW_MS = 200;
+/** faster redraw while the focus camera is parked on this screen so scrolling feels live */
+const FOCUS_REDRAW_MS = 50;
+/** hover feedback: texture color multiplier, eased — subtle, just enough to read as "clickable" */
+const HOVER_BRIGHTNESS = 1.35;
 
 interface Props {
   /** monitor stream key: 'boss' or employee id */
@@ -32,10 +37,23 @@ export function MonitorScreen({ target, working, fallbackTitle, width = 1.35, he
 
   const drawn = useRef({ version: -1, at: 0, blink: false });
   const img = useRef<{ url: string; el: HTMLImageElement; loaded: boolean } | null>(null);
+  const screenMat = useRef<THREE.MeshBasicMaterial>(null);
+  const gl = useThree((s) => s.gl);
 
-  useFrame(({ clock }) => {
+  useFrame(({ clock }, delta) => {
     const t = clock.elapsedTime * 1000;
-    if (t - drawn.current.at < REDRAW_MS) return;
+    const st = useStore.getState();
+    const focused = st.cameraMode.kind === 'focus' && st.cameraMode.target === target;
+    const scroll = focused ? st.focusScroll : 0;
+
+    // hover glow runs every frame (independent of the redraw throttle); a
+    // focused screen is already the whole view — no highlight there
+    if (screenMat.current) {
+      const lit = st.monitorHover === target && !focused;
+      const c = THREE.MathUtils.damp(screenMat.current.color.r, lit ? HOVER_BRIGHTNESS : 1, 12, delta);
+      screenMat.current.color.setScalar(c);
+    }
+    if (t - drawn.current.at < (focused ? FOCUS_REDRAW_MS : REDRAW_MS)) return;
 
     // Load screenshots/images the worker Read (arrives as a data URL in the store).
     const imageUrl = useStore.getState().monitors[target]?.image;
@@ -59,7 +77,8 @@ export function MonitorScreen({ target, working, fallbackTitle, width = 1.35, he
     const version =
       (useStore.getState().monitorVersion[target] ?? 0) +
       (isBoss ? hashState() : 0) +
-      (working ? Math.floor(t / 600) : 0); // cursor blink while working
+      (working && scroll === 0 ? Math.floor(t / 600) : 0) + // cursor blink while working
+      scroll * 8191;
     if (version === drawn.current.version) return;
     drawn.current = { version, at: t, blink: !drawn.current.blink };
     if (isBoss) drawBossScreen(ctx, drawn.current.blink);
@@ -70,22 +89,63 @@ export function MonitorScreen({ target, working, fallbackTitle, width = 1.35, he
         working,
         fallbackTitle,
         drawn.current.blink,
-        img.current?.loaded ? img.current.el : null
+        img.current?.loaded ? img.current.el : null,
+        scroll
       );
     texture.needsUpdate = true;
   });
 
+  const focusMonitor = (e: ThreeEvent<PointerEvent>) => {
+    // while pointer-locked, clicks steer the fly cam — never steal them
+    if (document.pointerLockElement) return;
+    e.stopPropagation();
+    const st = useStore.getState();
+    const cur = st.cameraMode;
+    if (cur.kind === 'focus' && cur.target === target) return;
+    const pose: CameraPose = {
+      position: e.camera.position.toArray() as [number, number, number],
+      quaternion: e.camera.quaternion.toArray() as [number, number, number, number],
+    };
+    gl.domElement.style.cursor = '';
+    st.setCameraMode(enterFocusMode(cur, target, pose));
+  };
+
+  const hoverStart = () => {
+    if (document.pointerLockElement) return; // crosshair raycast owns hover while flying
+    useStore.getState().setMonitorHover(target);
+    gl.domElement.style.cursor = 'pointer';
+  };
+  const hoverEnd = () => {
+    const st = useStore.getState();
+    if (st.monitorHover === target) st.setMonitorHover(null);
+    gl.domElement.style.cursor = '';
+  };
+
   return (
     <group>
       {/* bezel */}
-      <mesh castShadow position={[0, 0, 0.02]}>
+      <mesh
+        castShadow
+        position={[0, 0, 0.02]}
+        userData={{ monitorTarget: target }}
+        onPointerDown={focusMonitor}
+        onPointerEnter={hoverStart}
+        onPointerLeave={hoverEnd}
+      >
         <boxGeometry args={[width + 0.08, height + 0.08, 0.05]} />
         <meshStandardMaterial color="#1a1a1f" roughness={0.6} />
       </mesh>
       {/* screen (faces -z, toward the seated character) */}
-      <mesh position={[0, 0, -0.006]} rotation={[0, Math.PI, 0]}>
+      <mesh
+        position={[0, 0, -0.006]}
+        rotation={[0, Math.PI, 0]}
+        userData={{ monitorTarget: target }}
+        onPointerDown={focusMonitor}
+        onPointerEnter={hoverStart}
+        onPointerLeave={hoverEnd}
+      >
         <planeGeometry args={[width, height]} />
-        <meshBasicMaterial map={texture} toneMapped={false} />
+        <meshBasicMaterial ref={screenMat} map={texture} toneMapped={false} />
       </mesh>
       {/* stand */}
       <mesh castShadow position={[0, -height / 2 - 0.12, 0.02]}>
@@ -102,8 +162,11 @@ const FONT = '13px ui-monospace, Menlo, monospace';
 const LINE_H = 17;
 const MARGIN = 12;
 const TITLE_H = 30;
-const MAX_ROWS = Math.floor((H - TITLE_H - MARGIN) / LINE_H);
-const MAX_COLS = 62;
+/** wrapped rows / columns per screenful — the scroll unit for focus mode */
+export const MONITOR_ROWS = Math.floor((H - TITLE_H - MARGIN) / LINE_H);
+export const MONITOR_COLS = 62;
+const MAX_ROWS = MONITOR_ROWS;
+const MAX_COLS = MONITOR_COLS;
 
 function hashState(): number {
   const s = useStore.getState().office;
@@ -127,25 +190,29 @@ function drawToolScreen(
   working: boolean,
   fallbackTitle: string | undefined,
   blink: boolean,
-  image: HTMLImageElement | null
+  image: HTMLImageElement | null,
+  scroll: number
 ) {
-  const mon = useStore.getState().monitors[target];
+  const st = useStore.getState();
+  const mon = st.monitors[target];
   const title = mon?.title || fallbackTitle || 'idle';
   base(ctx, title, working ? '#7ee787' : '#8b949e');
+
+  if (scroll > 0) {
+    // scrolled into history: render the window from the clear-surviving buffer
+    const wrapped = wrapLines(st.monitorHistory[target] ?? [], MAX_COLS);
+    drawLines(ctx, visibleRows(wrapped, scroll, MAX_ROWS));
+    drawScrollIndicator(ctx, scroll, wrapped.length);
+    return;
+  }
 
   if (image) {
     drawImageBody(ctx, image, mon?.lines ?? []);
     return;
   }
 
-  const lines = wrap(mon?.lines ?? [], MAX_COLS).slice(-MAX_ROWS);
-  ctx.fillStyle = '#c9d1d9';
-  lines.forEach((line, i) => {
-    if (line.startsWith('$') || line.startsWith('>')) ctx.fillStyle = '#79c0ff';
-    else if (line.startsWith('✓')) ctx.fillStyle = '#7ee787';
-    else ctx.fillStyle = '#c9d1d9';
-    ctx.fillText(line, MARGIN, TITLE_H + LINE_H * (i + 1));
-  });
+  const lines = wrapLines(mon?.lines ?? [], MAX_COLS).slice(-MAX_ROWS);
+  drawLines(ctx, lines);
   if (working && blink) {
     const y = TITLE_H + LINE_H * (lines.length + 1);
     if (y < H - MARGIN) {
@@ -153,6 +220,34 @@ function drawToolScreen(
       ctx.fillRect(MARGIN, y - 11, 8, 13);
     }
   }
+}
+
+function drawLines(ctx: CanvasRenderingContext2D, lines: string[]) {
+  lines.forEach((line, i) => {
+    if (line.startsWith('$') || line.startsWith('>')) ctx.fillStyle = '#79c0ff';
+    else if (line.startsWith('✓')) ctx.fillStyle = '#7ee787';
+    else if (line.startsWith('──')) ctx.fillStyle = '#8b949e'; // history divider
+    else ctx.fillStyle = '#c9d1d9';
+    ctx.fillText(line, MARGIN, TITLE_H + LINE_H * (i + 1));
+  });
+}
+
+/** "▲ history" tag in the title bar plus a thin proportional scrollbar at the right edge. */
+function drawScrollIndicator(ctx: CanvasRenderingContext2D, scroll: number, totalRows: number) {
+  ctx.fillStyle = '#0b0f14';
+  ctx.textAlign = 'right';
+  ctx.fillText('▲ history', W - MARGIN, 20);
+  ctx.textAlign = 'left';
+
+  const maxOffset = Math.max(1, totalRows - MAX_ROWS);
+  const trackY = TITLE_H + 4;
+  const trackH = H - trackY - 4;
+  const thumbH = Math.max(20, trackH * Math.min(1, MAX_ROWS / totalRows));
+  const thumbY = trackY + (1 - scroll / maxOffset) * (trackH - thumbH);
+  ctx.fillStyle = 'rgba(139, 148, 158, 0.25)';
+  ctx.fillRect(W - 6, trackY, 4, trackH);
+  ctx.fillStyle = '#8b949e';
+  ctx.fillRect(W - 6, thumbY, 4, thumbH);
 }
 
 /** Contain-fit the Read image below the title bar, latest activity in a strip at the bottom. */
@@ -192,7 +287,7 @@ function drawBossScreen(ctx: CanvasRenderingContext2D, blink: boolean) {
     ctx.fillText(clip(`▸ [${item.project}] ${time}`, MAX_COLS), MARGIN, TITLE_H + LINE_H * (row + 1));
     row++;
     ctx.fillStyle = '#c9d1d9';
-    for (const l of wrap([item.text], MAX_COLS - 2).slice(0, 2)) {
+    for (const l of wrapLines([item.text], MAX_COLS - 2).slice(0, 2)) {
       if (row >= MAX_ROWS) break;
       ctx.fillText('  ' + l, MARGIN, TITLE_H + LINE_H * (row + 1));
       row++;
@@ -206,13 +301,4 @@ function drawBossScreen(ctx: CanvasRenderingContext2D, blink: boolean) {
 
 function clip(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1) + '…' : s;
-}
-
-function wrap(lines: string[], cols: number): string[] {
-  const out: string[] = [];
-  for (const line of lines) {
-    if (line.length <= cols) out.push(line);
-    else for (let i = 0; i < line.length; i += cols) out.push(line.slice(i, i + cols));
-  }
-  return out;
 }

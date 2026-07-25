@@ -19,6 +19,8 @@ export interface BossConfig {
 export interface StaffingSettings {
   minEmployees: number;
   maxEmployees: number;
+  /** seconds an employee may sit idle before being let go; 0 = they never leave */
+  idleTimeoutSec: number;
 }
 
 export interface InboxItem {

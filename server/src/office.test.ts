@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { Office, clampStaffing } from './office.ts';
 
 function makeOffice() {
-  const office = new Office(() => ['Knight', 'Mage', 'Rogue'], undefined, '/nonexistent/office.json');
+  const office = new Office(() => ['Knight', 'Mage', 'Rogue'], '/nonexistent/office.json');
   (office as any).save = () => {}; // keep tests off the real data file
   return office;
 }
@@ -13,16 +15,19 @@ describe('Office drain-aware lifecycle', () => {
   let draining: Set<string>;
   let cleared: string[];
   let pressures: number[];
+  let boosts: boolean[];
 
   beforeEach(() => {
     office = makeOffice();
     draining = new Set();
     cleared = [];
     pressures = [];
+    boosts = [];
     office.attachStreamer({
       isDraining: (id) => draining.has(id),
       clear: (id) => cleared.push(id),
       setPressure: (n) => pressures.push(n),
+      setBoost: (on) => boosts.push(on),
     });
   });
 
@@ -83,10 +88,112 @@ describe('Office drain-aware lifecycle', () => {
   });
 });
 
+describe('inbox persistence', () => {
+  function tempFile() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'office-test-'));
+    return path.join(dir, 'office.json');
+  }
+
+  it('inbox survives a save/load round-trip', () => {
+    const file = tempFile();
+    const office = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
+    office.pushInbox('thisoffice', 'first message');
+    office.pushInbox('thisoffice', 'second message');
+    const reloaded = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
+    expect(reloaded.getState().inbox.map((i) => i.text)).toEqual(['first message', 'second message']);
+  });
+
+  it('new items after a reload never reuse a restored id', () => {
+    const file = tempFile();
+    const office = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
+    office.pushInbox('thisoffice', 'first');
+    const reloaded = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
+    reloaded.pushInbox('thisoffice', 'second');
+    const ids = reloaded.getState().inbox.map((i) => i.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('todos survive a save/load round-trip', () => {
+    const file = tempFile();
+    const office = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
+    office.setTodos('thisoffice', [
+      { content: 'write tests', status: 'completed' },
+      { content: 'persist todos', status: 'in_progress' },
+    ]);
+    const reloaded = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
+    expect(reloaded.getState().todos).toEqual({
+      project: 'thisoffice',
+      items: [
+        { content: 'write tests', status: 'completed' },
+        { content: 'persist todos', status: 'in_progress' },
+      ],
+    });
+  });
+
+  it('a summarizer text update is persisted too', () => {
+    const file = tempFile();
+    const office = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
+    office.pushInbox('thisoffice', 'long raw prompt preview');
+    office.updateInboxText(office.lastInboxId, 'short summary');
+    const reloaded = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
+    expect(reloaded.getState().inbox[0].text).toBe('short summary');
+  });
+});
+
+describe('screen snapshots (monitor replay on connect)', () => {
+  const IMG = '⟦IMG⟧data:image/png;base64,abc';
+
+  it('replay rebuilds a screen: last title, streamed lines, image last', () => {
+    const office = makeOffice();
+    office.monitor('emp-1', { clear: true, title: 'Bash · thisoffice' });
+    office.monitor('emp-1', { append: '$ npm test\nok' });
+    office.monitor('emp-1', { append: IMG + '\n✓ done' });
+    const replay = office.screenReplay();
+    expect(replay).toEqual([
+      {
+        type: 'monitor',
+        target: 'emp-1',
+        clear: true,
+        title: 'Bash · thisoffice',
+        append: ['$ npm test', 'ok', '✓ done', IMG].join('\n'),
+      },
+    ]);
+  });
+
+  it('clear starts a fresh screen and drops the old image', () => {
+    const office = makeOffice();
+    office.monitor('emp-1', { clear: true, title: 'Read · proj' });
+    office.monitor('emp-1', { append: IMG });
+    office.monitor('emp-1', { clear: true, title: 'Bash · proj' });
+    office.monitor('emp-1', { append: 'fresh' });
+    expect(office.screenReplay()).toEqual([
+      { type: 'monitor', target: 'emp-1', clear: true, title: 'Bash · proj', append: 'fresh' },
+    ]);
+  });
+
+  it('keeps only the most recent lines, not full history', () => {
+    const office = makeOffice();
+    office.monitor('emp-1', { clear: true, title: 't' });
+    for (let i = 0; i < 200; i++) office.monitor('emp-1', { append: `line ${i}` });
+    const replay = office.screenReplay()[0] as any;
+    const lines = replay.append.split('\n');
+    expect(lines.length).toBeLessThanOrEqual(60);
+    expect(lines[lines.length - 1]).toBe('line 199');
+  });
+
+  it('removing an employee drops their screen from replay', () => {
+    const office = makeOffice();
+    const emp = office.getState().employees[0];
+    office.monitor(emp.id, { clear: true, title: 'Bash', append: 'hi' });
+    office.remove(emp.id);
+    expect(office.screenReplay()).toEqual([]);
+  });
+});
+
 describe('staffing settings', () => {
   it('defaults to min 3 / max 12', () => {
     const office = makeOffice();
-    expect(office.getState().staffing).toEqual({ minEmployees: 3, maxEmployees: 12 });
+    expect(office.getState().staffing).toEqual({ minEmployees: 3, maxEmployees: 12, idleTimeoutSec: 60 });
   });
 
   it('setStaffing applies valid values and persists via save', () => {
@@ -94,33 +201,33 @@ describe('staffing settings', () => {
     let saved = 0;
     (office as any).save = () => saved++;
     office.setStaffing({ minEmployees: 2, maxEmployees: 8 });
-    expect(office.getState().staffing).toEqual({ minEmployees: 2, maxEmployees: 8 });
+    expect(office.getState().staffing).toEqual({ minEmployees: 2, maxEmployees: 8, idleTimeoutSec: 60 });
     expect(saved).toBe(1);
   });
 
   it('ignores non-integers and floors min at 1; min clamps down to max', () => {
     const office = makeOffice();
     office.setStaffing({ minEmployees: 2.5 as any, maxEmployees: NaN as any });
-    expect(office.getState().staffing).toEqual({ minEmployees: 3, maxEmployees: 12 });
+    expect(office.getState().staffing).toEqual({ minEmployees: 3, maxEmployees: 12, idleTimeoutSec: 60 });
     office.setStaffing({ minEmployees: 0 });
     expect(office.getState().staffing.minEmployees).toBe(1);
     office.setStaffing({ minEmployees: 6, maxEmployees: 4 });
-    expect(office.getState().staffing).toEqual({ minEmployees: 4, maxEmployees: 4 });
+    expect(office.getState().staffing).toEqual({ minEmployees: 4, maxEmployees: 4, idleTimeoutSec: 60 });
   });
 });
 
 describe('clampStaffing (load-time validation)', () => {
   it('clamps a hand-edited persisted value with min > max down to max', () => {
-    expect(clampStaffing({ minEmployees: 10, maxEmployees: 2 })).toEqual({ minEmployees: 2, maxEmployees: 2 });
+    expect(clampStaffing({ minEmployees: 10, maxEmployees: 2 })).toEqual({ minEmployees: 2, maxEmployees: 2, idleTimeoutSec: 60 });
   });
 
   it('ignores non-integers and floors min at 1, same as setStaffing', () => {
-    expect(clampStaffing({ minEmployees: 2.5 as any, maxEmployees: NaN as any })).toEqual({ minEmployees: 3, maxEmployees: 12 });
-    expect(clampStaffing({ minEmployees: 0 })).toEqual({ minEmployees: 1, maxEmployees: 12 });
+    expect(clampStaffing({ minEmployees: 2.5 as any, maxEmployees: NaN as any })).toEqual({ minEmployees: 3, maxEmployees: 12, idleTimeoutSec: 60 });
+    expect(clampStaffing({ minEmployees: 0 })).toEqual({ minEmployees: 1, maxEmployees: 12, idleTimeoutSec: 60 });
   });
 
   it('falls back to defaults when nothing is persisted', () => {
-    expect(clampStaffing(undefined)).toEqual({ minEmployees: 3, maxEmployees: 12 });
+    expect(clampStaffing(undefined)).toEqual({ minEmployees: 3, maxEmployees: 12, idleTimeoutSec: 60 });
   });
 });
 
@@ -136,6 +243,7 @@ describe('work queue', () => {
       isDraining: (id) => draining.has(id),
       clear: () => {},
       setPressure: (n) => pressures.push(n),
+      setBoost: () => {},
     });
     return office;
   }
@@ -187,6 +295,23 @@ describe('work queue', () => {
     expect(office.getState().employees.find((e) => e.id === first.id)!.status).toBe('idle');
   });
 
+  it('cancelQueued removes a queued job and drops pressure', () => {
+    const office = makeQueueOffice();
+    office.setStaffing({ minEmployees: 1, maxEmployees: office.getState().employees.length });
+    const n = office.getState().employees.length;
+    for (let i = 0; i < n; i++) office.assign(`s:t${i}`, 'Bash');
+    office.assign('s:q1', 'Grep'); // queued, pressure 1
+    expect(pressures.at(-1)).toBe(1);
+    expect(office.cancelQueued('s:q1')).toBe(true);
+    expect(pressures.at(-1)).toBe(0);
+    expect(office.cancelQueued('s:q1')).toBe(false); // already gone
+    // freeing an employee now dequeues nothing (the queued job was cancelled)
+    const assigned: string[] = [];
+    office.onAssign((key) => assigned.push(key));
+    office.finish('s:t0');
+    expect(assigned).toEqual([]);
+  });
+
   it('drain-deferred finish also dequeues on notifyDrained', () => {
     const office = makeQueueOffice();
     office.setStaffing({ minEmployees: 1, maxEmployees: office.getState().employees.length });
@@ -205,6 +330,56 @@ describe('work queue', () => {
   });
 });
 
+describe('max-staffing boost', () => {
+  function makeBoostOffice() {
+    const office = makeOffice();
+    const boosts: boolean[] = [];
+    office.attachStreamer({
+      isDraining: () => false,
+      clear: () => {},
+      setPressure: () => {},
+      setBoost: (on) => boosts.push(on),
+    });
+    return { office, boosts };
+  }
+
+  it('attaching the streamer while already at max staffing boosts immediately', () => {
+    const { office, boosts } = makeBoostOffice();
+    office.setStaffing({ maxEmployees: office.getState().employees.length });
+    boosts.length = 0;
+    office.attachStreamer({ isDraining: () => false, clear: () => {}, setPressure: () => {}, setBoost: (on) => boosts.push(on) });
+    expect(boosts.at(-1)).toBe(true);
+  });
+
+  it('hiring up to max staffing turns boost on', () => {
+    const { office, boosts } = makeBoostOffice();
+    office.setStaffing({ maxEmployees: office.getState().employees.length + 1 });
+    expect(boosts.at(-1)).toBe(false); // below max after raising the cap
+    office.hireManual(); // now at max
+    expect(boosts.at(-1)).toBe(true);
+  });
+
+  it('removing an employee below max turns boost off', () => {
+    const { office, boosts } = makeBoostOffice();
+    office.setStaffing({ maxEmployees: office.getState().employees.length }); // at max already
+    expect(boosts.at(-1)).toBe(true);
+    const victim = office.getState().employees[0];
+    office.remove(victim.id);
+    expect(boosts.at(-1)).toBe(false);
+  });
+
+  it('setStaffing raising the cap above headcount turns boost off; lowering it back on', () => {
+    const { office, boosts } = makeBoostOffice();
+    const n = office.getState().employees.length;
+    office.setStaffing({ maxEmployees: n }); // at max
+    expect(boosts.at(-1)).toBe(true);
+    office.setStaffing({ maxEmployees: n + 5 }); // raise cap: no longer at max
+    expect(boosts.at(-1)).toBe(false);
+    office.setStaffing({ maxEmployees: n }); // lower it back to headcount
+    expect(boosts.at(-1)).toBe(true);
+  });
+});
+
 describe('seat identity roster', () => {
   function fillAndHire(office: Office): { extra: any; keys: string[] } {
     const keys = office.getState().employees.map((_, i) => `s:t${i}`);
@@ -215,7 +390,7 @@ describe('seat identity roster', () => {
 
   it('a rehire into an evicted seat gets the same name and variant back', () => {
     const office = makeOffice();
-    office.attachStreamer({ isDraining: () => false, clear: () => {}, setPressure: () => {} });
+    office.attachStreamer({ isDraining: () => false, clear: () => {}, setPressure: () => {}, setBoost: () => {} });
     const { extra, keys } = fillAndHire(office);
     office.rename(extra.id, 'Custom Carl');
     office.setVariant(extra.id, 'Mage');
@@ -233,7 +408,7 @@ describe('seat identity roster', () => {
 
   it('hire fills the lowest free seat, not max+1', () => {
     const office = makeOffice();
-    office.attachStreamer({ isDraining: () => false, clear: () => {}, setPressure: () => {} });
+    office.attachStreamer({ isDraining: () => false, clear: () => {}, setPressure: () => {}, setBoost: () => {} });
     const gapSeat = office.getState().employees[0].seat; // seat 1
     const gapId = office.getState().employees[0].id;
     office.remove(gapId);
@@ -270,7 +445,7 @@ describe('seat identity roster', () => {
 
     // boot a new office from that file: rehire restores the identity
     vi.spyOn(fs, 'readFileSync').mockReturnValueOnce(JSON.stringify(persisted));
-    const reloaded = new Office(() => ['Knight', 'Mage', 'Rogue'], undefined, '/nonexistent/office.json');
+    const reloaded = new Office(() => ['Knight', 'Mage', 'Rogue'], '/nonexistent/office.json');
     (reloaded as any).save = () => {};
     const rehire = reloaded.hireManual();
     expect(rehire.seat).toBe(1);
@@ -283,9 +458,9 @@ describe('idle eviction', () => {
   afterEach(() => vi.useRealTimers());
 
   function makeEvictionOffice() {
-    const office = new Office(() => ['Knight', 'Mage', 'Rogue'], 60_000, '/nonexistent/office.json');
+    const office = new Office(() => ['Knight', 'Mage', 'Rogue'], '/nonexistent/office.json');
     (office as any).save = () => {};
-    office.attachStreamer({ isDraining: () => false, clear: () => {}, setPressure: () => {} });
+    office.attachStreamer({ isDraining: () => false, clear: () => {}, setPressure: () => {}, setBoost: () => {} });
     return office;
   }
 
@@ -338,6 +513,41 @@ describe('idle eviction', () => {
     vi.advanceTimersByTime(120_000);
     expect(office.getState().employees.find((e) => e.id === a.id)).toBeDefined();
     expect(office.getState().employees.find((e) => e.id === a.id)!.status).toBe('working');
+  });
+
+  it('idleTimeoutSec 0 means employees are never evicted', () => {
+    const office = makeEvictionOffice();
+    office.setStaffing({ idleTimeoutSec: 0 });
+    const extra = office.hireManual(); // idle from birth
+    vi.advanceTimersByTime(600_000);
+    expect(office.getState().employees.find((e) => e.id === extra.id)).toBeDefined();
+  });
+
+  it('setting idleTimeoutSec to 0 cancels a pending eviction; restoring it re-arms', () => {
+    const office = makeEvictionOffice();
+    const extra = office.hireManual();
+    vi.advanceTimersByTime(30_000); // halfway to eviction
+    office.setStaffing({ idleTimeoutSec: 0 });
+    vi.advanceTimersByTime(600_000);
+    expect(office.getState().employees.find((e) => e.id === extra.id)).toBeDefined();
+    office.setStaffing({ idleTimeoutSec: 10 });
+    vi.advanceTimersByTime(10_001);
+    expect(office.getState().employees.find((e) => e.id === extra.id)).toBeUndefined();
+  });
+
+  it('a shorter timeout applies to already-idle employees', () => {
+    const office = makeEvictionOffice();
+    const extra = office.hireManual();
+    office.setStaffing({ idleTimeoutSec: 5 });
+    vi.advanceTimersByTime(5_001);
+    expect(office.getState().employees.find((e) => e.id === extra.id)).toBeUndefined();
+  });
+
+  it('clampStaffing floors idleTimeoutSec at 0 and ignores non-integers', () => {
+    expect(clampStaffing({ idleTimeoutSec: -5 }).idleTimeoutSec).toBe(0);
+    expect(clampStaffing({ idleTimeoutSec: 2.5 as any }).idleTimeoutSec).toBe(60);
+    expect(clampStaffing({ idleTimeoutSec: 0 }).idleTimeoutSec).toBe(0);
+    expect(clampStaffing({ idleTimeoutSec: 300 }).idleTimeoutSec).toBe(300);
   });
 
   it('timers from construction evict leftover extras with no activity at all', () => {

@@ -33,6 +33,7 @@ function makeHarness(opts: { queue?: boolean } = {}) {
       };
     }),
     finish: vi.fn((key: string) => finished.push(key)),
+    cancelQueued: vi.fn(),
     monitor: vi.fn((target: string, opts: any) => monitors.push({ target, ...opts })),
     setBossStatus: vi.fn(),
     pushInbox: vi.fn(),
@@ -134,10 +135,10 @@ describe('subagent flow', () => {
     t.fileAppeared(AGENT);
   }
 
-  it('streams subagent text, thinking (💭-prefixed), tool_use, and tool_result in full', () => {
+  it('streams subagent text, thinking (💭-prefixed) on the Task screen; tool_use fans out to its own employee', () => {
     const { transcripts, enqueued } = makeHarness();
     startTask(transcripts);
-    const empId = enqueued[0].id;
+    const taskEmpId = enqueued[0].id;
 
     transcripts.handleLines(AGENT, [
       line({
@@ -158,11 +159,149 @@ describe('subagent flow', () => {
       }),
     ]);
 
-    const texts = enqueued.filter((e) => e.id === empId).map((e) => e.text);
-    expect(texts).toContain('💭 let me look at the files');
-    expect(texts).toContain('Reading the config now.');
-    expect(texts).toContain('> Read read /app/config.ts');
-    expect(texts).toContain('export const config = {...}');
+    const taskTexts = enqueued.filter((e) => e.id === taskEmpId).map((e) => e.text);
+    expect(taskTexts).toContain('💭 let me look at the files');
+    expect(taskTexts).toContain('Reading the config now.');
+    expect(taskTexts).toContain('> Read'); // breadcrumb only; full preview/result land on the child's own employee
+    expect(taskTexts).not.toContain('export const config = {...}\n\n✓ done');
+
+    const childTexts = enqueued.filter((e) => e.id !== taskEmpId).map((e) => e.text);
+    expect(childTexts).toContain('read /app/config.ts');
+    expect(childTexts).toContain('export const config = {...}\n\n✓ done');
+  });
+});
+
+describe('subagent tool fan-out', () => {
+  function startTask(t: Transcripts) {
+    t.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'tool_use', id: 'tu-task', name: 'Task', input: { description: 'explore' } }] },
+      }),
+    ]);
+    t.fileAppeared(AGENT);
+  }
+
+  it('a subagent tool_use gets its own assign/monitor/preview; the Task screen gets a breadcrumb', () => {
+    const { transcripts, office, enqueued, monitors } = makeHarness();
+    startTask(transcripts);
+    const taskEmpId = enqueued[0].id; // emp-1
+
+    transcripts.handleLines(AGENT, [
+      line({
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', id: 'tu-sub-1', name: 'Read', input: { file_path: '/app/config.ts' } }] },
+      }),
+    ]);
+
+    expect(office.assign).toHaveBeenCalledWith('sess-1:tu-sub-1', 'Read');
+    const childMonitor = monitors.find((m) => m.title === 'Read · myapp');
+    expect(childMonitor).toBeDefined();
+    expect(childMonitor.target).not.toBe(taskEmpId);
+    expect(enqueued.some((e) => e.id === childMonitor.target && e.text === 'read /app/config.ts')).toBe(true);
+    expect(enqueued.some((e) => e.id === taskEmpId && e.text === '> Read')).toBe(true);
+  });
+
+  it("a fanned-out child's tool_result finishes on its own employee via finishTool", () => {
+    const { transcripts, enqueued, finished } = makeHarness();
+    startTask(transcripts);
+    transcripts.handleLines(AGENT, [
+      line({
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', id: 'tu-sub-1', name: 'Read', input: { file_path: '/app/config.ts' } }] },
+      }),
+    ]);
+    const childEmpId = enqueued.at(-1)!.id;
+    transcripts.handleLines(AGENT, [
+      line({
+        type: 'user',
+        message: { content: [{ type: 'tool_result', tool_use_id: 'tu-sub-1', content: 'export const config = {...}' }] },
+      }),
+    ]);
+    const childTexts = enqueued.filter((e) => e.id === childEmpId).map((e) => e.text);
+    expect(childTexts).toContain('export const config = {...}\n\n✓ done');
+    expect(finished).toContain('sess-1:tu-sub-1');
+  });
+
+  it('a nested Task/Agent tool_use inside a subagent stays a one-line breadcrumb, not fanned out', () => {
+    const { transcripts, office, enqueued } = makeHarness();
+    startTask(transcripts);
+    const assignCallsBefore = vi.mocked(office.assign).mock.calls.length;
+    transcripts.handleLines(AGENT, [
+      line({
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', id: 'tu-nested', name: 'Task', input: { description: 'nested work' } }] },
+      }),
+    ]);
+    expect(vi.mocked(office.assign).mock.calls.length).toBe(assignCallsBefore); // no new assign for the nested Task
+    expect(enqueued.some((e) => e.text.startsWith('> Task'))).toBe(true);
+  });
+
+  it('a Task finishing closes any still-open (assigned) children so their desk is freed', () => {
+    const { transcripts, enqueued, finished } = makeHarness();
+    startTask(transcripts);
+    transcripts.handleLines(AGENT, [
+      line({
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', id: 'tu-sub-1', name: 'Read', input: { file_path: '/app/config.ts' } }] },
+      }),
+    ]);
+    const childEmpId = enqueued.at(-1)!.id;
+    // The Task's own tool_result arrives before the child's ever does (race being guarded against).
+    transcripts.handleLines(MAIN, [
+      line({
+        type: 'user',
+        sessionId: 'sess-1',
+        message: { content: [{ type: 'tool_result', tool_use_id: 'tu-task', content: 'done exploring' }] },
+      }),
+    ]);
+    expect(finished).toContain('sess-1:tu-sub-1');
+    expect(enqueued.some((e) => e.id === childEmpId && e.text === '✓ done')).toBe(true);
+  });
+
+  it('a still-queued (unassigned) child is cancelled, not left stranded, when its Task finishes', () => {
+    const h = makeHarness({ queue: true });
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'tool_use', id: 'tu-task', name: 'Task', input: { description: 'explore' } }] },
+      }),
+    ]);
+    h.transcripts.fileAppeared(AGENT);
+    h.transcripts.handleLines(AGENT, [
+      line({
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', id: 'tu-sub-1', name: 'Read', input: { file_path: '/app/config.ts' } }] },
+      }),
+    ]);
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'user',
+        sessionId: 'sess-1',
+        message: { content: [{ type: 'tool_result', tool_use_id: 'tu-task', content: 'done exploring' }] },
+      }),
+    ]);
+    expect(h.office.cancelQueued).toHaveBeenCalledWith('sess-1:tu-sub-1');
+  });
+
+  it('a duplicate/replayed subagent tool_use line does not re-fan-out (no second assign/monitor/preview/breadcrumb)', () => {
+    const { transcripts, office, enqueued, monitors } = makeHarness();
+    startTask(transcripts);
+    const dupLine = line({
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', id: 'tu-sub-1', name: 'Read', input: { file_path: '/app/config.ts' } }] },
+    });
+    transcripts.handleLines(AGENT, [dupLine]);
+    transcripts.handleLines(AGENT, [dupLine]); // replayed/duplicate line, same toolUseId
+
+    expect(vi.mocked(office.assign).mock.calls.filter((c) => c[0] === 'sess-1:tu-sub-1')).toHaveLength(1);
+    expect(monitors.filter((m) => m.title === 'Read · myapp')).toHaveLength(1);
+    expect(enqueued.filter((e) => e.text === 'read /app/config.ts')).toHaveLength(1);
+    expect(enqueued.filter((e) => e.text === '> Read')).toHaveLength(1);
   });
 });
 
@@ -244,6 +383,23 @@ describe('subagent attachment race', () => {
     transcripts.fileAppeared(AGENT);
     transcripts.handleLines(AGENT, [agentText]);
     expect(enqueued.map((e) => e.text)).toContain('hello from agent');
+  });
+
+  it('fans out a tool_use replayed from the buffer when the file appeared before the Task tool_use', () => {
+    const { transcripts, office, enqueued, monitors } = makeHarness();
+    transcripts.fileAppeared(AGENT);
+    transcripts.handleLines(AGENT, [
+      line({
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', id: 'tu-sub-1', name: 'Read', input: { file_path: '/app/config.ts' } }] },
+      }),
+    ]); // buffered, no activity yet
+    expect(enqueued).toEqual([]);
+    transcripts.handleLines(MAIN, [taskLine]);
+    expect(office.assign).toHaveBeenCalledWith('sess-1:tu-sub-1', 'Read');
+    const childMonitor = monitors.find((m) => m.title === 'Read · myapp');
+    expect(childMonitor).toBeDefined();
+    expect(enqueued.some((e) => e.id === childMonitor.target && e.text === 'read /app/config.ts')).toBe(true);
   });
 
   it('caps the buffer for files that never match', () => {

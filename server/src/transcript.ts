@@ -17,12 +17,26 @@ interface Activity {
   employeeId: string | null;
   tool: string;
   isTask: boolean;
+  sessionId: string;
+  project: string;
   agentFile?: string;
   /** set while waiting in the office work queue */
   pendingTitle?: string;
   buffer?: string[];
   doneWhileQueued?: boolean;
+  /** Task activities only: toolUseIds of tools fanned out from its subagent transcript */
+  children?: Set<string>;
+  /** fanned-out child activities only: the Task activity that spawned them */
+  parentTask?: Activity;
 }
+
+/**
+ * Subagent tools that stay as one-line breadcrumbs on the Task's own screen instead of
+ * fanning out to their own employee: nested Task/Agent would poison the FIFO subagent-file
+ * matching (keyed by parent sessionId), and the whiteboard tools must not mutate the board
+ * from subagent context.
+ */
+const FANOUT_EXCLUDED = new Set(['Task', 'Agent', 'TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet', 'TaskStop', 'TaskOutput']);
 
 interface TrackedTask {
   content: string;
@@ -195,6 +209,8 @@ export class Transcripts {
         employeeId: null,
         tool: 'reply',
         isTask: false,
+        sessionId,
+        project,
         pendingTitle: `Reporting to the Boss · ${project}`,
         buffer: [parts.join('\n')],
         doneWhileQueued: true,
@@ -241,20 +257,10 @@ export class Transcripts {
 
     const isTask = name === 'Task' || name === 'Agent';
     const label = isTask ? `Agent: ${input.description ?? input.subagent_type ?? 'subagent'}` : name;
-    const { employee, hired } = this.office.assign(`${sessionId}:${toolUseId}`, label);
-    const activity: Activity = {
-      key: `${sessionId}:${toolUseId}`,
-      employeeId: employee?.id ?? null,
-      tool: name,
-      isTask,
-    };
-    if (!employee) {
-      activity.pendingTitle = `${label} · ${project}`;
-      activity.buffer = [];
-      this.queued.set(activity.key, activity);
-    }
-    this.activities.set(toolUseId, activity);
+    const activity = this.startToolActivity(sessionId, project, tu, label);
 
+    // Task-file matching stays here (not in the shared core): fanned-out subagent
+    // tools never reach this branch, since Task/Agent are excluded from fan-out.
     let attachFile: string | undefined;
     if (isTask) {
       const file = this.unmatchedAgentFiles.get(sessionId)?.shift();
@@ -266,6 +272,41 @@ export class Transcripts {
         this.pendingTasks.set(sessionId, pending);
       }
     }
+
+    // Attach (and replay any buffered lines) only after the clear/title/input
+    // preview are queued, so a pooled file's backlog renders after them, not before.
+    if (attachFile) {
+      this.attachAgentFile(activity, attachFile);
+    }
+  }
+
+  /**
+   * Shared core for claiming an employee/desk for a tool_use, used by both the main-session
+   * flow (`startTool`) and subagent fan-out (`handleSubagentLine`). `tu` needs only `id`,
+   * `name`, and `input` (the same shape in both contexts).
+   */
+  private startToolActivity(sessionId: string, project: string, tu: any, label: string): Activity {
+    const toolUseId: string = tu.id;
+    const name: string = tu.name ?? 'Tool';
+    const input = tu.input ?? {};
+    const isTask = name === 'Task' || name === 'Agent';
+
+    const { employee, hired } = this.office.assign(`${sessionId}:${toolUseId}`, label);
+    const activity: Activity = {
+      key: `${sessionId}:${toolUseId}`,
+      employeeId: employee?.id ?? null,
+      tool: name,
+      isTask,
+      sessionId,
+      project,
+    };
+    if (isTask) activity.children = new Set();
+    if (!employee) {
+      activity.pendingTitle = `${label} · ${project}`;
+      activity.buffer = [];
+      this.queued.set(activity.key, activity);
+    }
+    this.activities.set(toolUseId, activity);
 
     if (hired && employee && employee.name === 'New Hire') {
       nameNewHire(label).then((n) => {
@@ -280,11 +321,7 @@ export class Transcripts {
       this.emitTo(activity, inputPreview(name, input));
     }
 
-    // Attach (and replay any buffered lines) only after the clear/title/input
-    // preview are queued, so a pooled file's backlog renders after them, not before.
-    if (attachFile) {
-      this.attachAgentFile(activity, attachFile);
-    }
+    return activity;
   }
 
   private finishTool(result: any) {
@@ -317,10 +354,41 @@ export class Transcripts {
     const activity = this.activities.get(toolUseId);
     if (!activity) return;
     this.activities.delete(toolUseId);
+    activity.parentTask?.children?.delete(toolUseId);
     if (activity.agentFile) {
       this.agentFiles.delete(activity.agentFile);
       this.bufferedLines.delete(activity.agentFile);
       this.finishedAgentFiles.add(activity.agentFile);
+    }
+    // A finishing Task's subagent tool_result stream can race the file-teardown above
+    // (finishedAgentFiles) or never arrive at all; close any children still open so
+    // their desks don't stay "working" forever.
+    if (activity.children?.size) {
+      const openChildren = [...activity.children]
+        .map((id): [string, Activity] | undefined => {
+          const child = this.activities.get(id);
+          return child ? [id, child] : undefined;
+        })
+        .filter((pair): pair is [string, Activity] => pair !== undefined);
+      // Cancel every still-queued sibling FIRST, in its own pass. office.finish on an
+      // assigned sibling synchronously dequeues+reassigns the office's work queue
+      // (onQueuedAssigned), which would flip a still-queued sibling's employeeId out
+      // from under a single combined loop before we got to it — misclassifying real,
+      // just-assigned work as "already done". cancelQueued has no reentrant callback,
+      // so once this pass is done no sibling can be dequeued mid-loop.
+      for (const [id, child] of openChildren) {
+        if (child.employeeId) continue;
+        this.activities.delete(id);
+        this.queued.delete(child.key);
+        this.office.cancelQueued(child.key);
+      }
+      for (const [id, child] of openChildren) {
+        if (!child.employeeId) continue;
+        this.activities.delete(id);
+        this.emitTo(child, '✓ done');
+        this.office.finish(child.key);
+      }
+      activity.children.clear();
     }
     for (const [sid, list] of this.pendingTasks) {
       this.pendingTasks.set(sid, list.filter((a) => a !== activity));
@@ -360,7 +428,19 @@ export class Transcripts {
         } else if (b.type === 'thinking' && b.thinking?.trim()) {
           this.emitTo(activity, '💭 ' + b.thinking.trim());
         } else if (b.type === 'tool_use') {
-          this.emitTo(activity, `> ${b.name} ${oneLine(inputPreview(b.name, b.input ?? {}))}`);
+          if (FANOUT_EXCLUDED.has(b.name)) {
+            this.emitTo(activity, `> ${b.name} ${oneLine(inputPreview(b.name, b.input ?? {}))}`);
+            continue;
+          }
+          // Duplicate/replayed line (same toolUseId already fanned out): skip entirely,
+          // breadcrumb included, mirroring startTool's own activities.has dedupe guard.
+          if (this.activities.has(b.id)) continue;
+          // Fan out: this subagent tool gets its own employee/monitor via the same
+          // machinery main-session tools use; the Task's screen just gets a breadcrumb.
+          this.emitTo(activity, `> ${b.name}`);
+          const child = this.startToolActivity(activity.sessionId, activity.project, b, b.name);
+          child.parentTask = activity;
+          activity.children?.add(b.id);
         }
       }
       return;
@@ -368,6 +448,12 @@ export class Transcripts {
     if (line.type === 'user') {
       for (const b of contentBlocks(line.message?.content)) {
         if (b.type !== 'tool_result') continue;
+        if (this.activities.has(b.tool_use_id)) {
+          // A fanned-out child's result: route through the normal finishTool path
+          // (safe — pendingTaskCreates/Updates only ever hold main-session ids).
+          this.finishTool(b);
+          continue;
+        }
         for (const img of extractImages(b.content)) {
           this.emitTo(activity, MONITOR_IMAGE_MARKER + img);
         }

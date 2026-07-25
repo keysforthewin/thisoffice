@@ -1,6 +1,6 @@
-import { Suspense, useEffect } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
-import { useStore } from './store.ts';
+import { shouldExitFocusOnMissedClick, useStore, type CameraMode } from './store.ts';
 import { Office } from './scene/Office.tsx';
 import { CameraRig, usePovList } from './scene/CameraRig.tsx';
 import { SettingsPanel } from './settings/SettingsPanel.tsx';
@@ -19,6 +19,23 @@ export default function App() {
     loadCatalog().then(useStore.getState().setCatalog);
   }, []);
 
+  // crosshair only makes sense while the fly-cam owns the (hidden) cursor
+  const [pointerLocked, setPointerLocked] = useState(false);
+  useEffect(() => {
+    const onLockChange = () => setPointerLocked(!!document.pointerLockElement);
+    document.addEventListener('pointerlockchange', onLockChange);
+    return () => document.removeEventListener('pointerlockchange', onLockChange);
+  }, []);
+
+  // capture phase runs before R3F's canvas handlers can change the mode, so
+  // this records what mode each click gesture STARTED in (see onPointerMissed)
+  const gestureStartMode = useRef<CameraMode | null>(null);
+  useEffect(() => {
+    const onDown = () => (gestureStartMode.current = useStore.getState().cameraMode);
+    window.addEventListener('pointerdown', onDown, true);
+    return () => window.removeEventListener('pointerdown', onDown, true);
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
@@ -31,7 +48,10 @@ export default function App() {
         setMode(cur.kind === 'free' ? { kind: 'pov', index: 0 } : { kind: 'free' });
       } else if (e.key === 'Escape') {
         if (useStore.getState().settingsOpen) setSettingsOpen(false);
+        else if (cur.kind === 'focus') setMode(cur.from);
         else setMode({ kind: 'free' });
+      } else if (e.key === 'End' && cur.kind === 'focus') {
+        useStore.getState().setFocusScroll(0); // snap back to the live tail
       } else if ((e.key === 'Tab' || e.key === 'ArrowRight') && cur.kind === 'pov') {
         e.preventDefault();
         setMode({ kind: 'pov', index: (cur.index + 1) % povCount });
@@ -45,7 +65,19 @@ export default function App() {
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
-      <Canvas shadows camera={{ position: [7.5, 6.5, 9], fov: 50 }}>
+      <Canvas
+        shadows
+        camera={{ position: [7.5, 6.5, 9], fov: 50 }}
+        onPointerMissed={() => {
+          // click away from the monitor exits — but only if this same gesture
+          // didn't just enter focus (a tap's click raycasts mid-camera-flight
+          // and "misses", which must not bounce us straight back out)
+          const cur = useStore.getState().cameraMode;
+          if (shouldExitFocusOnMissedClick(cur, gestureStartMode.current) && cur.kind === 'focus') {
+            setMode(cur.from);
+          }
+        }}
+      >
         <color attach="background" args={['#141218']} />
         <fog attach="fog" args={['#141218', 20, 46]} />
         <ambientLight intensity={0.5} color="#ffe9d0" />
@@ -56,20 +88,43 @@ export default function App() {
         <CameraRig />
       </Canvas>
 
+      {mode.kind === 'free' && pointerLocked && <Crosshair />}
       <Hud connected={connected} mode={mode} onSettings={() => setSettingsOpen(true)} />
       {settingsOpen && <SettingsPanel />}
     </div>
   );
 }
 
+/** Center-screen aim dot for the pointer-locked fly cam; fills in over a monitor. */
+function Crosshair() {
+  const aimed = useStore((s) => s.monitorHover !== null);
+  return (
+    <div
+      style={{
+        ...hudStyles.crosshair,
+        background: aimed ? 'rgba(255,255,255,0.85)' : 'transparent',
+      }}
+    />
+  );
+}
+
 function Hud({ connected, mode, onSettings }: { connected: boolean; mode: ReturnType<typeof useStore.getState>['cameraMode']; onSettings: () => void }) {
   const povs = usePovList();
+  const office = useStore((s) => s.office);
+  const focusName =
+    mode.kind === 'focus'
+      ? mode.target === 'boss'
+        ? office?.boss.name ?? 'Boss'
+        : office?.employees.find((e) => e.id === mode.target)?.name ?? 'screen'
+      : '';
   const label =
     mode.kind === 'free'
       ? 'Free camera — click to look (Esc releases) · WASD fly · E/Space up · C down · Shift slow · V for POV tour · M movie mode'
       : mode.kind === 'movie'
         ? 'Movie mode — auto-follows the action · arrows cut now · M/Esc exit'
-        : `POV: ${povs[Math.min(mode.index, povs.length - 1)]?.label ?? ''} — Tab/← → cycle · V/Esc exit`;
+        : mode.kind === 'focus'
+          ? `Screen: ${focusName} — scroll wheel for history · End = live · Esc or click away = back`
+          : `POV: ${povs[Math.min(mode.index, povs.length - 1)]?.label ?? ''} — Tab/← → cycle · V/Esc exit`;
   return (
     <>
       <div style={hudStyles.topLeft}>
@@ -94,6 +149,12 @@ const hudStyles: Record<string, React.CSSProperties> = {
     color: '#9aa4b0', fontFamily: 'system-ui, sans-serif', fontSize: 13,
     background: 'rgba(14,17,22,0.65)', padding: '6px 14px', borderRadius: 16,
     pointerEvents: 'none', whiteSpace: 'nowrap',
+  },
+  crosshair: {
+    position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+    width: 8, height: 8, borderRadius: '50%',
+    border: '1.5px solid rgba(255,255,255,0.75)',
+    pointerEvents: 'none', transition: 'background 120ms',
   },
   gear: {
     position: 'absolute', top: 12, right: 16, background: 'rgba(14,17,22,0.65)',
