@@ -129,3 +129,53 @@ describe('subagent flow', () => {
     expect(texts).toContain('export const config = {...}');
   });
 });
+
+describe('boss replies', () => {
+  it('assigns a pool employee, streams thinking + text, finishes immediately', () => {
+    const { transcripts, office, enqueued, monitors, finished } = makeHarness();
+    transcripts.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        uuid: 'msg-uuid-1',
+        cwd: '/home/user/code/myapp',
+        message: {
+          content: [
+            { type: 'thinking', thinking: 'planning the fix' },
+            { type: 'text', text: 'I found the bug in the parser.' },
+          ],
+        },
+      }),
+    ]);
+    expect(office.assign).toHaveBeenCalledWith('sess-1:msg-uuid-1', 'Reporting to the Boss');
+    expect(monitors[0]).toMatchObject({ target: 'emp-1', clear: true, title: 'Reporting to the Boss · myapp' });
+    expect(enqueued[0].text).toBe('💭 planning the fix\nI found the bug in the parser.');
+    expect(finished).toEqual(['sess-1:msg-uuid-1']);
+  });
+
+  it('a mixed message starts its tools AND streams its text', () => {
+    const { transcripts, office } = makeHarness();
+    transcripts.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        uuid: 'msg-uuid-2',
+        cwd: '/home/user/code/myapp',
+        message: {
+          content: [
+            { type: 'text', text: 'Running the tests now.' },
+            { type: 'tool_use', id: 'tu-9', name: 'Bash', input: { command: 'npm test' } },
+          ],
+        },
+      }),
+    ]);
+    expect(office.assign).toHaveBeenCalledWith('sess-1:tu-9', 'Bash');
+    expect(office.assign).toHaveBeenCalledWith('sess-1:msg-uuid-2', 'Reporting to the Boss');
+  });
+
+  it('tool_use-only messages do not claim a reply employee', () => {
+    const { transcripts, office } = makeHarness();
+    startBash(transcripts);
+    expect(office.assign).toHaveBeenCalledTimes(1);
+  });
+});

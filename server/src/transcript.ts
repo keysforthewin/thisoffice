@@ -40,6 +40,7 @@ export class Transcripts {
   private pendingTaskCreates = new Map<string, { project: string; subject: string }>();
   /** toolUseId -> TaskUpdate input awaiting confirmation */
   private pendingTaskUpdates = new Map<string, { project: string; taskId: string; status?: string; subject?: string }>();
+  private replySeq = 0;
 
   constructor(
     private office: Office,
@@ -108,6 +109,7 @@ export class Transcripts {
       const toolUses = blocks.filter((b) => b.type === 'tool_use');
       if (toolUses.length > 0) this.touchBoss();
       for (const tu of toolUses) this.startTool(sessionId, project, tu);
+      this.onBossReply(sessionId, project, line, blocks);
     }
   }
 
@@ -118,6 +120,27 @@ export class Transcripts {
     summarizePrompt(text).then((summary) => {
       if (summary) this.office.updateInboxText(inboxId, summary);
     });
+  }
+
+  /** The main Claude's own text/thinking: an employee walks it over to the Boss. */
+  private onBossReply(sessionId: string, project: string, line: any, blocks: any[]) {
+    const parts: string[] = [];
+    for (const b of blocks) {
+      if (b.type === 'thinking' && b.thinking?.trim()) parts.push('💭 ' + b.thinking.trim());
+      else if (b.type === 'text' && b.text?.trim()) parts.push(b.text.trim());
+    }
+    if (parts.length === 0) return;
+    this.touchBoss();
+    const key = `${sessionId}:${line.uuid ?? `reply-${++this.replySeq}`}`;
+    const { employee, hired } = this.office.assign(key, 'Reporting to the Boss');
+    if (hired) {
+      nameNewHire('Reporting to the Boss').then((name) => {
+        if (name) this.office.rename(employee.id, name);
+      });
+    }
+    this.office.monitor(employee.id, { clear: true, title: `Reporting to the Boss · ${project}` });
+    this.streamer.enqueue(employee.id, parts.join('\n'));
+    this.office.finish(key);
   }
 
   private startTool(sessionId: string, project: string, tu: any) {
