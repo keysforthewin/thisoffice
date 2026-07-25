@@ -6,6 +6,7 @@ import {
   ACTIVE_WINDOW_MS,
   activeKeys,
   activeSetKey,
+  activityTtl,
   clampToRoom,
   closeUpShot,
   fitDistance,
@@ -76,6 +77,16 @@ describe('activeKeys / activeSetKey', () => {
     const la = { fresh: now - 1, stale: now - ACTIVE_WINDOW_MS - 1, edge: now - ACTIVE_WINDOW_MS + 1 };
     expect(activeKeys(la, now).sort()).toEqual(['edge', 'fresh']);
   });
+  it('boss and whiteboard expire after their shorter 5s TTL while monitors keep the full window', () => {
+    const now = 100_000;
+    const la = { boss: now - 6_000, whiteboard: now - 6_000, e1: now - 6_000 };
+    expect(activeKeys(la, now)).toEqual(['e1']);
+  });
+  it('activityTtl gives boss/whiteboard 5s and everything else the global window', () => {
+    expect(activityTtl('boss')).toBe(5_000);
+    expect(activityTtl('whiteboard')).toBe(5_000);
+    expect(activityTtl('e1')).toBe(ACTIVE_WINDOW_MS);
+  });
   it('activeSetKey is order-independent', () => {
     const now = 100_000;
     expect(activeSetKey({ b: now, a: now }, now, null)).toBe(activeSetKey({ a: now, b: now }, now, null));
@@ -111,6 +122,14 @@ describe('subjectFor', () => {
     // seat 1 is at x=-3.4, z=0.6 with rotationY=π → monitor local [0,1.66,0.35] → world z-offset −0.35
     expect(s.center.y).toBeCloseTo(1.66);
     expect(s.center.z).toBeCloseTo(0.6 - 0.35);
+  });
+  it('tracks a build-mode seat override so the movie camera aims at the moved desk', () => {
+    const office = makeOffice({ layout: { seats: { 1: { x: 2.0, z: 4.0, rotY: 0 } } } });
+    const s = subjectFor('e1', office)!;
+    // rotY 0 → monitor local [0,1.66,0.35] stays +0.35 in world z
+    expect(s.center.x).toBeCloseTo(2.0);
+    expect(s.center.z).toBeCloseTo(4.0 + 0.35);
+    expect(s.normal.z).toBeCloseTo(-1);
   });
 });
 

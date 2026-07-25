@@ -26,13 +26,37 @@ export interface StaffingSettings {
 export interface InboxItem {
   id: string;
   project: string;
+  /** short preview/summary shown on the whiteboard synopsis */
   text: string;
+  /** untruncated prompt (capped server-side); absent on items persisted before this field existed */
+  fullText?: string;
   at: string;
 }
 
 export interface TodoItem {
   content: string;
   status: 'pending' | 'in_progress' | 'completed';
+}
+
+/** Floor pose of a movable object; y is fixed per item kind (everything sits on the floor). */
+export interface ItemPose {
+  x: number;
+  z: number;
+  rotY: number;
+}
+
+/**
+ * User overrides from build mode. Absent maps/keys mean "use the built-in
+ * room-relative default". Overridden items become absolute world coordinates
+ * (clamped into the room client-side when the room grows/shrinks).
+ */
+export interface OfficeLayout {
+  /** desk-unit overrides keyed by seat number (0 = boss) */
+  seats?: Record<number, ItemPose>;
+  /** floor furniture keyed by stable id: couch, lampBack, lampCouch, cactusBig, cactusSmall, shelf, rug */
+  furniture?: Record<string, ItemPose>;
+  /** wall-mounted items keyed by id: windowBack, windowLeft, wallArt, pictureFrame → along-wall offset (the wall's local `ox` frame) */
+  wallItems?: Record<string, number>;
 }
 
 export interface OfficeState {
@@ -42,11 +66,16 @@ export interface OfficeState {
   inbox: InboxItem[];
   todos: { project: string; items: TodoItem[] } | null;
   staffing: StaffingSettings;
+  /** true while any tailed session has ended its turn and is waiting on the user (ephemeral) */
+  waitingForInput: boolean;
+  /** build-mode overrides; absent = default layout */
+  layout?: OfficeLayout;
 }
 
 /**
- * Prefix for a monitor stream line that carries an image data-URL instead of
- * text (e.g. a PNG an agent Read). Travels through the normal streamer queue
+ * Prefix for a monitor stream line that carries an image payload instead of
+ * text (e.g. a PNG an agent Read) — either a data-URL or a plain http(s) URL
+ * for URL-sourced image blocks. Travels through the normal streamer queue
  * so it stays ordered with the surrounding text; the client store intercepts
  * it and shows the image on that monitor instead of appending a line.
  */

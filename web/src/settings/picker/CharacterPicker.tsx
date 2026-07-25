@@ -5,17 +5,20 @@ import { CharacterGrid, GRID_COLUMNS } from './CharacterGrid.tsx';
 import { CharacterPreview } from './CharacterPreview.tsx';
 import { ThumbnailFactory } from './useThumbnails.tsx';
 import { ImportPanel } from '../importer/ImportPanel.tsx';
+import { BiographyTab } from './BiographyTab.tsx';
 
 interface Props {
   current: string;
   title?: string;
+  /** REST path of this person's biography; when set, a Biography tab appears */
+  bioPath?: string;
   onPick: (variant: string) => void;
   onClose: () => void;
 }
 
-export function CharacterPicker({ current, title, onPick, onClose }: Props) {
+export function CharacterPicker({ current, title, bioPath, onPick, onClose }: Props) {
   const catalog = useStore((s) => s.catalog);
-  const [tab, setTab] = useState<'browse' | 'import'>('browse');
+  const [tab, setTab] = useState<'browse' | 'import' | 'bio'>('browse');
   const [query, setQuery] = useState('');
   const [packFilter, setPackFilter] = useState<string | null>(null);
   const [highlighted, setHighlighted] = useState(current);
@@ -64,6 +67,12 @@ export function CharacterPicker({ current, title, onPick, onClose }: Props) {
       if (e.key === 'Escape' && !(e.target instanceof HTMLInputElement)) onClose();
       return; // Enter/arrows belong to the import panel's own inputs
     }
+    if (tab === 'bio') {
+      // Enter/arrows belong to the textarea; Escape while typing must not close
+      // the modal out from under an edit (the tab flushes pending saves on unmount)
+      if (e.key === 'Escape' && !(e.target instanceof HTMLTextAreaElement)) onClose();
+      return;
+    }
     const inSearch = e.target === searchRef.current;
     if (e.key === 'Escape') {
       if (inSearch && query) setQuery('');
@@ -110,11 +119,23 @@ export function CharacterPicker({ current, title, onPick, onClose }: Props) {
               >
                 Import from Mixamo
               </button>
+              {bioPath && (
+                <button
+                  style={{ ...styles.tab, ...(tab === 'bio' ? styles.tabActive : {}) }}
+                  onClick={() => setTab('bio')}
+                >
+                  Biography
+                </button>
+              )}
             </div>
           </div>
           <button style={styles.close} onClick={onClose}>✕</button>
         </div>
         <div style={styles.body}>
+          {tab === 'bio' && bioPath ? (
+            <BiographyTab path={bioPath} />
+          ) : (
+          <>
           <div style={styles.left}>
             {tab === 'import' ? (
               <ImportPanel />
@@ -144,6 +165,8 @@ export function CharacterPicker({ current, title, onPick, onClose }: Props) {
           <div style={styles.right}>
             <CharacterPreview entry={highlightedEntry} />
           </div>
+          </>
+          )}
         </div>
         <div style={styles.credit}>
           Built-in characters &amp; furniture by{' '}

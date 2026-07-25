@@ -2,11 +2,14 @@ import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { enterFocusMode, useStore, type CameraPose } from '../store.ts';
-import { seatTransform, whiteboardTransform } from './layout.ts';
+import { whiteboardTransform } from './layout.ts';
+import { resolveSeat } from './buildLayout.ts';
+import type { OfficeLayout } from '../../../shared/types.ts';
 import { MovieCamera } from './MovieCamera.tsx';
 import { clampToRoom, fitDistance, subjectFor } from './movieShots.ts';
 import { clampOffset, wrapLines } from './monitorScrollback.ts';
 import { pickMonitorTarget } from './monitorPicking.ts';
+import { bossScreenLines } from './bossScreen.ts';
 import { MONITOR_COLS, MONITOR_ROWS } from './MonitorScreen.tsx';
 
 export interface Pov {
@@ -16,8 +19,8 @@ export interface Pov {
 }
 
 /** Over-shoulder POV for a seat: behind the character's head, looking at the screen. */
-function seatPov(seat: number, label: string): Pov {
-  const { position, rotationY } = seatTransform(seat);
+function seatPov(seat: number, label: string, layout: OfficeLayout | undefined, maxSeat: number): Pov {
+  const { position, rotationY } = resolveSeat(layout, seat, maxSeat);
   const forward = new THREE.Vector3(0, 0, 1).applyAxisAngle(new THREE.Vector3(0, 1, 0), rotationY);
   // character sits at forward*-1.35; hover behind their right shoulder
   const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), rotationY);
@@ -33,9 +36,9 @@ function seatPov(seat: number, label: string): Pov {
 export function usePovList(): Pov[] {
   const office = useStore((s) => s.office);
   return useMemo(() => {
-    const povs: Pov[] = [seatPov(0, office?.boss.name ?? 'Boss')];
-    for (const e of office?.employees ?? []) povs.push(seatPov(e.seat, e.name));
     const maxSeat = Math.max(3, ...(office?.employees.map((e) => e.seat) ?? []));
+    const povs: Pov[] = [seatPov(0, office?.boss.name ?? 'Boss', office?.layout, maxSeat)];
+    for (const e of office?.employees ?? []) povs.push(seatPov(e.seat, e.name, office?.layout, maxSeat));
     const wb = whiteboardTransform(maxSeat);
     povs.push({ label: 'Whiteboard', position: wb.camera, lookAt: wb.lookAt });
     return povs;
@@ -57,8 +60,13 @@ function isTyping(t: EventTarget | null) {
   return t instanceof HTMLInputElement || t instanceof HTMLSelectElement || t instanceof HTMLTextAreaElement;
 }
 
+interface Glide {
+  position: THREE.Vector3;
+  quaternion: THREE.Quaternion;
+}
+
 /** FPS-spectator fly camera: click to capture the mouse, WASD to fly, E/Space/C up/down. */
-function FreeFlyControls() {
+function FreeFlyControls({ glide }: { glide: React.MutableRefObject<Glide | null> }) {
   const camera = useThree((s) => s.camera);
   const gl = useThree((s) => s.gl);
   const scene = useThree((s) => s.scene);
@@ -94,7 +102,7 @@ function FreeFlyControls() {
             position: camera.position.toArray() as [number, number, number],
             quaternion: camera.quaternion.toArray() as [number, number, number, number],
           };
-          st.setCameraMode(enterFocusMode(st.cameraMode, target, pose));
+          st.setCameraMode(enterFocusMode(st.cameraMode, target, pose, true));
         }
         return;
       }
@@ -111,6 +119,14 @@ function FreeFlyControls() {
       if (Math.abs(e.movementX) > MAX_LOOK_DELTA || Math.abs(e.movementY) > MAX_LOOK_DELTA) {
         console.debug('[fly-cam] discarded pointer-lock spike', e.movementX, e.movementY);
         return;
+      }
+      if (glide.current) {
+        // locked mouse-look takes over from a running return glide: pick up
+        // from wherever the slerp left the camera instead of snapping back
+        glide.current = null;
+        tmpEuler.setFromQuaternion(camera.quaternion);
+        look.current.yaw = tmpEuler.y;
+        look.current.pitch = THREE.MathUtils.clamp(tmpEuler.x, -MAX_PITCH, MAX_PITCH);
       }
       look.current.yaw -= e.movementX * LOOK_SENSITIVITY;
       look.current.pitch = THREE.MathUtils.clamp(look.current.pitch - e.movementY * LOOK_SENSITIVITY, -MAX_PITCH, MAX_PITCH);
@@ -145,6 +161,25 @@ function FreeFlyControls() {
     };
   }, [camera, gl]);
 
+  // Focus exit wants first person back (the entry click was pointer-locked).
+  // The Escape/click that exited counts as fresh user activation, so the
+  // request usually succeeds; if the browser rejects it, the flag stays armed
+  // and the next onPointerDown lock clears it via the lockchange listener.
+  useEffect(() => {
+    const dom = gl.domElement;
+    const onLockChange = () => {
+      if (document.pointerLockElement === dom) useStore.getState().setPendingRelock(false);
+    };
+    document.addEventListener('pointerlockchange', onLockChange);
+    if (useStore.getState().pendingRelock) {
+      tmpEuler.setFromQuaternion(camera.quaternion);
+      look.current.yaw = tmpEuler.y;
+      look.current.pitch = THREE.MathUtils.clamp(tmpEuler.x, -MAX_PITCH, MAX_PITCH);
+      (dom.requestPointerLock() as unknown as Promise<void> | undefined)?.catch(() => {});
+    }
+    return () => document.removeEventListener('pointerlockchange', onLockChange);
+  }, [camera, gl]);
+
   useFrame((_, delta) => {
     // while locked the cursor is hidden — hover tracking moves to the crosshair
     if (document.pointerLockElement === gl.domElement) {
@@ -177,8 +212,8 @@ const FOCUS_FIT_MARGIN = 1.1;
 const SCROLL_ROWS_PER_TICK = 3;
 
 /**
- * Wheel → scrollback while the camera is parked on a monitor. The boss screen
- * renders the inbox (no line history), so its offset stays pinned at 0.
+ * Wheel → scrollback while the camera is parked on a monitor. Employees scroll
+ * their clear-surviving history buffer; the boss scrolls the full inbox log.
  */
 function FocusControls({ target }: { target: string }) {
   const gl = useThree((s) => s.gl);
@@ -188,9 +223,9 @@ function FocusControls({ target }: { target: string }) {
     if (document.pointerLockElement) document.exitPointerLock();
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      if (target === 'boss') return;
       const st = useStore.getState();
-      const total = wrapLines(st.monitorHistory[target] ?? [], MONITOR_COLS).length;
+      const raw = target === 'boss' ? bossScreenLines(st.office?.inbox ?? []) : (st.monitorHistory[target] ?? []);
+      const total = wrapLines(raw, MONITOR_COLS).length;
       const step = e.deltaY < 0 ? SCROLL_ROWS_PER_TICK : -SCROLL_ROWS_PER_TICK;
       st.setFocusScroll(clampOffset(st.focusScroll + step, total, MONITOR_ROWS));
     };
@@ -204,6 +239,7 @@ function FocusControls({ target }: { target: string }) {
 
 export function CameraRig() {
   const mode = useStore((s) => s.cameraMode);
+  const buildMode = useStore((s) => s.buildMode);
   const povs = usePovList();
   const office = useStore((s) => s.office);
   const camera = useThree((s) => s.camera);
@@ -211,7 +247,7 @@ export function CameraRig() {
   const lookTarget = useRef(new THREE.Vector3(0, 1, 0));
   const prevMode = useRef(mode);
   /** while set, the free camera is flying back to where it was before a monitor click */
-  const glide = useRef<{ position: THREE.Vector3; quaternion: THREE.Quaternion } | null>(null);
+  const glide = useRef<Glide | null>(null);
 
   const free = mode.kind === 'free';
 
@@ -282,7 +318,9 @@ export function CameraRig() {
 
   if (mode.kind === 'movie') return <MovieCamera />;
   if (mode.kind === 'focus') return <FocusControls target={mode.target} />;
-  return free ? <FreeFlyControls /> : null;
+  // build mode: camera holds still, cursor drags objects — unmounting the fly
+  // controls also releases any pointer lock via their cleanup
+  return free && !buildMode ? <FreeFlyControls glide={glide} /> : null;
 }
 
 const UP = new THREE.Vector3(0, 1, 0);

@@ -130,6 +130,28 @@ describe('inbox persistence', () => {
     });
   });
 
+  it('fullText survives a save/load round-trip and the summarizer only rewrites text', () => {
+    const file = tempFile();
+    const office = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
+    office.pushInbox('thisoffice', 'preview…', 'the full raw prompt\nwith a second line');
+    office.updateInboxText(office.lastInboxId, 'short summary');
+    const reloaded = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
+    expect(reloaded.getState().inbox[0].text).toBe('short summary');
+    expect(reloaded.getState().inbox[0].fullText).toBe('the full raw prompt\nwith a second line');
+  });
+
+  it('legacy inbox items without fullText load clean, and non-string fullText is dropped', () => {
+    const file = tempFile();
+    const office = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
+    office.pushInbox('thisoffice', 'legacy');
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    delete raw.inbox[0].fullText;
+    raw.inbox.push({ ...raw.inbox[0], id: 'inbox-2', fullText: 123 });
+    fs.writeFileSync(file, JSON.stringify(raw));
+    const reloaded = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
+    expect(reloaded.getState().inbox.map((i) => i.fullText)).toEqual([undefined, undefined]);
+  });
+
   it('a summarizer text update is persisted too', () => {
     const file = tempFile();
     const office = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
@@ -137,6 +159,86 @@ describe('inbox persistence', () => {
     office.updateInboxText(office.lastInboxId, 'short summary');
     const reloaded = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
     expect(reloaded.getState().inbox[0].text).toBe('short summary');
+  });
+});
+
+describe('biographies', () => {
+  function tempFile() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'office-test-'));
+    return path.join(dir, 'office.json');
+  }
+
+  it('employee bio set/get round-trip; unknown ids are rejected', () => {
+    const office = makeOffice();
+    const emp = office.getState().employees[0];
+    expect(office.getEmployeeBio(emp.id)).toBe('');
+    expect(office.setEmployeeBio(emp.id, 'Born in a server room.')).toBe(true);
+    expect(office.getEmployeeBio(emp.id)).toBe('Born in a server room.');
+    expect(office.setEmployeeBio('nope', 'x')).toBe(false);
+    expect(office.getEmployeeBio('nope')).toBe(null);
+  });
+
+  it('boss bio set/get round-trip', () => {
+    const office = makeOffice();
+    expect(office.getBossBio()).toBe('');
+    office.setBossBio('The boss story.');
+    expect(office.getBossBio()).toBe('The boss story.');
+  });
+
+  it('rename and setVariant do not clobber the bio', () => {
+    const office = makeOffice();
+    const emp = office.getState().employees[0];
+    office.setEmployeeBio(emp.id, 'keep me');
+    office.rename(emp.id, 'New Name');
+    office.setVariant(emp.id, 'Mage');
+    expect(office.getEmployeeBio(emp.id)).toBe('keep me');
+  });
+
+  it('bio survives eviction and returns with the rehired seat', () => {
+    const office = makeOffice();
+    const emp = office.getState().employees[0];
+    const seat = emp.seat;
+    office.setEmployeeBio(emp.id, 'seat memory');
+    office.remove(emp.id);
+    // hire() refills the lowest free seat, restoring the remembered identity
+    const rehired = office.hireManual();
+    expect(rehired.seat).toBe(seat);
+    expect(office.getEmployeeBio(rehired.id)).toBe('seat memory');
+  });
+
+  it('bios persist across a save/load round-trip, and legacy files load clean', () => {
+    const file = tempFile();
+    const office = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
+    const emp = office.getState().employees[0];
+    office.setEmployeeBio(emp.id, 'persisted employee bio');
+    office.setBossBio('persisted boss bio');
+    const reloaded = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
+    expect(reloaded.getBossBio()).toBe('persisted boss bio');
+    expect(reloaded.getEmployeeBio(reloaded.getState().employees[0].id)).toBe('persisted employee bio');
+
+    // legacy file: strip the bio fields entirely
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    delete raw.boss.bio;
+    for (const r of raw.roster ?? []) delete r.bio;
+    fs.writeFileSync(file, JSON.stringify(raw));
+    const legacy = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
+    expect(legacy.getBossBio()).toBe('');
+    expect(legacy.getEmployeeBio(legacy.getState().employees[0].id)).toBe('');
+  });
+});
+
+describe('waiting for input', () => {
+  it('setWaitingForInput broadcasts only on change and never persists', () => {
+    const office = makeOffice();
+    const msgs: unknown[] = [];
+    office.subscribe((m) => msgs.push(m));
+    office.setWaitingForInput(true);
+    office.setWaitingForInput(true);
+    expect(office.getState().waitingForInput).toBe(true);
+    expect(msgs.length).toBe(1);
+    office.setWaitingForInput(false);
+    expect(office.getState().waitingForInput).toBe(false);
+    expect(msgs.length).toBe(2);
   });
 });
 
@@ -157,6 +259,16 @@ describe('screen snapshots (monitor replay on connect)', () => {
         title: 'Bash · thisoffice',
         append: ['$ npm test', 'ok', '✓ done', IMG].join('\n'),
       },
+    ]);
+  });
+
+  it('treats a URL image payload as the screen image too', () => {
+    const office = makeOffice();
+    const URL_IMG = '⟦IMG⟧https://x.test/shot.png';
+    office.monitor('emp-1', { clear: true, title: 'Read · proj' });
+    office.monitor('emp-1', { append: URL_IMG + '\n✓ done' });
+    expect(office.screenReplay()).toEqual([
+      { type: 'monitor', target: 'emp-1', clear: true, title: 'Read · proj', append: ['✓ done', URL_IMG].join('\n') },
     ]);
   });
 
@@ -556,5 +668,76 @@ describe('idle eviction', () => {
     office.hireManual(); // 1 extra, idle from birth
     vi.advanceTimersByTime(60_001);
     expect(office.getState().employees.length).toBe(Math.max(before, office.getState().staffing.minEmployees));
+  });
+});
+
+describe('layout persistence', () => {
+  function tempFile() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'office-test-'));
+    return path.join(dir, 'office.json');
+  }
+
+  it('setLayout merges per-map and survives a save/load round-trip', () => {
+    const file = tempFile();
+    const office = new Office(() => ['Knight'], file);
+    office.setLayout({ seats: { 1: { x: 2, z: 3, rotY: 0.5 } } });
+    office.setLayout({ furniture: { couch: { x: -1, z: 0, rotY: Math.PI } } });
+    office.setLayout({ wallItems: { wallArt: 2.4 } });
+    office.setLayout({ seats: { 2: { x: 0, z: 5, rotY: 0 } } });
+    const reloaded = new Office(() => ['Knight'], file);
+    const layout = reloaded.getState().layout!;
+    expect(layout.seats![1]).toEqual({ x: 2, z: 3, rotY: 0.5 });
+    expect(layout.seats![2]).toEqual({ x: 0, z: 5, rotY: 0 });
+    expect(layout.furniture!.couch).toEqual({ x: -1, z: 0, rotY: Math.PI });
+    expect(layout.wallItems!.wallArt).toBe(2.4);
+  });
+
+  it('resetLayout clears everything and persists the clear', () => {
+    const file = tempFile();
+    const office = new Office(() => ['Knight'], file);
+    office.setLayout({ seats: { 0: { x: 1, z: 1, rotY: 0 } }, wallItems: { windowBack: -3.9 } });
+    office.resetLayout();
+    expect(office.getState().layout).toBeUndefined();
+    const reloaded = new Office(() => ['Knight'], file);
+    expect(reloaded.getState().layout).toBeUndefined();
+  });
+
+  it('drops non-finite and malformed entries', () => {
+    const office = new Office(() => ['Knight'], tempFile());
+    office.setLayout({
+      seats: { 1: { x: Infinity, z: 0, rotY: 0 }, 2: { x: 1, z: 1, rotY: 1 } },
+      furniture: { couch: { x: 0 } as any, shelf: { x: 1, z: 2, rotY: 3 } },
+      wallItems: { wallArt: NaN, pictureFrame: 1.5 },
+    });
+    const layout = office.getState().layout!;
+    expect(layout.seats![1]).toBeUndefined();
+    expect(layout.seats![2]).toEqual({ x: 1, z: 1, rotY: 1 });
+    expect(layout.furniture!.couch).toBeUndefined();
+    expect(layout.furniture!.shelf).toEqual({ x: 1, z: 2, rotY: 3 });
+    expect(layout.wallItems!.wallArt).toBeUndefined();
+    expect(layout.wallItems!.pictureFrame).toBe(1.5);
+  });
+
+  it('caps each map at 200 keys', () => {
+    const office = new Office(() => ['Knight'], tempFile());
+    for (let i = 0; i < 250; i++) office.setLayout({ seats: { [i]: { x: i, z: 0, rotY: 0 } } });
+    expect(Object.keys(office.getState().layout!.seats!).length).toBeLessThanOrEqual(200);
+  });
+
+  it('broadcasts state after a layout change', () => {
+    const office = new Office(() => ['Knight'], tempFile());
+    const msgs: any[] = [];
+    office.subscribe((m) => msgs.push(m));
+    office.setLayout({ furniture: { couch: { x: 1, z: 1, rotY: 0 } } });
+    const stateMsg = msgs.find((m) => m.type === 'state');
+    expect(stateMsg?.state.layout?.furniture?.couch).toEqual({ x: 1, z: 1, rotY: 0 });
+  });
+
+  it('a legacy office.json with no layout loads with layout undefined', () => {
+    const file = tempFile();
+    const office = new Office(() => ['Knight'], file);
+    office.save();
+    const reloaded = new Office(() => ['Knight'], file);
+    expect(reloaded.getState().layout).toBeUndefined();
   });
 });

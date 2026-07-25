@@ -1,8 +1,16 @@
 import * as THREE from 'three';
 import type { OfficeState } from '../../../shared/types.ts';
-import { roomDims, seatTransform, whiteboardTransform } from './layout.ts';
+import { roomDims, whiteboardTransform } from './layout.ts';
+import { resolveSeat } from './buildLayout.ts';
 
 export const ACTIVE_WINDOW_MS = 10_000;
+
+/** Boss inbox and whiteboard changes are single events (not streams), so their shots expire sooner. */
+const ACTIVITY_TTL_MS: Record<string, number> = { boss: 5_000, whiteboard: 5_000 };
+
+export function activityTtl(key: string): number {
+  return ACTIVITY_TTL_MS[key] ?? ACTIVE_WINDOW_MS;
+}
 
 /** Body sphere radii for LOS line-of-sight checking. */
 const HEAD_R = 0.3;
@@ -32,7 +40,7 @@ export interface Shot {
 }
 
 export function activeKeys(lastActivity: Record<string, number>, now: number): string[] {
-  return Object.keys(lastActivity).filter((k) => now - lastActivity[k] < ACTIVE_WINDOW_MS);
+  return Object.keys(lastActivity).filter((k) => now - lastActivity[k] < activityTtl(k));
 }
 
 /**
@@ -68,14 +76,14 @@ function occupiedSeats(office: OfficeState | null): number[] {
 }
 
 /** World-space seated-person base position for a seat (see Desk.tsx local offset [0,0,-1.15]). */
-function personPosition(seat: number): THREE.Vector3 {
-  const { position, rotationY } = seatTransform(seat);
+function personPosition(seat: number, office: OfficeState | null): THREE.Vector3 {
+  const { position, rotationY } = resolveSeat(office?.layout, seat, maxSeat(office));
   const local = new THREE.Vector3(0, 0, -1.15).applyAxisAngle(UP, rotationY);
   return position.clone().add(local);
 }
 
-function monitorAABB(seat: number): THREE.Box3 {
-  const { position, rotationY } = seatTransform(seat);
+function monitorAABB(seat: number, office: OfficeState | null): THREE.Box3 {
+  const { position, rotationY } = resolveSeat(office?.layout, seat, maxSeat(office));
   const center = position.clone().add(MONITOR_OFFSET.clone().applyAxisAngle(UP, rotationY));
   const half = new THREE.Vector3(MONITOR_W / 2, MONITOR_H / 2, 0.15);
   return new THREE.Box3(center.clone().sub(half), center.clone().add(half));
@@ -122,12 +130,12 @@ export function segmentHitsBox(a: THREE.Vector3, b: THREE.Vector3, box: THREE.Bo
 /** True if camPos is inside a person's body sphere or a monitor's AABB (unusable camera spot). */
 function isInsideOccluder(pos: THREE.Vector3, office: OfficeState | null): boolean {
   for (const seat of occupiedSeats(office)) {
-    const p = personPosition(seat);
+    const p = personPosition(seat, office);
     if (pos.distanceTo(p.clone().add(new THREE.Vector3(0, 1.8, 0))) <= HEAD_R + 0.05) return true;
     if (pos.distanceTo(p.clone().add(new THREE.Vector3(0, 1.25, 0))) <= TORSO_R + 0.05) return true;
   }
   for (const seat of occupiedSeats(office)) {
-    if (monitorAABB(seat).containsPoint(pos)) return true;
+    if (monitorAABB(seat, office).containsPoint(pos)) return true;
   }
   return false;
 }
@@ -141,7 +149,7 @@ export function hasLineOfSight(camPos: THREE.Vector3, subject: Subject, office: 
   const ownSeat = seatForKey(subject.key, office);
   for (const seat of occupiedSeats(office)) {
     if (ownSeat !== null && seat === ownSeat) continue; // over-the-shoulder is the point
-    const p = personPosition(seat);
+    const p = personPosition(seat, office);
     const head = p.clone().add(new THREE.Vector3(0, 1.8, 0));
     const torso = p.clone().add(new THREE.Vector3(0, 1.25, 0));
     if (segmentHitsSphere(camPos, subject.center, head, HEAD_R)) return false;
@@ -149,7 +157,7 @@ export function hasLineOfSight(camPos: THREE.Vector3, subject: Subject, office: 
   }
   for (const seat of occupiedSeats(office)) {
     if (ownSeat !== null && seat === ownSeat) continue;
-    if (segmentHitsBox(camPos, subject.center, monitorAABB(seat))) return false;
+    if (segmentHitsBox(camPos, subject.center, monitorAABB(seat, office))) return false;
   }
   return true;
 }
@@ -166,7 +174,7 @@ export function subjectFor(key: string, office: OfficeState | null): Subject | n
     if (emp) seat = emp.seat;
   }
   if (seat === null) return null;
-  const { position, rotationY } = seatTransform(seat);
+  const { position, rotationY } = resolveSeat(office?.layout, seat, maxSeat(office));
   const center = position.clone().add(MONITOR_OFFSET.clone().applyAxisAngle(UP, rotationY));
   // screens are readable from behind the chair: local −z (Desk.tsx)
   const normal = new THREE.Vector3(0, 0, -1).applyAxisAngle(UP, rotationY);

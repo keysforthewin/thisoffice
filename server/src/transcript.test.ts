@@ -36,6 +36,7 @@ function makeHarness(opts: { queue?: boolean } = {}) {
     cancelQueued: vi.fn(),
     monitor: vi.fn((target: string, opts: any) => monitors.push({ target, ...opts })),
     setBossStatus: vi.fn(),
+    setWaitingForInput: vi.fn(),
     pushInbox: vi.fn(),
     updateInboxText: vi.fn(),
     setTodos: vi.fn(),
@@ -537,5 +538,504 @@ describe('queued activities', () => {
     expect(h.enqueued).toEqual([]);
     h.pickup('sess-1:tu-task');
     expect(h.enqueued.map((e) => e.text).join('\n')).toContain('agent says hi');
+  });
+});
+
+describe('waiting-for-input detection', () => {
+  const MAIN2 = '/proj/-home-user-code-myapp/sess-2.jsonl';
+
+  function endTurn(file: string, t: Transcripts) {
+    t.handleLines(file, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-x',
+        cwd: '/home/user/code/myapp',
+        message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'all done' }] },
+      }),
+    ]);
+  }
+
+  function userPrompt(file: string, t: Transcripts) {
+    t.handleLines(file, [
+      line({
+        type: 'user',
+        sessionId: 'sess-x',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'text', text: 'please continue' }] },
+      }),
+    ]);
+  }
+
+  it('an end_turn response marks the office as waiting', () => {
+    const h = makeHarness();
+    endTurn(MAIN, h.transcripts);
+    expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([true]);
+  });
+
+  it('a tool_use response does not mark waiting', () => {
+    const h = makeHarness();
+    startBash(h.transcripts);
+    const calls = vi.mocked(h.office.setWaitingForInput).mock.calls;
+    expect(calls.every((c) => c[0] === false)).toBe(true);
+  });
+
+  it('a user prompt clears waiting', () => {
+    const h = makeHarness();
+    endTurn(MAIN, h.transcripts);
+    userPrompt(MAIN, h.transcripts);
+    expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([false]);
+  });
+
+  it('a tool result clears waiting for that session', () => {
+    const h = makeHarness();
+    endTurn(MAIN, h.transcripts);
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'user',
+        sessionId: 'sess-x',
+        message: { content: [{ type: 'tool_result', tool_use_id: 'tu-1', content: 'ok' }] },
+      }),
+    ]);
+    expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([false]);
+  });
+
+  it('any waiting session keeps the flag on until every session resumes', () => {
+    const h = makeHarness();
+    endTurn(MAIN, h.transcripts);
+    endTurn(MAIN2, h.transcripts);
+    userPrompt(MAIN2, h.transcripts);
+    expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([true]);
+    userPrompt(MAIN, h.transcripts);
+    expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([false]);
+  });
+
+  it('subagent end_turn lines never mark waiting', () => {
+    const h = makeHarness();
+    h.transcripts.fileAppeared(AGENT);
+    h.transcripts.handleLines(AGENT, [
+      line({ type: 'assistant', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'sub done' }] } }),
+    ]);
+    const calls = vi.mocked(h.office.setWaitingForInput).mock.calls;
+    expect(calls.every((c) => c[0] === false)).toBe(true);
+  });
+
+  it('a stale waiting session stops holding the light after the sweep', () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness();
+      endTurn(MAIN, h.transcripts);
+      expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([true]);
+      vi.advanceTimersByTime(31 * 60_000);
+      expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([false]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+function userText(text: string, extra: Record<string, unknown> = {}) {
+  return line({
+    type: 'user',
+    sessionId: 'sess-1',
+    cwd: '/home/user/code/myapp',
+    message: { content: [{ type: 'text', text }] },
+    ...extra,
+  });
+}
+
+describe('tagged user text', () => {
+  it('surfaces slash commands as a Slash Command screen', () => {
+    const h = makeHarness();
+    h.transcripts.handleLines(MAIN, [
+      userText('<command-message>help</command-message>\n<command-name>/help</command-name>\n<command-args>--verbose</command-args>'),
+    ]);
+    expect(h.office.assign).toHaveBeenCalledWith(expect.any(String), 'Slash Command');
+    expect(h.enqueued[0].text).toBe('ran /help --verbose\nhelp');
+    expect(h.finished).toHaveLength(1);
+    expect(h.office.pushInbox).not.toHaveBeenCalled();
+  });
+
+  it('surfaces local command stdout as a Command Output screen', () => {
+    const h = makeHarness();
+    h.transcripts.handleLines(MAIN, [userText('<local-command-stdout>build ok\nall green</local-command-stdout>')]);
+    expect(h.office.assign).toHaveBeenCalledWith(expect.any(String), 'Command Output');
+    expect(h.enqueued[0].text).toBe('build ok\nall green');
+  });
+
+  it('surfaces ! shell passthrough with stderr marked as errors', () => {
+    const h = makeHarness();
+    h.transcripts.handleLines(MAIN, [
+      userText('<bash-input>ls /tmp</bash-input>\n<bash-stdout>a.txt</bash-stdout>\n<bash-stderr>oh no</bash-stderr>'),
+    ]);
+    expect(h.office.assign).toHaveBeenCalledWith(expect.any(String), 'Shell (!)');
+    expect(h.enqueued[0].text).toBe('! ls /tmp\na.txt\n✗ oh no');
+  });
+
+  it('surfaces task notifications via their summary and result', () => {
+    const h = makeHarness();
+    h.transcripts.handleLines(MAIN, [
+      userText('<task-notification>\n<task-id>t1</task-id>\n<summary>Agent finished</summary>\n<result>found 3 bugs</result>\n</task-notification>'),
+    ]);
+    expect(h.office.assign).toHaveBeenCalledWith(expect.any(String), 'Task Notification');
+    expect(h.enqueued[0].text).toBe('Agent finished\nfound 3 bugs');
+  });
+
+  it('routes unknown tags and system-reminders to the housekeeping digest, not a screen of their own', () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness();
+      h.transcripts.handleLines(MAIN, [
+        userText('<system-reminder>background context here</system-reminder>'),
+        userText('<some-new-tag>mystery payload</some-new-tag>'),
+      ]);
+      expect(h.office.assign).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(3100);
+      expect(h.office.assign).toHaveBeenCalledWith(expect.any(String), 'Office Chores');
+      expect(h.enqueued[0].text).toBe('reminder: background context here\nsome-new-tag: mystery payload');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still routes a plain prompt to the inbox (regression)', () => {
+    const h = makeHarness();
+    h.transcripts.handleLines(MAIN, [userText('please fix the login page')]);
+    expect(h.office.pushInbox).toHaveBeenCalledWith('myapp', 'please fix the login page', 'please fix the login page');
+  });
+
+  it('surfaces a user interrupt', () => {
+    const h = makeHarness();
+    h.transcripts.handleLines(MAIN, [userText('[Request interrupted by user]')]);
+    expect(h.office.assign).toHaveBeenCalledWith(expect.any(String), 'Interrupted');
+    expect(h.enqueued[0].text).toBe('✗ the Boss interrupted');
+    expect(h.office.pushInbox).not.toHaveBeenCalled();
+  });
+});
+
+describe('tool errors and rich results', () => {
+  it('an is_error tool_result ends with ✗ failed, not ✓ done', () => {
+    const h = makeHarness();
+    startBash(h.transcripts);
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'user',
+        sessionId: 'sess-1',
+        message: { content: [{ type: 'tool_result', tool_use_id: 'tu-1', content: 'command not found', is_error: true }] },
+      }),
+    ]);
+    expect(h.enqueued[1].text).toBe('command not found\n\n✗ failed');
+  });
+
+  it('a denied tool shows ✗ blocked with the denial kind', () => {
+    const h = makeHarness();
+    startBash(h.transcripts);
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'user',
+        sessionId: 'sess-1',
+        toolDenialKind: 'user-rejected',
+        message: { content: [{ type: 'tool_result', tool_use_id: 'tu-1', content: 'The user rejected this tool call' }] },
+      }),
+    ]);
+    expect(h.enqueued[1].text).toContain('✗ blocked (user-rejected)');
+  });
+
+  it('an Edit result renders the structuredPatch from the toolUseResult sidecar', () => {
+    const h = makeHarness();
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'tool_use', id: 'tu-e', name: 'Edit', input: { file_path: '/a.ts', old_string: 'foo', new_string: 'bar' } }] },
+      }),
+      line({
+        type: 'user',
+        sessionId: 'sess-1',
+        toolUseResult: { structuredPatch: [{ lines: ['-foo', '+bar'] }] },
+        message: { content: [{ type: 'tool_result', tool_use_id: 'tu-e', content: 'File updated' }] },
+      }),
+    ]);
+    expect(h.enqueued.at(-1)!.text).toBe('-foo\n+bar\n\n✓ done');
+  });
+
+  it('Write and Edit input previews include the content being written', () => {
+    const h = makeHarness();
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: {
+          content: [
+            { type: 'tool_use', id: 'tu-w', name: 'Write', input: { file_path: '/b.ts', content: 'line one\nline two' } },
+            { type: 'tool_use', id: 'tu-e2', name: 'Edit', input: { file_path: '/c.ts', old_string: 'old', new_string: 'new' } },
+          ],
+        },
+      }),
+    ]);
+    const texts = h.enqueued.map((e) => e.text);
+    expect(texts).toContain('write /b.ts\nline one\nline two');
+    expect(texts).toContain('edit /c.ts\n- old\n+ new');
+  });
+
+  it('strips embedded system-reminder spans from tool_result text', () => {
+    const h = makeHarness();
+    startBash(h.transcripts);
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'user',
+        sessionId: 'sess-1',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'tu-1', content: 'real output<system-reminder>host noise</system-reminder>' }],
+        },
+      }),
+    ]);
+    expect(h.enqueued[1].text).toBe('real output\n\n✓ done');
+  });
+
+  it('text sharing a user line with tool_results still finishes the tool AND claims a Note from the Boss', () => {
+    const h = makeHarness();
+    startBash(h.transcripts);
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'user',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: {
+          content: [
+            { type: 'tool_result', tool_use_id: 'tu-1', content: 'ok' },
+            { type: 'text', text: 'also please check the tests' },
+          ],
+        },
+      }),
+    ]);
+    expect(h.finished).toContain('sess-1:tu-1');
+    expect(h.office.assign).toHaveBeenCalledWith(expect.any(String), 'Note from the Boss');
+    expect(h.enqueued.map((e) => e.text)).toContain('also please check the tests');
+  });
+});
+
+describe('images', () => {
+  it('surfaces images attached to a user prompt', () => {
+    const h = makeHarness();
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'user',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: {
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'BBBB' } },
+            { type: 'text', text: 'look at this screenshot' },
+          ],
+        },
+      }),
+    ]);
+    expect(h.office.assign).toHaveBeenCalledWith(expect.any(String), 'Attachment from the Boss');
+    expect(h.enqueued[0].text).toBe('⟦IMG⟧data:image/jpeg;base64,BBBB\nlook at this screenshot');
+  });
+
+  it('passes URL-sourced tool_result images through as marker lines', () => {
+    const h = makeHarness();
+    startBash(h.transcripts);
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'user',
+        sessionId: 'sess-1',
+        message: {
+          content: [
+            { type: 'tool_result', tool_use_id: 'tu-1', content: [{ type: 'image', source: { type: 'url', url: 'https://x.test/i.png' } }] },
+          ],
+        },
+      }),
+    ]);
+    expect(h.enqueued[1].text).toBe('⟦IMG⟧https://x.test/i.png');
+  });
+});
+
+describe('assistant-side events', () => {
+  it('surfaces API error lines as API Trouble', () => {
+    const h = makeHarness();
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        isApiErrorMessage: true,
+        apiErrorStatus: 529,
+        error: 'server_error',
+        message: { model: '<synthetic>', content: [{ type: 'text', text: 'API Error: 529 Overloaded' }] },
+      }),
+    ]);
+    expect(h.office.assign).toHaveBeenCalledWith(expect.any(String), 'API Trouble');
+    expect(h.enqueued[0].text).toBe('✗ server_error 529\nAPI Error: 529 Overloaded');
+  });
+
+  it('surfaces model fallback blocks as Model Swap', () => {
+    const h = makeHarness();
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'fallback', from: { model: 'claude-fable-5' }, to: { model: 'claude-opus-4-8' } }] },
+      }),
+    ]);
+    expect(h.office.assign).toHaveBeenCalledWith(expect.any(String), 'Model Swap');
+    expect(h.enqueued[0].text).toBe('⚠ model fallback: claude-fable-5 → claude-opus-4-8');
+  });
+
+  it('renders redacted_thinking as a redacted thought in the boss reply', () => {
+    const h = makeHarness();
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        uuid: 'msg-r',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'redacted_thinking', data: 'xxx' }, { type: 'text', text: 'done' }] },
+      }),
+    ]);
+    expect(h.enqueued[0].text).toBe('💭 [redacted]\ndone');
+  });
+});
+
+describe('system and attachment events', () => {
+  it('surfaces away summaries on their own screen', () => {
+    const h = makeHarness();
+    h.transcripts.handleLines(MAIN, [
+      line({ type: 'system', subtype: 'away_summary', sessionId: 'sess-1', cwd: '/home/user/code/myapp', content: 'I fixed three bugs while you were out.' }),
+    ]);
+    expect(h.office.assign).toHaveBeenCalledWith(expect.any(String), 'While You Were Away');
+    expect(h.enqueued[0].text).toBe('I fixed three bugs while you were out.');
+  });
+
+  it('surfaces hook runs with output; silent hooks go to the digest', () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness();
+      h.transcripts.handleLines(MAIN, [
+        line({
+          type: 'attachment',
+          sessionId: 'sess-1',
+          cwd: '/home/user/code/myapp',
+          attachment: { type: 'hook_success', hookName: 'lint', command: 'npm run lint', stdout: 'all clean', stderr: '', exitCode: 0, durationMs: 40 },
+        }),
+        line({
+          type: 'attachment',
+          sessionId: 'sess-1',
+          cwd: '/home/user/code/myapp',
+          attachment: { type: 'hook_success', hookName: 'fmt', command: 'fmt', stdout: '', stderr: '', exitCode: 0, durationMs: 5 },
+        }),
+      ]);
+      expect(h.office.assign).toHaveBeenCalledWith(expect.any(String), 'Hook: lint');
+      expect(h.enqueued[0].text).toBe('$ npm run lint\nall clean');
+      vi.advanceTimersByTime(3100);
+      expect(h.enqueued.at(-1)!.text).toBe('hook fmt ok (5ms)');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('batches housekeeping bursts into a single Office Chores screen', () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness();
+      h.transcripts.handleLines(MAIN, [
+        line({ type: 'attachment', sessionId: 'sess-1', cwd: '/home/user/code/myapp', attachment: { type: 'skill_listing', skillCount: 12 } }),
+        line({ type: 'attachment', sessionId: 'sess-1', cwd: '/home/user/code/myapp', attachment: { type: 'command_permissions', allowedTools: ['a', 'b'] } }),
+        line({ type: 'attachment', sessionId: 'sess-1', cwd: '/home/user/code/myapp', attachment: { type: 'task_reminder', itemCount: 4 } }),
+        line({ type: 'system', subtype: 'turn_duration', sessionId: 'sess-1', cwd: '/home/user/code/myapp', durationMs: 12000, messageCount: 7 }),
+      ]);
+      expect(h.office.assign).not.toHaveBeenCalled(); // nothing claims a desk mid-burst
+      vi.advanceTimersByTime(3100);
+      expect(vi.mocked(h.office.assign).mock.calls).toHaveLength(1);
+      expect(h.office.assign).toHaveBeenCalledWith(expect.any(String), 'Office Chores');
+      expect(h.enqueued[0].text).toBe(
+        'skills: 12 available\npermissions: 2 tools allowed\ntodo reminder (4 items)\nturn: 12s, 7 msgs',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a full digest flushes immediately without waiting for quiet', () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness();
+      const lines = Array.from({ length: 20 }, (_, i) =>
+        line({ type: 'attachment', sessionId: 'sess-1', cwd: '/home/user/code/myapp', attachment: { type: 'date_change', newDate: `d${i}` } }),
+      );
+      h.transcripts.handleLines(MAIN, lines);
+      expect(h.office.assign).toHaveBeenCalledWith(expect.any(String), 'Office Chores');
+      expect(h.enqueued[0].text.split('\n')).toHaveLength(20);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('system/attachment lines never flip the waiting-for-input light', () => {
+    const h = makeHarness();
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'all done' }] },
+      }),
+    ]);
+    expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([true]);
+    h.transcripts.handleLines(MAIN, [
+      line({ type: 'attachment', sessionId: 'sess-1', cwd: '/home/user/code/myapp', attachment: { type: 'skill_listing', skillCount: 3 } }),
+      line({ type: 'system', subtype: 'turn_duration', sessionId: 'sess-1', cwd: '/home/user/code/myapp', durationMs: 100, messageCount: 1 }),
+    ]);
+    expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([true]);
+  });
+});
+
+describe('sidecar records', () => {
+  it('an envelope-less ai-title record surfaces and titles later ephemerals', () => {
+    const h = makeHarness();
+    h.transcripts.handleLines(MAIN, [line({ type: 'ai-title', aiTitle: 'Fix login flow', sessionId: 'sess-1' })]);
+    expect(h.office.assign).toHaveBeenCalledWith(expect.any(String), 'Session Titled');
+    expect(h.monitors[0].title).toBe('Session Titled · myapp');
+    expect(h.enqueued[0].text).toBe('“Fix login flow”');
+
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        uuid: 'msg-t',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'text', text: 'on it' }] },
+      }),
+    ]);
+    expect(h.monitors.at(-1)!.title).toBe('Reporting to the Boss · myapp — Fix login flow');
+  });
+
+  it('a queued prompt (queue-operation enqueue) surfaces its content', () => {
+    const h = makeHarness();
+    h.transcripts.handleLines(MAIN, [
+      line({ type: 'queue-operation', operation: 'enqueue', sessionId: 'sess-1', content: 'next: update the docs' }),
+    ]);
+    expect(h.office.assign).toHaveBeenCalledWith(expect.any(String), 'Queued Prompt');
+    expect(h.enqueued[0].text).toBe('next: update the docs');
+  });
+
+  it('unknown and legacy record types land in the digest without throwing', () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness();
+      h.transcripts.handleLines(MAIN, [
+        line({ type: 'summary', summary: 'old style', leafUuid: 'x' }),
+        line({ type: 'file-history-snapshot', messageId: 'm1', snapshot: {} }),
+        line({ type: 'some-future-type', sessionId: 'sess-1' }),
+      ]);
+      vi.advanceTimersByTime(3100);
+      expect(h.enqueued[0].text).toBe('summary\nfile-history-snapshot\nsome-future-type');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

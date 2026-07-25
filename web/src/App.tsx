@@ -45,12 +45,27 @@ export default function App() {
         setMode(cur.kind === 'movie' ? { kind: 'free' } : { kind: 'movie' });
         return;
       }
+      if (e.key === 'b' || e.key === 'B') {
+        // build mode lives inside the free camera; entering releases the pointer
+        // lock so the cursor can grab objects (setCameraMode ends it elsewhere)
+        if (cur.kind !== 'free') return;
+        const st = useStore.getState();
+        if (!st.buildMode && document.pointerLockElement) document.exitPointerLock();
+        st.setBuildMode(!st.buildMode);
+        return;
+      }
       if (e.key === 'v' || e.key === 'V') {
         setMode(cur.kind === 'free' ? { kind: 'pov', index: 0 } : { kind: 'free' });
       } else if (e.key === 'Escape') {
-        if (useStore.getState().settingsOpen) setSettingsOpen(false);
-        else if (cur.kind === 'focus') setMode(cur.from);
-        else setMode({ kind: 'free' });
+        const st = useStore.getState();
+        if (st.settingsOpen) setSettingsOpen(false);
+        else if (st.buildHold) st.setBuildHold(null); // cancel the in-flight drag first
+        else if (st.buildMode) st.setBuildMode(false);
+        else if (cur.kind === 'focus') {
+          // flag first: FreeFlyControls' mount effect re-locks when it sees it
+          if (cur.relock && cur.from.kind === 'free') useStore.getState().setPendingRelock(true);
+          setMode(cur.from);
+        } else setMode({ kind: 'free' });
       } else if (e.key === 'End' && cur.kind === 'focus') {
         useStore.getState().setFocusScroll(0); // snap back to the live tail
       } else if ((e.key === 'Tab' || e.key === 'ArrowRight') && cur.kind === 'pov') {
@@ -75,6 +90,7 @@ export default function App() {
           // and "misses", which must not bounce us straight back out)
           const cur = useStore.getState().cameraMode;
           if (shouldExitFocusOnMissedClick(cur, gestureStartMode.current) && cur.kind === 'focus') {
+            if (cur.relock && cur.from.kind === 'free') useStore.getState().setPendingRelock(true);
             setMode(cur.from);
           }
         }}
@@ -113,6 +129,7 @@ function Crosshair() {
 function Hud({ connected, mode, onSettings }: { connected: boolean; mode: ReturnType<typeof useStore.getState>['cameraMode']; onSettings: () => void }) {
   const povs = usePovList();
   const office = useStore((s) => s.office);
+  const buildMode = useStore((s) => s.buildMode);
   const focusName =
     mode.kind === 'focus'
       ? mode.target === 'boss'
@@ -120,8 +137,10 @@ function Hud({ connected, mode, onSettings }: { connected: boolean; mode: Return
         : office?.employees.find((e) => e.id === mode.target)?.name ?? 'screen'
       : '';
   const label =
-    mode.kind === 'free'
-      ? 'Free camera — click to look (Esc releases) · WASD fly · E/Space up · C down · Shift slow · V for POV tour · M movie mode'
+    mode.kind === 'free' && buildMode
+      ? 'Build mode — drag objects to move · hold Ctrl while dragging to rotate · red = blocked · B/Esc exit'
+      : mode.kind === 'free'
+      ? 'Free camera — click to look (Esc releases) · WASD fly · E/Space up · C down · Shift slow · V for POV tour · M movie mode · B build mode'
       : mode.kind === 'movie'
         ? 'Movie mode — auto-follows the action · arrows cut now · M/Esc exit'
         : mode.kind === 'focus'

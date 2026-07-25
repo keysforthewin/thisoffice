@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { enterFocusMode, useStore, type CameraPose } from '../store.ts';
 import { visibleRows, wrapLines } from './monitorScrollback.ts';
+import { bossScreenLines } from './bossScreen.ts';
 
 const W = 512;
 const H = 320;
@@ -81,7 +82,7 @@ export function MonitorScreen({ target, working, fallbackTitle, width = 1.35, he
       scroll * 8191;
     if (version === drawn.current.version) return;
     drawn.current = { version, at: t, blink: !drawn.current.blink };
-    if (isBoss) drawBossScreen(ctx, drawn.current.blink);
+    if (isBoss) drawBossScreen(ctx, drawn.current.blink, scroll);
     else
       drawToolScreen(
         ctx,
@@ -98,6 +99,8 @@ export function MonitorScreen({ target, working, fallbackTitle, width = 1.35, he
   const focusMonitor = (e: ThreeEvent<PointerEvent>) => {
     // while pointer-locked, clicks steer the fly cam — never steal them
     if (document.pointerLockElement) return;
+    // in build mode a click on the desk grabs the whole unit, never focuses
+    if (useStore.getState().buildMode) return;
     e.stopPropagation();
     const st = useStore.getState();
     const cur = st.cameraMode;
@@ -112,6 +115,7 @@ export function MonitorScreen({ target, working, fallbackTitle, width = 1.35, he
 
   const hoverStart = () => {
     if (document.pointerLockElement) return; // crosshair raycast owns hover while flying
+    if (useStore.getState().buildMode) return; // build mode's own cursor feedback wins
     useStore.getState().setMonitorHover(target);
     gl.domElement.style.cursor = 'pointer';
   };
@@ -170,7 +174,13 @@ const MAX_COLS = MONITOR_COLS;
 
 function hashState(): number {
   const s = useStore.getState().office;
-  return s ? s.inbox.length * 31 + (s.inbox[s.inbox.length - 1]?.id.length ?? 0) : 0;
+  if (!s) return 0;
+  // must catch the summarizer rewriting an existing item's text, not just adds
+  let h = 0;
+  for (const i of s.inbox) {
+    h = (h * 31 + i.id.length + i.text.length * 7 + (i.fullText?.length ?? 0) * 13) | 0;
+  }
+  return h;
 }
 
 function base(ctx: CanvasRenderingContext2D, title: string, accent: string) {
@@ -225,7 +235,10 @@ function drawToolScreen(
 function drawLines(ctx: CanvasRenderingContext2D, lines: string[]) {
   lines.forEach((line, i) => {
     if (line.startsWith('$') || line.startsWith('>')) ctx.fillStyle = '#79c0ff';
+    else if (line.startsWith('▸')) ctx.fillStyle = '#d2a8ff'; // boss inbox header
     else if (line.startsWith('✓')) ctx.fillStyle = '#7ee787';
+    else if (line.startsWith('✗')) ctx.fillStyle = '#f85149'; // errors / denials / interrupts
+    else if (line.startsWith('⚠')) ctx.fillStyle = '#d29922'; // warnings (model fallbacks etc.)
     else if (line.startsWith('──')) ctx.fillStyle = '#8b949e'; // history divider
     else ctx.fillStyle = '#c9d1d9';
     ctx.fillText(line, MARGIN, TITLE_H + LINE_H * (i + 1));
@@ -271,29 +284,19 @@ function drawImageBody(ctx: CanvasRenderingContext2D, image: HTMLImageElement, l
   }
 }
 
-function drawBossScreen(ctx: CanvasRenderingContext2D, blink: boolean) {
+function drawBossScreen(ctx: CanvasRenderingContext2D, blink: boolean, scroll: number) {
   const office = useStore.getState().office;
   base(ctx, `INBOX — ${office?.boss.name ?? 'Boss'}`, '#d2a8ff');
   const items = office?.inbox ?? [];
   if (items.length === 0) {
     ctx.fillStyle = '#8b949e';
     ctx.fillText('No new messages…', MARGIN, TITLE_H + LINE_H * 2);
+    return;
   }
-  let row = 0;
-  for (const item of items.slice(-5).reverse()) {
-    if (row >= MAX_ROWS - 1) break;
-    ctx.fillStyle = '#d2a8ff';
-    const time = item.at.slice(11, 16);
-    ctx.fillText(clip(`▸ [${item.project}] ${time}`, MAX_COLS), MARGIN, TITLE_H + LINE_H * (row + 1));
-    row++;
-    ctx.fillStyle = '#c9d1d9';
-    for (const l of wrapLines([item.text], MAX_COLS - 2).slice(0, 2)) {
-      if (row >= MAX_ROWS) break;
-      ctx.fillText('  ' + l, MARGIN, TITLE_H + LINE_H * (row + 1));
-      row++;
-    }
-  }
-  if (blink) {
+  const wrapped = wrapLines(bossScreenLines(items), MAX_COLS);
+  drawLines(ctx, visibleRows(wrapped, scroll, MAX_ROWS));
+  if (scroll > 0) drawScrollIndicator(ctx, scroll, wrapped.length);
+  else if (blink) {
     ctx.fillStyle = '#d2a8ff';
     ctx.fillRect(W - 24, 8, 10, 14);
   }

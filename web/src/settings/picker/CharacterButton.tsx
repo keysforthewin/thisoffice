@@ -8,10 +8,12 @@ import { useHydrateThumbs } from './useThumbnails.tsx';
 interface Props {
   variant: string;
   title?: string;
+  /** REST path of this person's biography (e.g. /api/boss/bio); enables the picker's Biography tab */
+  bioPath?: string;
   onPick: (variant: string) => void;
 }
 
-export function CharacterButton({ variant, title, onPick }: Props) {
+export function CharacterButton({ variant, title, bioPath, onPick }: Props) {
   const [open, setOpen] = useState(false);
   const catalog = useStore((s) => s.catalog);
   useHydrateThumbs();
@@ -26,7 +28,7 @@ export function CharacterButton({ variant, title, onPick }: Props) {
         <span style={styles.chevron}>▾</span>
       </button>
       {open && (
-        <CharacterPicker current={variant} title={title} onPick={onPick} onClose={() => setOpen(false)} />
+        <CharacterPicker current={variant} title={title} bioPath={bioPath} onPick={onPick} onClose={() => setOpen(false)} />
       )}
     </>
   );

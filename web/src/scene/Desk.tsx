@@ -1,10 +1,11 @@
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
-import type { ThreeElements } from '@react-three/fiber';
+import { useFrame, type ThreeElements } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
 import { MonitorScreen } from './MonitorScreen.tsx';
 import { Person } from './Person.tsx';
-import { seatTransform } from './layout.ts';
+import { deskFootprint, resolveSeat } from './buildLayout.ts';
+import { BuildHandle, displayPose } from './build.tsx';
 import { useStore } from '../store.ts';
 import { catalogEntry } from '../characters/catalog.ts';
 
@@ -16,6 +17,8 @@ interface Props {
   name?: string;
   fallbackTitle?: string;
   boss?: boolean;
+  /** blinks the boss desk's red light: a session is waiting for user input */
+  waiting?: boolean;
 }
 
 export function FurnitureModel({ url, ...props }: { url: string } & ThreeElements['group']) {
@@ -76,11 +79,50 @@ function ChairLegExtensions({ boss }: { boss?: boolean }) {
 }
 
 /**
+ * Small desk beacon: dark base + red bulb that blinks while a tailed session is
+ * waiting for user input. Always part of the desk; dark when idle.
+ */
+function WaitingLight({ on }: { on: boolean }) {
+  const mat = useRef<THREE.MeshStandardMaterial>(null);
+  const glow = useRef<THREE.PointLight>(null);
+  useFrame(({ clock }) => {
+    const lit = on && Math.sin(clock.elapsedTime * 5) > 0; // square-wave blink ~0.8 Hz
+    if (mat.current) mat.current.emissiveIntensity = lit ? 4 : 0.15;
+    if (glow.current) glow.current.intensity = lit ? 2.2 : 0;
+  });
+  return (
+    <group position={[0.7, 1.0, 0.25]}>
+      <mesh castShadow position={[0, 0.02, 0]}>
+        <cylinderGeometry args={[0.055, 0.065, 0.04]} />
+        <meshStandardMaterial color="#1a1a1f" roughness={0.6} />
+      </mesh>
+      <mesh position={[0, 0.07, 0]}>
+        <sphereGeometry args={[0.05, 16, 12]} />
+        <meshStandardMaterial ref={mat} color="#3a0d0d" emissive="#ff2222" emissiveIntensity={0.15} />
+      </mesh>
+      <pointLight ref={glow} position={[0, 0.12, 0]} color="#ff3b30" intensity={0} distance={1.6} />
+    </group>
+  );
+}
+
+/**
  * A workstation: table + chair + monitor + seated character.
  * Local space: desk faces +z (screen readable from -z, i.e. from behind the chair).
  */
-export function Desk({ seat, variant, working, monitorTarget, name, fallbackTitle, boss }: Props) {
-  const { position, rotationY } = seatTransform(seat);
+export function Desk({ seat, variant, working, monitorTarget, name, fallbackTitle, boss, waiting }: Props) {
+  const layout = useStore((s) => s.office?.layout);
+  const maxSeat = useStore((s) => Math.max(3, ...(s.office?.employees.map((e) => e.seat) ?? [])));
+  const buildMode = useStore((s) => s.buildMode);
+  const buildHold = useStore((s) => s.buildHold);
+  const resolved = resolveSeat(layout, seat, maxSeat);
+  // while this desk is being dragged in build mode, render at the drag ghost
+  const pose = displayPose(buildHold, 'seat', seat, {
+    x: resolved.position.x,
+    z: resolved.position.z,
+    rotY: resolved.rotationY,
+  });
+  const position = [pose.x, 0, pose.z] as [number, number, number];
+  const rotationY = pose.rotY;
   const deskScale = boss ? 1.15 : 1;
   const chairHeight = useStore((s) => catalogEntry(s.catalog, variant)?.chairHeight ?? 0);
   // the focus camera parks where this character's head is — hide them while viewing
@@ -105,6 +147,10 @@ export function Desk({ seat, variant, working, monitorTarget, name, fallbackTitl
       <group position={[0, 1.66, 0.35]}>
         <MonitorScreen target={monitorTarget} working={working} fallbackTitle={fallbackTitle} />
       </group>
+      {boss && <WaitingLight on={!!waiting} />}
+      {/* whole-unit drag collider: characters are raycast-invisible (NO_RAYCAST), so
+          build mode grabs this box instead of individual meshes */}
+      {buildMode && <BuildHandle kind="seat" itemKey={seat} pose={pose} footprint={deskFootprint(!!boss)} />}
       {/* key: remount on variant change — the mixer caches PropertyBindings by (root uuid,
           track name), so an in-place model swap leaves the new rig driven by bindings to the
           old clone's bones (T-pose). KayKit rigs share track names, so every swap collides. */}

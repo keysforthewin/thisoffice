@@ -5,6 +5,8 @@ import { startWatcher } from './watcher.ts';
 import { CharacterStore, sanitizeId, isAnimSlot, saveUpload, streamFile } from './characters.ts';
 
 const PORT = 4680;
+/** ~8k chars is the recommended bio size; hard cap leaves generous headroom */
+const BIO_MAX_CHARS = 20_000;
 
 const characters = new CharacterStore();
 const office = new Office(() => characters.variantIds());
@@ -106,10 +108,46 @@ const server = http.createServer((req, res) => {
       if (ok) publishCatalog();
       return send(ok ? 200 : 404, { ok });
     }
+    if (url.pathname === '/api/boss/bio') {
+      if (req.method === 'GET') return send(200, { bio: office.getBossBio() });
+      if (req.method === 'PUT') {
+        const body = await readBody();
+        if (typeof body.bio !== 'string' || body.bio.length > BIO_MAX_CHARS) {
+          return send(400, { error: `bio must be a string of at most ${BIO_MAX_CHARS} chars` });
+        }
+        office.setBossBio(body.bio);
+        return send(200, { ok: true });
+      }
+    }
+    const bioMatch = url.pathname.match(/^\/api\/employees\/([^/]+)\/bio$/);
+    if (bioMatch) {
+      if (req.method === 'GET') {
+        const bio = office.getEmployeeBio(bioMatch[1]);
+        return bio === null ? send(404, { error: 'no such employee' }) : send(200, { bio });
+      }
+      if (req.method === 'PUT') {
+        const body = await readBody();
+        if (typeof body.bio !== 'string' || body.bio.length > BIO_MAX_CHARS) {
+          return send(400, { error: `bio must be a string of at most ${BIO_MAX_CHARS} chars` });
+        }
+        return office.setEmployeeBio(bioMatch[1], body.bio)
+          ? send(200, { ok: true })
+          : send(404, { error: 'no such employee' });
+      }
+    }
     if (url.pathname === '/api/settings' && req.method === 'PUT') {
       const body = await readBody();
       office.setBoss({ name: body.name, variant: body.variant });
       if (body.staffing) office.setStaffing(body.staffing);
+      return send(200, { ok: true });
+    }
+    if (url.pathname === '/api/layout' && req.method === 'PUT') {
+      const body = await readBody();
+      office.setLayout(body); // mergeLayout sanitizes; garbage keys are dropped
+      return send(200, { ok: true });
+    }
+    if (url.pathname === '/api/layout' && req.method === 'DELETE') {
+      office.resetLayout();
       return send(200, { ok: true });
     }
     if (url.pathname === '/api/employees' && req.method === 'POST') {

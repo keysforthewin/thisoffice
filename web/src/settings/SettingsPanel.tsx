@@ -39,6 +39,7 @@ export function SettingsPanel() {
           <CharacterButton
             variant={office.boss.variant}
             title={`Character for ${office.boss.name}`}
+            bioPath="/api/boss/bio"
             onPick={(v) => api('/settings', 'PUT', { variant: v })}
           />
         </div>
@@ -70,6 +71,20 @@ export function SettingsPanel() {
             onCommit={(v) => api('/settings', 'PUT', { staffing: { idleTimeoutSec: v } })}
           />
         </div>
+
+        <h3 style={styles.sectionTitle}>Layout</h3>
+        <button
+          style={styles.hire}
+          onClick={() => {
+            if (confirm('Reset the office layout? Every desk, furniture piece, window and wall hanging returns to its default spot.'))
+              api('/layout', 'DELETE');
+          }}
+        >
+          ↺ Reset layout
+        </button>
+        <div style={{ fontSize: 12, color: '#9aa4b0', marginTop: 6 }}>
+          Tip: press <b>B</b> in the free camera to rearrange the office.
+        </div>
       </div>
     </div>
   );
@@ -91,6 +106,7 @@ function EmployeeRow({ id, name, variant, status }: { id: string; name: string; 
       <CharacterButton
         variant={variant}
         title={`Character for ${name}`}
+        bioPath={`/api/employees/${id}/bio`}
         onPick={(v) => api(`/employees/${id}`, 'PUT', { variant: v })}
       />
       <span style={{ ...styles.badge, background: status === 'working' ? '#2e5c37' : '#3a3f47' }}>

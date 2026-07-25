@@ -33,6 +33,7 @@ function makeOffice(overrides: Partial<OfficeState>): OfficeState {
     inbox: [],
     todos: null,
     staffing: { minEmployees: 1, maxEmployees: 5, idleTimeoutSec: 60 },
+    waitingForInput: false,
     ...overrides,
   };
 }

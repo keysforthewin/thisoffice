@@ -4,6 +4,8 @@ import { useStore } from '../store.ts';
 import { Desk, FurnitureModel } from './Desk.tsx';
 import { Whiteboard } from './Whiteboard.tsx';
 import { roomDims, whiteboardTransform, BACK_Z } from './layout.ts';
+import { resolveFurniture, WALL_ITEMS } from './buildLayout.ts';
+import { BuildHandle, WallHandle, displayPose, useWallOffset } from './build.tsx';
 import { wallStrips } from './wallOpenings.ts';
 import { WindowVista } from './WindowVista.tsx';
 
@@ -101,6 +103,15 @@ export function Office() {
   );
   const { width, depth, centerZ, height } = roomDims(maxSeat);
   const backZ = BACK_Z;
+  const layout = office?.layout;
+  const buildMode = useStore((s) => s.buildMode);
+  const buildHold = useStore((s) => s.buildHold);
+  const furniture = resolveFurniture(layout, maxSeat);
+  const backOx = useWallOffset('windowBack', maxSeat);
+  const leftOx = useWallOffset('windowLeft', maxSeat);
+  const artOx = useWallOffset('wallArt', maxSeat);
+  const frameOx = useWallOffset('pictureFrame', maxSeat);
+  const wallItem = (id: string) => WALL_ITEMS.find((w) => w.id === id)!;
 
   return (
     <group>
@@ -111,20 +122,26 @@ export function Office() {
       </mesh>
       {/* back wall (behind the boss), with a window onto its own layered city vista */}
       <group position={[0, height / 2, backZ]}>
-        <WallWithWindow w={width} h={height} ox={-width / 4} oy={2.1 - height / 2} ow={3.6} oh={1.9} />
-        <group position={[-width / 4, 2.1 - height / 2, 0]}>
+        <WallWithWindow w={width} h={height} ox={backOx} oy={2.1 - height / 2} ow={3.6} oh={1.9} />
+        <group position={[backOx, 2.1 - height / 2, 0]}>
           <WindowVista id="back" />
         </group>
+        {buildMode && (
+          <WallHandle id="windowBack" wall="back" ox={backOx} oy={2.1 - height / 2} w={3.8} h={2.1} />
+        )}
       </group>
       {/* warm spill through the back window (kept from the old fake window) */}
-      <pointLight color="#ffd9a0" intensity={14} distance={12} decay={2} position={[-width / 4, 2.1, backZ + 1]} />
+      <pointLight color="#ffd9a0" intensity={14} distance={12} decay={2} position={[backOx, 2.1, backZ + 1]} />
 
       {/* left wall, with a window onto its own layered city vista (windows face outward like before) */}
       <group position={[-width / 2, height / 2, centerZ]} rotation={[0, Math.PI / 2, 0]}>
-        <WallWithWindow w={depth} h={height} ox={4.5} oy={2.1 - height / 2} ow={3.6} oh={1.9} />
-        <group position={[4.5, 2.1 - height / 2, 0]}>
+        <WallWithWindow w={depth} h={height} ox={leftOx} oy={2.1 - height / 2} ow={3.6} oh={1.9} />
+        <group position={[leftOx, 2.1 - height / 2, 0]}>
           <WindowVista id="left" />
         </group>
+        {buildMode && (
+          <WallHandle id="windowLeft" wall="left" ox={leftOx} oy={2.1 - height / 2} w={3.8} h={2.1} />
+        )}
       </group>
       {/* right wall (whiteboard wall) */}
       <mesh receiveShadow position={[width / 2, height / 2, centerZ]} rotation={[0, -Math.PI / 2, 0]}>
@@ -149,19 +166,35 @@ export function Office() {
       <CeilingLight position={[-width / 4, height, centerZ + depth / 4]} />
       <CeilingLight position={[width / 4, height, centerZ + depth / 4]} />
 
-      {/* decor — same KayKit furniture set */}
-      <FurnitureModel url="/models/furniture/rug_rectangle_A.gltf" position={[0, 0.005, centerZ + 0.5]} scale={[2.2, 1, 2.2]} />
-      <FurnitureModel url="/models/furniture/lamp_standing.gltf" position={[width / 2 - 1, 0, backZ + 0.9]} rotation={[0, -Math.PI / 4, 0]} />
-      <pointLight color="#ffcf96" intensity={10} distance={9} decay={2} position={[width / 2 - 1, 2.4, backZ + 1]} />
-      <FurnitureModel url="/models/furniture/shelf_A_big.gltf" position={[width / 2 - 0.4, 0, centerZ + 3.2]} rotation={[0, -Math.PI / 2, 0]} />
-      <FurnitureModel url="/models/furniture/cactus_medium_A.gltf" position={[-width / 2 + 0.8, 0, backZ + 0.8]} />
-      <FurnitureModel url="/models/furniture/cactus_small_A.gltf" position={[-width / 2 + 0.6, 0, centerZ + 3]} />
-      <FurnitureModel url="/models/furniture/couch_pillows.gltf" position={[-width / 2 + 0.9, 0, centerZ + 0.6]} rotation={[0, Math.PI / 2, 0]} />
-      {/* lamp next to the couch */}
-      <FurnitureModel url="/models/furniture/lamp_standing.gltf" position={[-width / 2 + 0.7, 0, centerZ - 1.7]} rotation={[0, Math.PI / 3, 0]} />
-      <pointLight color="#ffcf96" intensity={10} distance={9} decay={2} position={[-width / 2 + 0.7, 2.2, centerZ - 1.7]} />
-      <WallArt url="/decor/wallart_1.jpg" position={[width / 4 + 0.5, 2.15, backZ + 0.05]} />
-      <FurnitureModel url="/models/furniture/pictureframe_medium.gltf" position={[0, 2.25, backZ + 0.04]} />
+      {/* decor — same KayKit furniture set, positions resolved through the build-mode layout */}
+      {furniture.map((f) => {
+        const pose = displayPose(buildHold, 'furniture', f.id, f.pose);
+        return (
+          <group key={f.id} position={[pose.x, f.y, pose.z]} rotation={[0, pose.rotY, 0]}>
+            <FurnitureModel url={f.url} scale={f.scale} />
+            {f.light && (
+              <pointLight
+                color={f.light.color}
+                intensity={f.light.intensity}
+                distance={f.light.distance}
+                decay={2}
+                position={f.light.offset}
+              />
+            )}
+            {buildMode && (
+              <BuildHandle kind="furniture" itemKey={f.id} pose={pose} footprint={f.footprint} height={f.handleH} />
+            )}
+          </group>
+        );
+      })}
+      <WallArt url="/decor/wallart_1.jpg" position={[artOx, 2.15, backZ + 0.05]} />
+      <FurnitureModel url="/models/furniture/pictureframe_medium.gltf" position={[frameOx, 2.25, backZ + 0.04]} />
+      {buildMode && (
+        <group position={[0, 0, backZ]}>
+          <WallHandle id="wallArt" wall="back" ox={artOx} oy={2.15} w={wallItem('wallArt').halfW * 2} h={1.7} />
+          <WallHandle id="pictureFrame" wall="back" ox={frameOx} oy={2.25} w={wallItem('pictureFrame').halfW * 2} h={1.0} />
+        </group>
+      )}
 
       <Whiteboard
         position={whiteboardTransform(maxSeat).position.toArray() as [number, number, number]}
@@ -177,6 +210,7 @@ export function Office() {
           monitorTarget="boss"
           name={office.boss.name}
           boss
+          waiting={office.waitingForInput}
         />
       )}
       {/* employees */}

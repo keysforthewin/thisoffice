@@ -1,7 +1,7 @@
 import { create } from 'zustand';
-import { MONITOR_IMAGE_MARKER, type CharacterCatalog, type OfficeState, type ServerMsg } from '../../shared/types.ts';
+import { MONITOR_IMAGE_MARKER, type CharacterCatalog, type ItemPose, type OfficeLayout, type OfficeState, type ServerMsg } from '../../shared/types.ts';
 import { boardContent } from './scene/whiteboardContent.ts';
-import { ACTIVE_WINDOW_MS } from './scene/movieShots.ts';
+import { activityTtl } from './scene/movieShots.ts';
 import { appendHistory } from './scene/monitorScrollback.ts';
 
 export interface MonitorContent {
@@ -28,7 +28,7 @@ export type CameraMode =
    * exit, `returnPose` the free-camera spot to fly back to (unset when entered
    * from pov/movie — those modes reposition the camera themselves).
    */
-  | { kind: 'focus'; target: string; from: CameraMode; returnPose?: CameraPose };
+  | { kind: 'focus'; target: string; from: CameraMode; returnPose?: CameraPose; relock?: boolean };
 
 /**
  * Should a missed click (R3F onPointerMissed) exit focus mode? Only when the
@@ -42,10 +42,32 @@ export function shouldExitFocusOnMissedClick(cur: CameraMode, gestureStartMode: 
   return cur.kind === 'focus' && cur === gestureStartMode;
 }
 
-/** The focus mode a monitor click produces: switching monitors keeps the original exit state. */
-export function enterFocusMode(cur: CameraMode, target: string, pose: CameraPose): CameraMode {
-  if (cur.kind === 'focus') return { kind: 'focus', target, from: cur.from, returnPose: cur.returnPose };
-  return { kind: 'focus', target, from: cur, returnPose: cur.kind === 'free' ? pose : undefined };
+/**
+ * The focus mode a monitor click produces: switching monitors keeps the original
+ * exit state. `relock` marks entries made from a pointer-locked first person so
+ * the exit can re-acquire the lock instead of dumping the user into cursor mode.
+ */
+export function enterFocusMode(cur: CameraMode, target: string, pose: CameraPose, relock = false): CameraMode {
+  if (cur.kind === 'focus') return { kind: 'focus', target, from: cur.from, returnPose: cur.returnPose, relock: cur.relock };
+  return {
+    kind: 'focus',
+    target,
+    from: cur,
+    returnPose: cur.kind === 'free' ? pose : undefined,
+    relock: relock && cur.kind === 'free' ? true : undefined,
+  };
+}
+
+/** An object currently being dragged in build mode; the pose is the on-screen ghost. */
+export interface BuildHold {
+  kind: 'seat' | 'furniture' | 'wall';
+  /** seat number, furniture id, or wall-item id */
+  key: number | string;
+  /** floor items: the ghost pose following the cursor */
+  ghost: ItemPose | null;
+  /** wall items: the ghost along-wall offset */
+  ghostOffset: number | null;
+  valid: boolean;
 }
 
 interface AppStore {
@@ -57,6 +79,8 @@ interface AppStore {
   monitorHistory: Record<string, string[]>;
   /** focus-mode scroll position in wrapped rows from the bottom; 0 = live tail */
   focusScroll: number;
+  /** focus exit wants the fly cam pointer-locked again; cleared once the lock is re-acquired */
+  pendingRelock: boolean;
   /** monitor under the cursor (or under the fly-cam crosshair): 'boss' | employee id | null */
   monitorHover: string | null;
   /** subject key ('boss' | employee id | 'whiteboard') → epoch ms of last content change */
@@ -65,25 +89,35 @@ interface AppStore {
   cameraMode: CameraMode;
   settingsOpen: boolean;
   catalog: CharacterCatalog | null;
+  /** B toggles: cursor visible, camera frozen, objects draggable */
+  buildMode: boolean;
+  buildHold: BuildHold | null;
   applyServerMsg: (msg: ServerMsg) => void;
   setConnected: (v: boolean) => void;
   setCameraMode: (m: CameraMode) => void;
   setFocusScroll: (n: number) => void;
+  setPendingRelock: (v: boolean) => void;
   setMonitorHover: (target: string | null) => void;
   setSettingsOpen: (v: boolean) => void;
   setCatalog: (c: CharacterCatalog) => void;
   /** optimistic local patch while an adjustment slider drags; server broadcast confirms it */
   patchCharacter: (id: string, patch: { scale?: number; seatOffset?: number; chairHeight?: number }) => void;
+  setBuildMode: (v: boolean) => void;
+  setBuildHold: (h: BuildHold | null) => void;
+  /** optimistic local merge on drop; the server broadcast confirms it */
+  patchLayout: (patch: OfficeLayout) => void;
 }
 
 let whiteboardKey: string | null = null;
+/** id of the newest inbox item last seen; a new tail id means the boss just received a message */
+let inboxKey: string | null = null;
 
 /** stamp `key` as active now, dropping entries that have already fallen outside the movie camera's window */
 function stampActivity(lastActivity: Record<string, number>, key: string): Record<string, number> {
   const now = Date.now();
   const next: Record<string, number> = { [key]: now };
   for (const k in lastActivity) {
-    if (k !== key && now - lastActivity[k] < ACTIVE_WINDOW_MS) next[k] = lastActivity[k];
+    if (k !== key && now - lastActivity[k] < activityTtl(k)) next[k] = lastActivity[k];
   }
   return next;
 }
@@ -94,23 +128,29 @@ export const useStore = create<AppStore>((set, get) => ({
   monitorVersion: {},
   monitorHistory: {},
   focusScroll: 0,
+  pendingRelock: false,
   monitorHover: null,
   lastActivity: {},
   connected: false,
   cameraMode: { kind: 'free' },
   settingsOpen: false,
   catalog: null,
+  buildMode: false,
+  buildHold: null,
 
   applyServerMsg: (msg) => {
     if (msg.type === 'state') {
       const key = JSON.stringify(boardContent(msg.state));
       const prevKey = whiteboardKey;
       whiteboardKey = key;
-      if (prevKey !== null && prevKey !== key) {
-        set({ office: msg.state, lastActivity: stampActivity(get().lastActivity, 'whiteboard') });
-      } else {
-        set({ office: msg.state });
-      }
+      // keyed on the tail id (not text) so the summarizer's later rewrite doesn't re-stamp
+      const tailId = msg.state.inbox.at(-1)?.id ?? '';
+      const prevInboxKey = inboxKey;
+      inboxKey = tailId;
+      let lastActivity = get().lastActivity;
+      if (prevKey !== null && prevKey !== key) lastActivity = stampActivity(lastActivity, 'whiteboard');
+      if (prevInboxKey !== null && prevInboxKey !== tailId) lastActivity = stampActivity(lastActivity, 'boss');
+      set({ office: msg.state, lastActivity });
       return;
     }
     if (msg.type === 'catalog') {
@@ -129,7 +169,7 @@ export const useStore = create<AppStore>((set, get) => ({
         appended = msg.append.split('\n').filter((l) => {
           // require a real image payload: session text ABOUT the marker (e.g. this
           // very feature being discussed on a monitor) must not hijack the screen
-          if (!l.startsWith(MONITOR_IMAGE_MARKER + 'data:image/')) return true;
+          if (!l.startsWith(MONITOR_IMAGE_MARKER + 'data:image/') && !l.startsWith(MONITOR_IMAGE_MARKER + 'http')) return true;
           image = l.slice(MONITOR_IMAGE_MARKER.length);
           return false;
         });
@@ -155,8 +195,16 @@ export const useStore = create<AppStore>((set, get) => ({
   setConnected: (connected) => set({ connected }),
   // any mode change lands on the live tail: entering focus starts unscrolled,
   // and exiting mid-history must not leave a stale offset for the next visit
-  setCameraMode: (cameraMode) => set({ cameraMode, focusScroll: 0 }),
+  setCameraMode: (cameraMode) =>
+    // a pending relock only makes sense heading back into the fly cam;
+    // build mode only exists in the free camera — any other mode ends it
+    set({
+      cameraMode,
+      focusScroll: 0,
+      ...(cameraMode.kind !== 'free' ? { pendingRelock: false, buildMode: false, buildHold: null } : {}),
+    }),
   setFocusScroll: (focusScroll) => set({ focusScroll }),
+  setPendingRelock: (pendingRelock) => set({ pendingRelock }),
   // called per-frame from the fly-cam crosshair raycast — skip no-op updates
   setMonitorHover: (monitorHover) =>
     get().monitorHover === monitorHover ? undefined : set({ monitorHover }),
@@ -173,9 +221,28 @@ export const useStore = create<AppStore>((set, get) => ({
           }
         : {},
     ),
+  setBuildMode: (buildMode) => set({ buildMode, buildHold: null }),
+  setBuildHold: (buildHold) => set({ buildHold }),
+  patchLayout: (patch) =>
+    set((s) => {
+      if (!s.office) return {};
+      const cur = s.office.layout;
+      const layout: OfficeLayout = {
+        ...cur,
+        ...(patch.seats ? { seats: { ...cur?.seats, ...patch.seats } } : {}),
+        ...(patch.furniture ? { furniture: { ...cur?.furniture, ...patch.furniture } } : {}),
+        ...(patch.wallItems ? { wallItems: { ...cur?.wallItems, ...patch.wallItems } } : {}),
+      };
+      return { office: { ...s.office, layout } };
+    }),
 }));
 
 /** test-only: forget the cached whiteboard key so the next state msg counts as "first" */
 export function resetWhiteboardKeyForTest() {
   whiteboardKey = null;
+}
+
+/** test-only: forget the cached inbox tail id so the next state msg counts as "first" */
+export function resetInboxKeyForTest() {
+  inboxKey = null;
 }

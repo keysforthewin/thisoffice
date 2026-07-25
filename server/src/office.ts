@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { CharacterCatalog, Employee, OfficeState, InboxItem, TodoItem, ServerMsg, WorkerStatus, StaffingSettings } from '../../shared/types.ts';
+import type { CharacterCatalog, Employee, OfficeState, InboxItem, ItemPose, OfficeLayout, TodoItem, ServerMsg, WorkerStatus, StaffingSettings } from '../../shared/types.ts';
 import { CHARACTER_VARIANTS, MONITOR_IMAGE_MARKER } from '../../shared/types.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -33,15 +33,56 @@ export function clampStaffing(cfg: Partial<StaffingSettings> | undefined, base: 
 }
 
 interface PersistedState {
-  boss: { name: string; variant: string };
+  boss: { name: string; variant: string; bio?: string };
   employees: Array<Pick<Employee, 'id' | 'name' | 'seat' | 'variant' | 'hiredAt'>>;
   staffing?: StaffingSettings;
-  /** per-seat identity memory: an evicted seat's occupant returns with the same name/model */
-  roster?: Array<{ seat: number; name: string; variant: string }>;
+  /** per-seat identity memory: an evicted seat's occupant returns with the same name/model/bio */
+  roster?: Array<{ seat: number; name: string; variant: string; bio?: string }>;
   /** boss monitor messages; survive server restarts so the boss screen isn't wiped */
   inbox?: InboxItem[];
   /** whiteboard todo list; survives server restarts like the inbox */
   todos?: { project: string; items: TodoItem[] } | null;
+  /** build-mode layout overrides; absent = default layout */
+  layout?: OfficeLayout;
+}
+
+/** Per-map key cap: a layout only ever holds a few dozen items; this is a garbage guard. */
+const LAYOUT_MAX_KEYS = 200;
+
+function isPose(p: unknown): p is ItemPose {
+  const o = p as ItemPose;
+  return !!o && Number.isFinite(o.x) && Number.isFinite(o.z) && Number.isFinite(o.rotY);
+}
+
+/** Merge a (possibly hostile) layout patch into `base`, keeping only well-formed entries. */
+export function mergeLayout(base: OfficeLayout | undefined, patch: OfficeLayout): OfficeLayout {
+  const out: OfficeLayout = { ...base };
+  const cap = <T>(m: Record<string, T>) =>
+    Object.fromEntries(Object.entries(m).slice(-LAYOUT_MAX_KEYS)) as Record<string, T>;
+  if (patch.seats && typeof patch.seats === 'object') {
+    const merged: Record<number, ItemPose> = { ...out.seats };
+    for (const [k, v] of Object.entries(patch.seats)) {
+      if (Number.isInteger(Number(k)) && Number(k) >= 0 && isPose(v)) {
+        merged[Number(k)] = { x: v.x, z: v.z, rotY: v.rotY };
+      }
+    }
+    out.seats = cap(merged);
+  }
+  if (patch.furniture && typeof patch.furniture === 'object') {
+    const merged: Record<string, ItemPose> = { ...out.furniture };
+    for (const [k, v] of Object.entries(patch.furniture)) {
+      if (isPose(v)) merged[k] = { x: v.x, z: v.z, rotY: v.rotY };
+    }
+    out.furniture = cap(merged);
+  }
+  if (patch.wallItems && typeof patch.wallItems === 'object') {
+    const merged: Record<string, number> = { ...out.wallItems };
+    for (const [k, v] of Object.entries(patch.wallItems)) {
+      if (Number.isFinite(v)) merged[k] = v;
+    }
+    out.wallItems = cap(merged);
+  }
+  return out;
 }
 
 type Listener = (msg: ServerMsg) => void;
@@ -104,7 +145,9 @@ export class Office {
   private assignCb: ((key: string, employee: Employee) => void) | null = null;
   private idleTimers = new Map<string, NodeJS.Timeout>();
   /** seat -> remembered identity; survives idle-eviction so rehires come back as the same person */
-  private roster = new Map<number, { name: string; variant: string }>();
+  private roster = new Map<number, { name: string; variant: string; bio?: string }>();
+  /** rich free-text backstory; stored outside OfficeState so 8KB bios never ride the broadcasts */
+  private bossBio = '';
   /** target -> what's on that monitor right now, so a reconnecting client can rebuild it */
   private screens = new Map<string, ScreenSnapshot>();
 
@@ -224,29 +267,44 @@ export class Office {
         })),
       };
     }
+    this.bossBio = typeof persisted.boss.bio === 'string' ? persisted.boss.bio : '';
     for (const r of persisted.roster ?? []) {
       if (Number.isInteger(r.seat) && r.seat > 0 && r.name && r.variant) {
-        this.roster.set(r.seat, { name: r.name, variant: r.variant });
+        this.roster.set(r.seat, {
+          name: r.name,
+          variant: r.variant,
+          ...(typeof r.bio === 'string' ? { bio: r.bio } : {}),
+        });
       }
     }
-    // current occupants are the freshest identity for their seat (also seeds legacy files)
-    for (const e of persisted.employees) this.roster.set(e.seat, { name: e.name, variant: e.variant });
-    const inbox = (persisted.inbox ?? []).filter((i) => i && i.id && typeof i.text === 'string').slice(-INBOX_MAX);
+    // current occupants are the freshest identity for their seat (also seeds legacy
+    // files); merge so a roster-loaded bio survives the name/variant refresh
+    for (const e of persisted.employees) {
+      this.roster.set(e.seat, { ...this.roster.get(e.seat), name: e.name, variant: e.variant });
+    }
+    const inbox = (persisted.inbox ?? [])
+      .filter((i) => i && i.id && typeof i.text === 'string')
+      .map(({ fullText, ...rest }) => (typeof fullText === 'string' ? { ...rest, fullText } : rest))
+      .slice(-INBOX_MAX);
     // resume the id sequence past restored items so new ids never collide
     this.inboxSeq = inbox.reduce((max, i) => Math.max(max, parseInt(i.id.replace('inbox-', ''), 10) || 0), 0);
     return {
-      boss: persisted.boss,
+      // bio deliberately stripped: it lives in bossBio, never in the broadcast state
+      boss: { name: persisted.boss.name, variant: persisted.boss.variant },
       bossStatus: 'idle',
+      waitingForInput: false,
       employees: persisted.employees.map((e) => ({ ...e, status: 'idle' as WorkerStatus, task: null })),
       inbox,
       todos: persisted.todos && Array.isArray(persisted.todos.items) ? persisted.todos : null,
       staffing: clampStaffing(persisted.staffing),
+      // re-sanitize on load: office.json may have been hand-edited
+      ...(persisted.layout ? { layout: mergeLayout(undefined, persisted.layout) } : {}),
     };
   }
 
   save() {
     const persisted: PersistedState = {
-      boss: this.state.boss,
+      boss: { ...this.state.boss, ...(this.bossBio ? { bio: this.bossBio } : {}) },
       employees: this.state.employees.map(({ id, name, seat, variant, hiredAt }) => ({ id, name, seat, variant, hiredAt })),
       staffing: this.state.staffing,
       roster: [...this.roster.entries()]
@@ -254,6 +312,7 @@ export class Office {
         .map(([seat, r]) => ({ seat, ...r })),
       inbox: this.state.inbox,
       todos: this.state.todos,
+      ...(this.state.layout ? { layout: this.state.layout } : {}),
     };
     fs.mkdirSync(path.dirname(this.dataFile), { recursive: true });
     fs.writeFileSync(this.dataFile, JSON.stringify(persisted, null, 2));
@@ -283,7 +342,7 @@ export class Office {
     if (opts.title !== undefined) snap.title = opts.title;
     if (opts.append) {
       for (const l of opts.append.split('\n')) {
-        if (l.startsWith(MONITOR_IMAGE_MARKER + 'data:image/')) snap.image = l;
+        if (l.startsWith(MONITOR_IMAGE_MARKER + 'data:image/') || l.startsWith(MONITOR_IMAGE_MARKER + 'http')) snap.image = l;
         else snap.lines.push(l);
       }
       snap.lines = snap.lines.slice(-SCREEN_MAX_LINES);
@@ -306,11 +365,12 @@ export class Office {
     });
   }
 
-  pushInbox(project: string, text: string) {
+  pushInbox(project: string, text: string, fullText?: string) {
     const item: InboxItem = {
       id: `inbox-${++this.inboxSeq}`,
       project,
       text,
+      ...(fullText ? { fullText } : {}),
       at: new Date().toISOString(),
     };
     this.state.inbox = [...this.state.inbox, item].slice(-INBOX_MAX);
@@ -340,6 +400,36 @@ export class Office {
     if (this.state.bossStatus === status) return;
     this.state.bossStatus = status;
     this.broadcastState();
+  }
+
+  /** Ephemeral (never persisted): some tailed session finished its turn and awaits the user. */
+  setWaitingForInput(on: boolean) {
+    if (this.state.waitingForInput === on) return;
+    this.state.waitingForInput = on;
+    this.broadcastState();
+  }
+
+  getBossBio(): string {
+    return this.bossBio;
+  }
+
+  setBossBio(bio: string) {
+    this.bossBio = bio;
+    this.save();
+  }
+
+  getEmployeeBio(id: string): string | null {
+    const emp = this.state.employees.find((e) => e.id === id);
+    if (!emp) return null;
+    return this.roster.get(emp.seat)?.bio ?? '';
+  }
+
+  setEmployeeBio(id: string, bio: string): boolean {
+    const emp = this.state.employees.find((e) => e.id === id);
+    if (!emp) return false;
+    this.roster.set(emp.seat, { name: emp.name, variant: emp.variant, ...this.roster.get(emp.seat), bio });
+    this.save();
+    return true;
   }
 
   /**
@@ -426,7 +516,8 @@ export class Office {
   }
 
   private remember(emp: Employee) {
-    this.roster.set(emp.seat, { name: emp.name, variant: emp.variant });
+    // merge: rename/setVariant must not clobber a stored bio
+    this.roster.set(emp.seat, { ...this.roster.get(emp.seat), name: emp.name, variant: emp.variant });
   }
 
   private hire(): Employee {
@@ -495,6 +586,20 @@ export class Office {
   setBoss(cfg: Partial<{ name: string; variant: string }>): void {
     if (typeof cfg.name === 'string') this.state.boss.name = cfg.name;
     if (typeof cfg.variant === 'string') this.state.boss.variant = cfg.variant;
+    this.save();
+    this.broadcastState();
+  }
+
+  /** Build mode drops an item: merge the (usually single-key) patch into the stored layout. */
+  setLayout(patch: OfficeLayout) {
+    this.state.layout = mergeLayout(this.state.layout, patch);
+    this.save();
+    this.broadcastState();
+  }
+
+  /** Settings-panel reset: everything returns to the built-in default layout. */
+  resetLayout() {
+    delete this.state.layout;
     this.save();
     this.broadcastState();
   }
