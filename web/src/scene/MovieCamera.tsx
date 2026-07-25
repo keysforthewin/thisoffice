@@ -47,7 +47,7 @@ export function MovieCamera() {
   useFrame((_, delta) => {
     const now = Date.now();
     const { office, lastActivity } = useStore.getState();
-    const key = activeSetKey(lastActivity, now);
+    const key = activeSetKey(lastActivity, now, office);
     shotAge.current += delta;
 
     if (!shot.current || wantCut.current || shotAge.current >= shotDuration.current || key !== setKey.current) {

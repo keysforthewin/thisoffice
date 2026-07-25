@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { MONITOR_IMAGE_MARKER, type CharacterCatalog, type OfficeState, type ServerMsg } from '../../shared/types.ts';
 import { boardContent } from './scene/whiteboardContent.ts';
+import { ACTIVE_WINDOW_MS } from './scene/movieShots.ts';
 
 export interface MonitorContent {
   title: string;
@@ -35,6 +36,16 @@ interface AppStore {
 
 let whiteboardKey: string | null = null;
 
+/** stamp `key` as active now, dropping entries that have already fallen outside the movie camera's window */
+function stampActivity(lastActivity: Record<string, number>, key: string): Record<string, number> {
+  const now = Date.now();
+  const next: Record<string, number> = { [key]: now };
+  for (const k in lastActivity) {
+    if (k !== key && now - lastActivity[k] < ACTIVE_WINDOW_MS) next[k] = lastActivity[k];
+  }
+  return next;
+}
+
 export const useStore = create<AppStore>((set, get) => ({
   office: null,
   monitors: {},
@@ -51,7 +62,7 @@ export const useStore = create<AppStore>((set, get) => ({
       const prevKey = whiteboardKey;
       whiteboardKey = key;
       if (prevKey !== null && prevKey !== key) {
-        set({ office: msg.state, lastActivity: { ...get().lastActivity, whiteboard: Date.now() } });
+        set({ office: msg.state, lastActivity: stampActivity(get().lastActivity, 'whiteboard') });
       } else {
         set({ office: msg.state });
       }
@@ -82,7 +93,7 @@ export const useStore = create<AppStore>((set, get) => ({
       const monitorVersion = { ...get().monitorVersion };
       monitorVersion[msg.target] = (monitorVersion[msg.target] ?? 0) + 1;
       const lastActivity = msg.append
-        ? { ...get().lastActivity, [msg.target]: Date.now() }
+        ? stampActivity(get().lastActivity, msg.target)
         : get().lastActivity;
       set({ monitors, monitorVersion, lastActivity });
     }

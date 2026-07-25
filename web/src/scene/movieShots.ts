@@ -31,9 +31,16 @@ export function activeKeys(lastActivity: Record<string, number>, now: number): s
   return Object.keys(lastActivity).filter((k) => now - lastActivity[k] < ACTIVE_WINDOW_MS);
 }
 
-/** Stable fingerprint of the active set; the movie camera recuts when it changes. */
-export function activeSetKey(lastActivity: Record<string, number>, now: number): string {
-  return activeKeys(lastActivity, now).sort().join('|');
+/**
+ * Stable fingerprint of the active set; the movie camera recuts when it changes.
+ * Filtered to keys with a resolvable subject so an evicted employee's screen
+ * disappearing from the office triggers an immediate recut.
+ */
+export function activeSetKey(lastActivity: Record<string, number>, now: number, office: OfficeState | null): string {
+  return activeKeys(lastActivity, now)
+    .filter((k) => subjectFor(k, office) !== null)
+    .sort()
+    .join('|');
 }
 
 function maxSeat(office: OfficeState | null): number {
@@ -142,7 +149,7 @@ function wideShot(office: OfficeState | null, rng: () => number): Shot {
   const angle = rng() * Math.PI * 2;
   const position = new THREE.Vector3(
     Math.cos(angle) * width * 0.42,
-    3.5 + rng() * 2.5,
+    3.0 + rng() * 1.0,
     centerZ + Math.sin(angle) * depth * 0.42,
   );
   return { position, lookAt: new THREE.Vector3(0, 1.2, centerZ) };

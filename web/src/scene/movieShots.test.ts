@@ -69,7 +69,21 @@ describe('activeKeys / activeSetKey', () => {
   });
   it('activeSetKey is order-independent', () => {
     const now = 100_000;
-    expect(activeSetKey({ b: now, a: now }, now)).toBe(activeSetKey({ a: now, b: now }, now));
+    expect(activeSetKey({ b: now, a: now }, now, null)).toBe(activeSetKey({ a: now, b: now }, now, null));
+  });
+  it('excludes active keys with no resolvable subject, and recuts when the subject disappears', () => {
+    const now = 100_000;
+    const office = makeOffice();
+    const laWithGhost = { e1: now, ghost: now };
+    const laWithoutGhost = { e1: now };
+    // 'ghost' is an active key but not a real employee, so it must not affect the fingerprint
+    expect(activeSetKey(laWithGhost, now, office)).toBe(activeSetKey(laWithoutGhost, now, office));
+
+    // an active, resolvable employee that gets evicted from the office must change the key
+    const keyBefore = activeSetKey({ e1: now }, now, office);
+    const officeWithoutE1 = makeOffice({ employees: [makeEmployee({ id: 'e2', seat: 2 })] });
+    const keyAfter = activeSetKey({ e1: now }, now, officeWithoutE1);
+    expect(keyAfter).not.toBe(keyBefore);
   });
 });
 
