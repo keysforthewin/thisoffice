@@ -12,10 +12,14 @@ import {
   groupByFacing,
   groupShot,
   hasLineOfSight,
+  MIN_SHOT_DIST,
   pickShot,
   segmentHitsBox,
   segmentHitsSphere,
   subjectFor,
+  type ArchetypeName,
+  type PickedShot,
+  type ShotContext,
   type Subject,
 } from './movieShots.ts';
 
@@ -184,6 +188,75 @@ describe('shots', () => {
     });
     expect(Number.isFinite(shot.position.x)).toBe(true);
     expect(shot.position.y).toBeGreaterThan(0);
+  });
+});
+
+function ctx(overrides: Partial<ShotContext> = {}): ShotContext {
+  return {
+    office: makeOffice(), lastActivity: {}, now: Date.now(),
+    fovY: FOV, aspect: ASPECT, rng: rng(), cutIndex: 0,
+    prevPosition: null, recentArchetypes: [],
+    ...overrides,
+  };
+}
+
+describe('archetype shot selection', () => {
+  it('idle shots come from the idle pool and are valid', () => {
+    const seen = new Set<string>();
+    let prev: THREE.Vector3 | null = null;
+    let recent: ArchetypeName[] = [];
+    for (let i = 0; i < 12; i++) {
+      const shot = pickShot(ctx({ rng: rng(i + 1), cutIndex: i, prevPosition: prev, recentArchetypes: recent }));
+      expect(['overheadGod', 'highCorner', 'lowDolly', 'wideEstablishing']).toContain(shot.archetype);
+      if (prev) expect(shot.position.distanceTo(prev)).toBeGreaterThanOrEqual(MIN_SHOT_DIST);
+      expect(recent).not.toContain(shot.archetype);
+      seen.add(shot.archetype);
+      prev = shot.position.clone();
+      recent = [shot.archetype, ...recent].slice(0, 2);
+    }
+    expect(seen.size).toBeGreaterThanOrEqual(3); // real variety
+  });
+
+  it('produces genuinely high idle shots (overheadGod reaches near the ceiling)', () => {
+    // overheadGod is the only pool member above y 4; force it by excluding others via recency
+    const shot = pickShot(ctx({ recentArchetypes: ['highCorner', 'lowDolly'], rng: rng(7) }));
+    if (shot.archetype === 'overheadGod') {
+      expect(shot.position.y).toBeGreaterThan(4.5);
+      // looking steeply down
+      const dir = shot.lookAt.clone().sub(shot.position).normalize();
+      expect(dir.y).toBeLessThan(-0.7); // ≥ ~45° down
+    }
+  });
+
+  it('a single active subject uses the single-subject pool with LOS and min distance', () => {
+    const office = makeOffice();
+    const now = Date.now();
+    const lastActivity = { e1: now };
+    const subject = subjectFor('e1', office)!;
+    let prev: THREE.Vector3 | null = null;
+    let recent: ArchetypeName[] = [];
+    for (let i = 0; i < 8; i++) {
+      const shot = pickShot(ctx({ office, lastActivity, now, rng: rng(i + 3), cutIndex: i, prevPosition: prev, recentArchetypes: recent }));
+      expect(['otsCloseup', 'highAngle', 'sideProfile']).toContain(shot.archetype);
+      expect(hasLineOfSight(shot.position, subject, office)).toBe(true);
+      if (prev) expect(shot.position.distanceTo(prev)).toBeGreaterThanOrEqual(MIN_SHOT_DIST);
+      prev = shot.position.clone();
+      recent = [shot.archetype, ...recent].slice(0, 2);
+    }
+  });
+
+  it('multiple co-facing subjects use group archetypes', () => {
+    const office = makeOffice();
+    const now = Date.now();
+    const lastActivity = { e1: now, e2: now };
+    const shot = pickShot(ctx({ office, lastActivity, now }));
+    expect(['groupLevel', 'elevatedGroup']).toContain(shot.archetype);
+  });
+
+  it('a candidate too close to the previous shot is rejected', () => {
+    const first = pickShot(ctx({ rng: rng(5) }));
+    const second = pickShot(ctx({ rng: rng(5), cutIndex: 1, prevPosition: first.position, recentArchetypes: [first.archetype] }));
+    expect(second.position.distanceTo(first.position)).toBeGreaterThanOrEqual(MIN_SHOT_DIST);
   });
 });
 

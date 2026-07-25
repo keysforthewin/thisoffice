@@ -241,7 +241,9 @@ const GROUP_PITCH_MAX = THREE.MathUtils.degToRad(20);
 /** min dot(viewDir→camera, screen normal) for a screen to read as front-facing */
 const FRONT_FACING_DOT = 0.25;
 
-export function groupShot(subjects: Subject[], fovY: number, aspect: number, rng: () => number, office: OfficeState | null = null): Shot {
+/** Shared geometry prologue for group framing: centroid, average facing normal, and
+ *  the distance at which the bounding sphere of every screen corner fits the frustum. */
+function groupFraming(subjects: Subject[], fovY: number, aspect: number): { centroid: THREE.Vector3; avgNormal: THREE.Vector3; dist: number } {
   const centroid = subjects
     .reduce((acc, s) => acc.add(s.center), new THREE.Vector3())
     .divideScalar(subjects.length);
@@ -262,6 +264,11 @@ export function groupShot(subjects: Subject[], fovY: number, aspect: number, rng
   const tanY = Math.tan(fovY / 2);
   const minTan = Math.min(tanY, tanY * aspect);
   const dist = (radius * 1.15) / minTan + radius;
+  return { centroid, avgNormal, dist };
+}
+
+export function groupShot(subjects: Subject[], fovY: number, aspect: number, rng: () => number, office: OfficeState | null = null): Shot {
+  const { centroid, avgNormal, dist } = groupFraming(subjects, fovY, aspect);
 
   // Evaluate occluder/LOS for every candidate (not just front-facing ones), and use
   // front-facing-ness as a ranking criterion instead of a hard pre-filter, so an
@@ -311,6 +318,111 @@ function wideShot(office: OfficeState | null, rng: () => number): Shot {
   return { position, lookAt: new THREE.Vector3(0, 1.2, centerZ) };
 }
 
+export const MIN_SHOT_DIST = 3.5;
+
+export type ArchetypeName =
+  | 'otsCloseup' | 'highAngle' | 'sideProfile'
+  | 'groupLevel' | 'elevatedGroup'
+  | 'overheadGod' | 'highCorner' | 'lowDolly' | 'wideEstablishing';
+
+export interface PickedShot extends Shot { archetype: ArchetypeName }
+
+/** A candidate passes only if it's outside all occluders, far enough from the
+ *  previous shot, and sees every subject. Empty subjects (idle B-roll) skips LOS. */
+function validCandidate(
+  pos: THREE.Vector3,
+  subjects: Subject[],
+  office: OfficeState | null,
+  prev: THREE.Vector3 | null,
+): boolean {
+  if (isInsideOccluder(pos, office)) return false;
+  if (prev && pos.distanceTo(prev) < MIN_SHOT_DIST) return false;
+  return subjects.every((s) => hasLineOfSight(pos, s, office));
+}
+
+const deg = THREE.MathUtils.degToRad;
+
+/** One candidate around dir, pitched within [pitchMin,pitchMax], at dist·mul from the subject. */
+function subjectCandidate(
+  subject: Subject, fovY: number, aspect: number, rng: () => number,
+  office: OfficeState | null,
+  yawRange: number, pitchMin: number, pitchMax: number, distMul: number, margin: number,
+): Shot {
+  const dist = fitDistance(subject.width, subject.height, fovY, aspect, margin) * distMul;
+  const dir = jitterDir(subject.normal, rng, yawRange, pitchMin, pitchMax);
+  const position = clampToRoom(subject.center.clone().addScaledVector(dir, dist), office);
+  return { position, lookAt: subject.center.clone() };
+}
+
+function otsCloseupCandidate(s: Subject, fovY: number, aspect: number, rng: () => number, office: OfficeState | null): Shot {
+  return subjectCandidate(s, fovY, aspect, rng, office, CLOSEUP_YAW, CLOSEUP_PITCH_MIN, CLOSEUP_PITCH_MAX, 1, 1.3);
+}
+
+function highAngleCandidate(s: Subject, fovY: number, aspect: number, rng: () => number, office: OfficeState | null): Shot {
+  return subjectCandidate(s, fovY, aspect, rng, office, deg(35), deg(45), deg(65), 1.6, 1.3);
+}
+
+function sideProfileCandidate(s: Subject, fovY: number, aspect: number, rng: () => number, office: OfficeState | null): Shot {
+  const sign = rng() < 0.5 ? -1 : 1;
+  const yaw = sign * (deg(55) + rng() * deg(25));
+  const pitch = deg(5) + rng() * deg(15);
+  const dist = fitDistance(s.width, s.height, fovY, aspect, 1.3) * 1.8;
+  const dir = jitterDir(s.normal.clone().applyAxisAngle(UP, yaw), rng, 0, pitch, pitch);
+  const position = clampToRoom(s.center.clone().addScaledVector(dir, dist), office);
+  return { position, lookAt: s.center.clone() };
+}
+
+function groupCandidate(
+  subjects: Subject[], fovY: number, aspect: number, rng: () => number,
+  office: OfficeState | null, pitchMin: number, pitchMax: number,
+): Shot {
+  const { centroid, avgNormal, dist } = groupFraming(subjects, fovY, aspect);
+  const dir = jitterDir(avgNormal, rng, GROUP_YAW, pitchMin, pitchMax);
+  const position = clampToRoom(centroid.clone().addScaledVector(dir, dist), office);
+  return { position, lookAt: centroid.clone() };
+}
+
+function overheadGodCandidate(office: OfficeState | null, rng: () => number): Shot {
+  const { centerZ, height } = roomDims(maxSeat(office));
+  const lookAt = new THREE.Vector3(0, 1.0, centerZ + (rng() - 0.5) * 2);
+  const pitch = deg(55) + rng() * deg(20);          // 55–75° down
+  const y = height - 1.0 - rng() * 0.8;             // near the ceiling
+  const horiz = (y - lookAt.y) / Math.tan(pitch);   // distance that yields that pitch
+  const a = rng() * Math.PI * 2;
+  const position = clampToRoom(
+    new THREE.Vector3(lookAt.x + Math.cos(a) * horiz, y, lookAt.z + Math.sin(a) * horiz), office);
+  return { position, lookAt };
+}
+
+function highCornerCandidate(office: OfficeState | null, rng: () => number): Shot {
+  const { width, depth, centerZ } = roomDims(maxSeat(office));
+  const sx = rng() < 0.5 ? -1 : 1;
+  const sz = rng() < 0.5 ? -1 : 1;
+  const position = clampToRoom(new THREE.Vector3(
+    sx * (width / 2 - 0.6), 3.0 + rng() * 0.5, centerZ + sz * (depth / 2 - 0.6)), office);
+  return { position, lookAt: new THREE.Vector3(0, 1.2, centerZ) };
+}
+
+function lowDollyCandidate(office: OfficeState | null, rng: () => number): Shot {
+  const { width, depth, centerZ } = roomDims(maxSeat(office));
+  const sx = rng() < 0.5 ? -1 : 1;
+  const z = centerZ + (rng() - 0.5) * depth * 0.6;
+  const position = clampToRoom(new THREE.Vector3(sx * (width / 2 - 1.0), 1.1 + rng() * 0.3, z), office);
+  return { position, lookAt: new THREE.Vector3(0, 1.3, z + (rng() - 0.5) * 2) };
+}
+
+function wideEstablishingCandidate(office: OfficeState | null, rng: () => number): Shot {
+  const { width, depth, centerZ, height } = roomDims(maxSeat(office));
+  const angle = rng() * Math.PI * 2;
+  const position = clampToRoom(new THREE.Vector3(
+    Math.cos(angle) * width * 0.42, 2.2 + rng() * (height - 4.2), centerZ + Math.sin(angle) * depth * 0.42), office);
+  return { position, lookAt: new THREE.Vector3(0, 1.2, centerZ) };
+}
+
+const SINGLE_POOL: ArchetypeName[] = ['otsCloseup', 'highAngle', 'sideProfile'];
+const GROUP_POOL: ArchetypeName[] = ['groupLevel', 'elevatedGroup'];
+const IDLE_POOL: ArchetypeName[] = ['overheadGod', 'highCorner', 'lowDolly', 'wideEstablishing'];
+
 export interface ShotContext {
   office: OfficeState | null;
   lastActivity: Record<string, number>;
@@ -322,28 +434,76 @@ export interface ShotContext {
   rng: () => number;
   /** increments every cut; rotates between facing groups / idle variants */
   cutIndex: number;
+  /** committed position of the previous shot; candidates closer than MIN_SHOT_DIST are rejected */
+  prevPosition?: THREE.Vector3 | null;
+  /** archetype names of the last two shots — never repeated */
+  recentArchetypes?: ArchetypeName[];
 }
 
-export function pickShot(ctx: ShotContext): Shot {
+export function pickShot(ctx: ShotContext): PickedShot {
   const { office, fovY, aspect, rng, cutIndex } = ctx;
+  const prev = ctx.prevPosition ?? null;
+  const recent = ctx.recentArchetypes ?? [];
   const subjects = activeKeys(ctx.lastActivity, ctx.now)
     .map((k) => subjectFor(k, office))
     .filter((s): s is Subject => s !== null);
 
-  if (subjects.length === 0) {
-    // idle B-roll: alternate wide establishing shots and random monitor close-ups
-    const all = ['boss', ...(office?.employees.map((e) => e.id) ?? [])]
-      .map((k) => subjectFor(k, office))
-      .filter((s): s is Subject => s !== null);
-    if (cutIndex % 2 === 1 && all.length > 0) {
-      return closeUpShot(all[Math.floor(rng() * all.length)], fovY, aspect, rng, office);
+  /** fresh archetypes first (random order), recently-used ones as a last resort */
+  const order = (pool: ArchetypeName[]): ArchetypeName[] => {
+    const fresh = pool.filter((n) => !recent.includes(n));
+    for (let i = fresh.length - 1; i > 0; i--) {         // Fisher–Yates via ctx.rng
+      const j = Math.floor(rng() * (i + 1));
+      [fresh[i], fresh[j]] = [fresh[j], fresh[i]];
     }
-    return wideShot(office, rng);
+    return [...fresh, ...pool.filter((n) => recent.includes(n))];
+  };
+
+  const attempt = (name: ArchetypeName, gen: () => Shot, losSubjects: Subject[]): PickedShot | null => {
+    for (let i = 0; i < LOS_CANDIDATES; i++) {
+      const shot = gen();
+      if (validCandidate(shot.position, losSubjects, office, prev)) return { ...shot, archetype: name };
+    }
+    return null;
+  };
+
+  if (subjects.length === 0) {
+    const gens: Record<string, () => Shot> = {
+      overheadGod: () => overheadGodCandidate(office, rng),
+      highCorner: () => highCornerCandidate(office, rng),
+      lowDolly: () => lowDollyCandidate(office, rng),
+      wideEstablishing: () => wideEstablishingCandidate(office, rng),
+    };
+    for (const name of order(IDLE_POOL)) {
+      const hit = attempt(name, gens[name], []);
+      if (hit) return hit;
+    }
+    return { ...wideShot(office, rng), archetype: 'wideEstablishing' }; // last-resort, unvalidated
   }
 
   const groups = groupByFacing(subjects);
   const group = groups[cutIndex % groups.length];
-  return group.length === 1
-    ? closeUpShot(group[0], fovY, aspect, rng, office)
-    : groupShot(group, fovY, aspect, rng, office);
+
+  if (group.length === 1) {
+    const s = group[0];
+    const gens: Record<string, () => Shot> = {
+      otsCloseup: () => otsCloseupCandidate(s, fovY, aspect, rng, office),
+      highAngle: () => highAngleCandidate(s, fovY, aspect, rng, office),
+      sideProfile: () => sideProfileCandidate(s, fovY, aspect, rng, office),
+    };
+    for (const name of order(SINGLE_POOL)) {
+      const hit = attempt(name, gens[name], [s]);
+      if (hit) return hit;
+    }
+    return { ...closeUpShot(s, fovY, aspect, rng, office), archetype: 'otsCloseup' }; // best-effort fallback
+  }
+
+  const gens: Record<string, () => Shot> = {
+    groupLevel: () => groupCandidate(group, fovY, aspect, rng, office, GROUP_PITCH_MIN, GROUP_PITCH_MAX),
+    elevatedGroup: () => groupCandidate(group, fovY, aspect, rng, office, deg(25), deg(45)),
+  };
+  for (const name of order(GROUP_POOL)) {
+    const hit = attempt(name, gens[name], group);
+    if (hit) return hit;
+  }
+  return { ...groupShot(group, fovY, aspect, rng, office), archetype: 'groupLevel' }; // best-effort fallback
 }
