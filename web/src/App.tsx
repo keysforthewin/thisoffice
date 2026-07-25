@@ -23,6 +23,10 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
       const cur = useStore.getState().cameraMode;
+      if (e.key === 'm' || e.key === 'M') {
+        setMode(cur.kind === 'movie' ? { kind: 'free' } : { kind: 'movie' });
+        return;
+      }
       if (e.key === 'v' || e.key === 'V') {
         setMode(cur.kind === 'free' ? { kind: 'pov', index: 0 } : { kind: 'free' });
       } else if (e.key === 'Escape') {
@@ -62,8 +66,10 @@ function Hud({ connected, mode, onSettings }: { connected: boolean; mode: Return
   const povs = usePovList();
   const label =
     mode.kind === 'free'
-      ? 'Free camera — click to look (Esc releases) · WASD fly · E/Space up · C down · Shift slow · V for POV tour'
-      : `POV: ${povs[Math.min(mode.index, povs.length - 1)]?.label ?? ''} — Tab/← → cycle · V/Esc exit`;
+      ? 'Free camera — click to look (Esc releases) · WASD fly · E/Space up · C down · Shift slow · V for POV tour · M movie mode'
+      : mode.kind === 'movie'
+        ? 'Movie mode — auto-follows the action · arrows cut now · M/Esc exit'
+        : `POV: ${povs[Math.min(mode.index, povs.length - 1)]?.label ?? ''} — Tab/← → cycle · V/Esc exit`;
   return (
     <>
       <div style={hudStyles.topLeft}>

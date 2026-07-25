@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { useStore } from '../store.ts';
 import { seatTransform, whiteboardTransform } from './layout.ts';
+import { MovieCamera } from './MovieCamera.tsx';
 
 export interface Pov {
   label: string;
@@ -141,7 +142,7 @@ export function CameraRig() {
   const free = mode.kind === 'free';
 
   useFrame((_, delta) => {
-    if (free) return;
+    if (mode.kind !== 'pov') return;
     const pov = povs[Math.min((mode as { kind: 'pov'; index: number }).index, povs.length - 1)];
     if (!pov) return;
     const k = 1 - Math.exp(-delta * 4.5);
@@ -150,6 +151,7 @@ export function CameraRig() {
     camera.lookAt(lookTarget.current);
   });
 
+  if (mode.kind === 'movie') return <MovieCamera />;
   return free ? <FreeFlyControls /> : null;
 }
 
