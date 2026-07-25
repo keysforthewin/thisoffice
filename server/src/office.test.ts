@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { Office } from './office.ts';
+import { Office, clampStaffing } from './office.ts';
 
 function makeOffice() {
   const office = new Office(() => ['Knight', 'Mage', 'Rogue']);
@@ -108,6 +108,21 @@ describe('staffing settings', () => {
   });
 });
 
+describe('clampStaffing (load-time validation)', () => {
+  it('clamps a hand-edited persisted value with min > max down to max', () => {
+    expect(clampStaffing({ minEmployees: 10, maxEmployees: 2 })).toEqual({ minEmployees: 2, maxEmployees: 2 });
+  });
+
+  it('ignores non-integers and floors min at 1, same as setStaffing', () => {
+    expect(clampStaffing({ minEmployees: 2.5 as any, maxEmployees: NaN as any })).toEqual({ minEmployees: 3, maxEmployees: 12 });
+    expect(clampStaffing({ minEmployees: 0 })).toEqual({ minEmployees: 1, maxEmployees: 12 });
+  });
+
+  it('falls back to defaults when nothing is persisted', () => {
+    expect(clampStaffing(undefined)).toEqual({ minEmployees: 3, maxEmployees: 12 });
+  });
+});
+
 describe('work queue', () => {
   let draining: Set<string>;
   let pressures: number[];
@@ -133,6 +148,23 @@ describe('work queue', () => {
     expect(overflow.employee).toBeNull();
     expect(office.getState().employees.length).toBe(n); // no hire
     expect(pressures.at(-1)).toBe(1);
+  });
+
+  it('assigning the same queued key twice at max headcount queues it only once', () => {
+    const office = makeQueueOffice();
+    office.setStaffing({ minEmployees: 1, maxEmployees: office.getState().employees.length });
+    const n = office.getState().employees.length;
+    for (let i = 0; i < n; i++) office.assign(`s:t${i}`, 'Bash');
+    expect(office.assign('s:dup', 'Read').employee).toBeNull();
+    expect(office.assign('s:dup', 'Read').employee).toBeNull(); // duplicate pickup replay, not a second queue entry
+    expect(pressures.at(-1)).toBe(1); // still just one queued job, not two
+    const assigned: string[] = [];
+    office.onAssign((key) => assigned.push(key));
+    office.finish('s:t0');
+    expect(assigned).toEqual(['s:dup']);
+    // no second pickup follows since the key was only queued once
+    office.finish('s:t1');
+    expect(assigned).toEqual(['s:dup']);
   });
 
   it('a freeing employee picks up the queue head; onAssign fires; pressure drops', () => {
@@ -202,6 +234,28 @@ describe('idle eviction', () => {
     for (const id of protectedIds) {
       expect(office.getState().employees.find((e) => e.id === id)).toBeDefined();
     }
+  });
+
+  it('protected lowest-seat employees survive repeated full idle windows; a non-protected extra is evicted', () => {
+    const office = makeEvictionOffice();
+    const before = office.getState().employees;
+    const minEmployees = office.getState().staffing.minEmployees;
+    const protectedIds = [...before]
+      .sort((a, b) => a.seat - b.seat)
+      .slice(0, minEmployees)
+      .map((e) => e.id);
+    const extra = office.hireManual(); // idle from birth, beyond the protected seats
+
+    // advance through several full idle-timer windows; protected seats must keep
+    // getting rescheduled (Finding 2) so they never lapse into eviction.
+    for (let i = 0; i < 4; i++) vi.advanceTimersByTime(60_001);
+
+    const after = office.getState().employees;
+    expect(after.find((e) => e.id === extra.id)).toBeUndefined(); // non-protected extra evicted
+    for (const id of protectedIds) {
+      expect(after.find((e) => e.id === id)).toBeDefined(); // protected seats survive every window
+    }
+    expect(after.length).toBe(minEmployees);
   });
 
   it('a working employee is never evicted; timer clears on assignment', () => {

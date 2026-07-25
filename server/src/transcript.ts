@@ -70,7 +70,13 @@ export class Transcripts {
 
   private onQueuedAssigned(key: string, employee: Employee) {
     const activity = this.queued.get(key);
-    if (!activity) return;
+    if (!activity) {
+      // Unknown key (e.g. duplicate pickup after the first already released it):
+      // the employee is already marked working for this key in Office; release
+      // the desk instead of leaving it stranded forever.
+      this.office.finish(key);
+      return;
+    }
     this.queued.delete(key);
     activity.employeeId = employee.id;
     this.office.monitor(employee.id, { clear: true, title: activity.pendingTitle ?? '' });

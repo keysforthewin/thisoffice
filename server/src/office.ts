@@ -14,6 +14,15 @@ const DEFAULT_STAFFING: StaffingSettings = { minEmployees: 3, maxEmployees: 12 }
 
 const IDLE_FIRE_MS = 60_000;
 
+/** Clamp a (possibly hand-edited or partial) staffing config to valid integers, min <= max. */
+export function clampStaffing(cfg: Partial<StaffingSettings> | undefined, base: StaffingSettings = DEFAULT_STAFFING): StaffingSettings {
+  const s = { ...base };
+  if (Number.isInteger(cfg?.minEmployees)) s.minEmployees = Math.max(1, cfg!.minEmployees!);
+  if (Number.isInteger(cfg?.maxEmployees)) s.maxEmployees = Math.max(1, cfg!.maxEmployees!);
+  if (s.minEmployees > s.maxEmployees) s.minEmployees = s.maxEmployees;
+  return s;
+}
+
 interface PersistedState {
   boss: { name: string; variant: string };
   employees: Array<Pick<Employee, 'id' | 'name' | 'seat' | 'variant' | 'hiredAt'>>;
@@ -107,12 +116,18 @@ export class Office {
     this.idleTimers.delete(id);
     const emp = this.state.employees.find((e) => e.id === id);
     if (!emp || emp.status !== 'idle') return;
-    if (this.state.employees.length <= this.state.staffing.minEmployees) return;
+    if (this.state.employees.length <= this.state.staffing.minEmployees) {
+      this.scheduleIdleTimer(id);
+      return;
+    }
     const protectedIds = [...this.state.employees]
       .sort((a, b) => a.seat - b.seat)
       .slice(0, this.state.staffing.minEmployees)
       .map((e) => e.id);
-    if (protectedIds.includes(id)) return;
+    if (protectedIds.includes(id)) {
+      this.scheduleIdleTimer(id);
+      return;
+    }
     this.remove(id);
   }
 
@@ -191,7 +206,7 @@ export class Office {
       employees: persisted.employees.map((e) => ({ ...e, status: 'idle' as WorkerStatus, task: null })),
       inbox: [],
       todos: null,
-      staffing: { ...DEFAULT_STAFFING, ...persisted.staffing },
+      staffing: clampStaffing(persisted.staffing),
     };
   }
 
@@ -277,6 +292,7 @@ export class Office {
     let hired = false;
     if (!employee) {
       if (this.state.employees.length >= this.state.staffing.maxEmployees) {
+        if (this.workQueue.some((j) => j.key === activityKey)) return { employee: null, hired: false };
         this.workQueue.push({ key: activityKey, label: task });
         this.syncPressure();
         return { employee: null, hired: false };
@@ -389,11 +405,7 @@ export class Office {
   }
 
   setStaffing(cfg: Partial<StaffingSettings>) {
-    const s = { ...this.state.staffing };
-    if (Number.isInteger(cfg.minEmployees)) s.minEmployees = Math.max(1, cfg.minEmployees!);
-    if (Number.isInteger(cfg.maxEmployees)) s.maxEmployees = Math.max(1, cfg.maxEmployees!);
-    if (s.minEmployees > s.maxEmployees) s.minEmployees = s.maxEmployees;
-    this.state.staffing = s;
+    this.state.staffing = clampStaffing(cfg, this.state.staffing);
     this.save();
     this.broadcastState();
   }

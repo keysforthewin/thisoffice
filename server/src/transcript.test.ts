@@ -331,6 +331,12 @@ describe('queued activities', () => {
     expect(h.finished).toEqual(['sess-1:msg-q']);
   });
 
+  it('pickup of an unknown queued key releases the desk via office.finish instead of stranding it', () => {
+    const h = makeHarness({ queue: true });
+    h.pickup('sess-1:ghost'); // no matching entry in `queued` (e.g. duplicate pickup)
+    expect(h.finished).toEqual(['sess-1:ghost']);
+  });
+
   it('subagent lines for a queued Task buffer through to the replay', () => {
     const h = makeHarness({ queue: true });
     h.transcripts.handleLines(MAIN, [
