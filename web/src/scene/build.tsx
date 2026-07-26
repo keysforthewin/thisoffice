@@ -101,6 +101,7 @@ export function BuildHandle({
   };
 
   const onPointerDown = (e: ThreeEvent<PointerEvent>) => {
+    if (e.button !== 0) return; // right-drag is the camera's, even over an item
     if (!useStore.getState().buildMode || drag.current) return;
     e.stopPropagation();
     capture(e, true);
@@ -216,6 +217,7 @@ export function WallHandle({
   const drag = useRef<{ pointerId: number; grabOffset: number; startOx: number } | null>(null);
 
   const onPointerDown = (e: ThreeEvent<PointerEvent>) => {
+    if (e.button !== 0) return; // right-drag is the camera's, even over an item
     if (!useStore.getState().buildMode || drag.current) return;
     e.stopPropagation();
     capture(e, true);

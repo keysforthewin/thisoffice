@@ -17,6 +17,7 @@ import { askerAnchor } from '../quiz/askerAnchor.ts';
 import { photoShot } from '../quiz/photoShot.ts';
 import { captureCanvas, PHOTO_FLY_MS, PHOTO_HOLD_MS } from '../quiz/capture.ts';
 import { uploadEotmPhoto } from '../quiz/quizApi.ts';
+import { applyLook, modeForDragLook, MAX_LOOK_DELTA, MAX_PITCH, type Look } from './dragLook.ts';
 
 export interface Pov {
   label: string;
@@ -70,12 +71,6 @@ const MOVE_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyE', 'KeyC', 'Spac
 const MODIFIER_KEYS = new Set(['ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight']);
 const FLY_SPEED = 7; // units/sec
 const SLOW_MULTIPLIER = 0.25; // while Shift/Ctrl held
-const LOOK_SENSITIVITY = 0.0022; // rad per px of mouse movement
-const MAX_PITCH = Math.PI / 2 - 0.01;
-// Pointer lock can emit one giant bogus delta when the hidden OS cursor warps
-// (WSLg/Wayland screen edge, or right after acquiring the lock). A real flick
-// coalesced at ~60Hz stays around 100px/event, so anything past this is noise.
-const MAX_LOOK_DELTA = 200;
 
 function isTyping(t: EventTarget | null) {
   return t instanceof HTMLInputElement || t instanceof HTMLSelectElement || t instanceof HTMLTextAreaElement;
@@ -86,31 +81,103 @@ interface Glide {
   quaternion: THREE.Quaternion;
 }
 
+/** Read the camera's current aim back into yaw/pitch, for a look gesture starting now. */
+function readLook(camera: THREE.Camera): Look {
+  tmpEuler.setFromQuaternion(camera.quaternion);
+  return { yaw: tmpEuler.y, pitch: THREE.MathUtils.clamp(tmpEuler.x, -MAX_PITCH, MAX_PITCH) };
+}
+
+function aimCamera(camera: THREE.Camera, look: Look) {
+  tmpEuler.set(look.pitch, look.yaw, 0);
+  camera.quaternion.setFromEuler(tmpEuler);
+}
+
+/**
+ * WASD/E/C flight, independent of how the view is being *aimed* — the
+ * pointer-locked fly cam and build mode's right-drag look share it, so
+ * flying around while rearranging furniture works the same as outside it.
+ */
+function useFlyMotion() {
+  const camera = useThree((s) => s.camera);
+  const keys = useRef(new Set<string>());
+  const velocity = useRef(new THREE.Vector3());
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isTyping(e.target)) return;
+      if (MOVE_KEYS.has(e.code)) {
+        keys.current.add(e.code);
+        e.preventDefault();
+      } else if (MODIFIER_KEYS.has(e.code)) {
+        keys.current.add(e.code);
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => keys.current.delete(e.code);
+    const onBlur = () => keys.current.clear();
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+      keys.current.clear();
+    };
+  }, []);
+
+  useFrame((_, delta) => {
+    // a winner's photo owns the camera for its fly+hold — don't fight it with WASD motion
+    if (useStore.getState().pendingCapture) return;
+    const k = keys.current;
+    camera.getWorldDirection(tmpDir);
+    tmpRight.crossVectors(tmpDir, UP).normalize();
+    tmpWish.set(0, 0, 0);
+    if (k.has('KeyW')) tmpWish.add(tmpDir);
+    if (k.has('KeyS')) tmpWish.sub(tmpDir);
+    if (k.has('KeyD')) tmpWish.add(tmpRight);
+    if (k.has('KeyA')) tmpWish.sub(tmpRight);
+    if (k.has('KeyE') || k.has('Space')) tmpWish.y += 1;
+    if (k.has('KeyC')) tmpWish.y -= 1;
+    if (tmpWish.lengthSq() > 0) tmpWish.normalize();
+    const slow = k.has('ShiftLeft') || k.has('ShiftRight') || k.has('ControlLeft') || k.has('ControlRight');
+    tmpWish.multiplyScalar(FLY_SPEED * (slow ? SLOW_MULTIPLIER : 1));
+    // exponential smoothing so starts/stops feel weighty rather than instant
+    velocity.current.lerp(tmpWish, 1 - Math.exp(-delta * 12));
+    camera.position.addScaledVector(velocity.current, delta);
+    clampToRoom(camera.position, useStore.getState().office);
+  });
+}
+
+/** Build mode: the cursor belongs to the furniture, so flight loses its mouse-look
+ *  (right-drag covers that) but keeps the keyboard. */
+function BuildFlyControls() {
+  useFlyMotion();
+  return null;
+}
+
 /** FPS-spectator fly camera: click to capture the mouse, WASD to fly, E/Space/C up/down. */
 function FreeFlyControls({ glide }: { glide: React.MutableRefObject<Glide | null> }) {
   const camera = useThree((s) => s.camera);
   const gl = useThree((s) => s.gl);
   const scene = useThree((s) => s.scene);
   const raycaster = useRef(new THREE.Raycaster());
-  const keys = useRef(new Set<string>());
-  const velocity = useRef(new THREE.Vector3());
   // what the screen-center crosshair is aimed at while pointer-locked
   const crosshairTarget = () => {
     raycaster.current.setFromCamera(CENTER_NDC, camera);
     return pickMonitorTarget(raycaster.current.intersectObjects(scene.children, true));
   };
-  // Yaw/pitch are the source of truth while flying; deriving them back from the
-  // quaternion every event is unstable near straight up/down (yaw snaps).
-  const look = useRef({ yaw: 0, pitch: 0 });
+  const look = useRef<Look>({ yaw: 0, pitch: 0 });
+  useFlyMotion();
 
   useEffect(() => {
     // sync once from wherever the POV tour (or initial camera) left us
-    tmpEuler.setFromQuaternion(camera.quaternion);
-    look.current.yaw = tmpEuler.y;
-    look.current.pitch = THREE.MathUtils.clamp(tmpEuler.x, -MAX_PITCH, MAX_PITCH);
+    look.current = readLook(camera);
 
     const dom = gl.domElement;
-    const onPointerDown = () => {
+    const onPointerDown = (e: PointerEvent) => {
+      // right-drag is DragLookControls' gesture; grabbing the pointer lock here
+      // would hide the cursor mid-drag and double up on the mouse-look
+      if (e.button !== 0) return;
       const st = useStore.getState();
       // a monitor click may have flipped us into focus mode on this same event
       // (R3F's canvas handler runs first) — don't grab the pointer on the way out
@@ -136,9 +203,7 @@ function FreeFlyControls({ glide }: { glide: React.MutableRefObject<Glide | null
       }
       // the return glide (or a focus visit) may have reoriented the camera
       // since mount — resync so the first mouse move continues from this view
-      tmpEuler.setFromQuaternion(camera.quaternion);
-      look.current.yaw = tmpEuler.y;
-      look.current.pitch = THREE.MathUtils.clamp(tmpEuler.x, -MAX_PITCH, MAX_PITCH);
+      look.current = readLook(camera);
       // Chrome returns a promise that rejects without user activation — harmless, but noisy
       (dom.requestPointerLock() as unknown as Promise<void> | undefined)?.catch(() => {});
     };
@@ -154,38 +219,16 @@ function FreeFlyControls({ glide }: { glide: React.MutableRefObject<Glide | null
         // locked mouse-look takes over from a running return glide: pick up
         // from wherever the slerp left the camera instead of snapping back
         glide.current = null;
-        tmpEuler.setFromQuaternion(camera.quaternion);
-        look.current.yaw = tmpEuler.y;
-        look.current.pitch = THREE.MathUtils.clamp(tmpEuler.x, -MAX_PITCH, MAX_PITCH);
+        look.current = readLook(camera);
       }
-      look.current.yaw -= e.movementX * LOOK_SENSITIVITY;
-      look.current.pitch = THREE.MathUtils.clamp(look.current.pitch - e.movementY * LOOK_SENSITIVITY, -MAX_PITCH, MAX_PITCH);
-      tmpEuler.set(look.current.pitch, look.current.yaw, 0);
-      camera.quaternion.setFromEuler(tmpEuler);
+      look.current = applyLook(look.current, e.movementX, e.movementY);
+      aimCamera(camera, look.current);
     };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (isTyping(e.target)) return;
-      if (MOVE_KEYS.has(e.code)) {
-        keys.current.add(e.code);
-        e.preventDefault();
-      } else if (MODIFIER_KEYS.has(e.code)) {
-        keys.current.add(e.code);
-      }
-    };
-    const onKeyUp = (e: KeyboardEvent) => keys.current.delete(e.code);
-    const onBlur = () => keys.current.clear();
     dom.addEventListener('pointerdown', onPointerDown);
     document.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
-    window.addEventListener('blur', onBlur);
     return () => {
       dom.removeEventListener('pointerdown', onPointerDown);
       document.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-      window.removeEventListener('blur', onBlur);
-      keys.current.clear();
       if (document.pointerLockElement === dom) document.exitPointerLock();
       useStore.getState().setMonitorHover(null);
     };
@@ -198,43 +241,144 @@ function FreeFlyControls({ glide }: { glide: React.MutableRefObject<Glide | null
   useEffect(() => {
     const dom = gl.domElement;
     const onLockChange = () => {
-      if (document.pointerLockElement === dom) useStore.getState().setPendingRelock(false);
+      if (document.pointerLockElement !== dom) return;
+      useStore.getState().setPendingRelock(false);
+      // the request is async: a right-drag can keep aiming the camera between
+      // asking for the lock and getting it, so pick up the view as it is now
+      // rather than snapping back to where the request was made
+      look.current = readLook(camera);
     };
     document.addEventListener('pointerlockchange', onLockChange);
     if (useStore.getState().pendingRelock) {
-      tmpEuler.setFromQuaternion(camera.quaternion);
-      look.current.yaw = tmpEuler.y;
-      look.current.pitch = THREE.MathUtils.clamp(tmpEuler.x, -MAX_PITCH, MAX_PITCH);
+      look.current = readLook(camera);
       (dom.requestPointerLock() as unknown as Promise<void> | undefined)?.catch(() => {});
     }
     return () => document.removeEventListener('pointerlockchange', onLockChange);
   }, [camera, gl]);
 
-  useFrame((_, delta) => {
-    // a winner's photo owns the camera for its fly+hold — don't fight it with WASD motion
+  useFrame(() => {
     if (useStore.getState().pendingCapture) return;
     // while locked the cursor is hidden — hover tracking moves to the crosshair
     if (document.pointerLockElement === gl.domElement) {
       useStore.getState().setMonitorHover(crosshairTarget());
     }
-    const k = keys.current;
-    camera.getWorldDirection(tmpDir);
-    tmpRight.crossVectors(tmpDir, UP).normalize();
-    tmpWish.set(0, 0, 0);
-    if (k.has('KeyW')) tmpWish.add(tmpDir);
-    if (k.has('KeyS')) tmpWish.sub(tmpDir);
-    if (k.has('KeyD')) tmpWish.add(tmpRight);
-    if (k.has('KeyA')) tmpWish.sub(tmpRight);
-    if (k.has('KeyE') || k.has('Space')) tmpWish.y += 1;
-    if (k.has('KeyC')) tmpWish.y -= 1;
-    if (tmpWish.lengthSq() > 0) tmpWish.normalize();
-    const slow = k.has('ShiftLeft') || k.has('ShiftRight') || k.has('ControlLeft') || k.has('ControlRight');
-    tmpWish.multiplyScalar(FLY_SPEED * (slow ? SLOW_MULTIPLIER : 1));
-    // exponential smoothing so starts/stops feel weighty rather than instant
-    velocity.current.lerp(tmpWish, 1 - Math.exp(-delta * 12));
-    camera.position.addScaledVector(velocity.current, delta);
-    clampToRoom(camera.position, useStore.getState().office);
   });
+
+  return null;
+}
+
+/**
+ * Right-drag aims the camera, everywhere. This is the only way to look around in
+ * build mode (where the cursor belongs to the furniture, so there is no pointer
+ * lock), and in pov/focus/movie mode it first drops the camera into free mode at
+ * the pose it already holds — otherwise those modes' per-frame lerp toward a
+ * computed pose would fight the drag.
+ *
+ * Mounted unconditionally, because the gesture has to survive the mode change it
+ * causes: a component that only mounted for non-free modes would unmount on its
+ * own pointerdown and lose the drag.
+ */
+function DragLookControls({
+  glide,
+  dragging,
+}: {
+  glide: React.MutableRefObject<Glide | null>;
+  dragging: React.MutableRefObject<boolean>;
+}) {
+  const camera = useThree((s) => s.camera);
+  const gl = useThree((s) => s.gl);
+
+  useEffect(() => {
+    const dom = gl.domElement;
+    const look = { yaw: 0, pitch: 0 } as Look;
+    let pointerId: number | null = null;
+
+    const end = () => {
+      if (pointerId !== null) {
+        try {
+          dom.releasePointerCapture(pointerId);
+        } catch {
+          /* pointer already gone */
+        }
+      }
+      pointerId = null;
+      dragging.current = false;
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.button !== 2 || pointerId !== null) return;
+      // pointer-locked mouse-look already owns the mouse; two handlers turning
+      // the same deltas into yaw would double the sensitivity
+      if (document.pointerLockElement === dom) return;
+      // a winner's photo owns the camera for its fly+hold
+      if (useStore.getState().pendingCapture) return;
+      e.preventDefault();
+      pointerId = e.pointerId;
+      // set BEFORE the mode change flushes: CameraRig's mode effect reads this to
+      // skip the focus→free return glide, which would otherwise fly the camera
+      // away from the view being aimed
+      dragging.current = true;
+      glide.current = null;
+      const st = useStore.getState();
+      const next = modeForDragLook(st.cameraMode);
+      if (next) {
+        // land in first person, not one click short of it: the flag is read by
+        // FreeFlyControls' mount effect, which grabs the pointer lock on this
+        // same gesture's user activation. Set BEFORE the mode change, since
+        // that is what mounts the component that reads it.
+        st.setPendingRelock(true);
+        st.setCameraMode(next);
+      }
+      const from = readLook(camera);
+      look.yaw = from.yaw;
+      look.pitch = from.pitch;
+      try {
+        dom.setPointerCapture(e.pointerId);
+      } catch {
+        /* synthetic event */
+      }
+    };
+    const onPointerMove = (e: PointerEvent) => {
+      if (pointerId === null || e.pointerId !== pointerId) return;
+      // the lock landed mid-drag — first-person mouse-look owns the deltas now,
+      // and applying them here too would double the sensitivity
+      if (document.pointerLockElement === dom) return;
+      if (useStore.getState().pendingCapture) return;
+      if (Math.abs(e.movementX) > MAX_LOOK_DELTA || Math.abs(e.movementY) > MAX_LOOK_DELTA) return;
+      const next = applyLook(look, e.movementX, e.movementY);
+      look.yaw = next.yaw;
+      look.pitch = next.pitch;
+      aimCamera(camera, look);
+    };
+    const onPointerUp = (e: PointerEvent) => {
+      if (e.pointerId === pointerId) end();
+    };
+    // the drag itself would otherwise finish by popping the browser menu
+    const onContextMenu = (e: MouseEvent) => e.preventDefault();
+
+    // the lock hides the cursor, so there is no drag left to run — hand off
+    const onLockChange = () => {
+      if (document.pointerLockElement === dom) end();
+    };
+
+    dom.addEventListener('pointerdown', onPointerDown);
+    dom.addEventListener('pointermove', onPointerMove);
+    dom.addEventListener('pointerup', onPointerUp);
+    dom.addEventListener('pointercancel', onPointerUp);
+    dom.addEventListener('contextmenu', onContextMenu);
+    document.addEventListener('pointerlockchange', onLockChange);
+    window.addEventListener('blur', end);
+    return () => {
+      dom.removeEventListener('pointerdown', onPointerDown);
+      dom.removeEventListener('pointermove', onPointerMove);
+      dom.removeEventListener('pointerup', onPointerUp);
+      dom.removeEventListener('pointercancel', onPointerUp);
+      dom.removeEventListener('contextmenu', onContextMenu);
+      document.removeEventListener('pointerlockchange', onLockChange);
+      window.removeEventListener('blur', end);
+      end();
+    };
+  }, [camera, gl, glide, dragging]);
 
   return null;
 }
@@ -408,13 +552,19 @@ export function CameraRig() {
   const prevMode = useRef(mode);
   /** while set, the free camera is flying back to where it was before a monitor click */
   const glide = useRef<Glide | null>(null);
+  /** a right-drag is aiming the camera by hand right now */
+  const dragLooking = useRef(false);
 
   const free = mode.kind === 'free';
 
   useEffect(() => {
     const prev = prevMode.current;
     prevMode.current = mode;
-    if (prev.kind === 'focus' && mode.kind === 'free' && prev.returnPose) {
+    // a right-drag out of focus mode is the user taking the camera: gliding it
+    // back to the pre-focus pose would yank the view out from under the drag
+    if (dragLooking.current) {
+      glide.current = null;
+    } else if (prev.kind === 'focus' && mode.kind === 'free' && prev.returnPose) {
       glide.current = {
         position: new THREE.Vector3().fromArray(prev.returnPose.position),
         quaternion: new THREE.Quaternion().fromArray(prev.returnPose.quaternion),
@@ -486,9 +636,12 @@ export function CameraRig() {
       <MovieCamera />
     ) : mode.kind === 'focus' ? (
       <FocusControls target={mode.target} />
-    ) : // build mode: camera holds still, cursor drags objects — unmounting the fly
-    // controls also releases any pointer lock via their cleanup
-    free && !buildMode ? (
+    ) : // build mode: the cursor drags objects rather than steering the camera, so
+    // the pointer-locked controls give way to keyboard flight plus right-drag look
+    // (unmounting them also releases any pointer lock via their cleanup)
+    free && buildMode ? (
+      <BuildFlyControls />
+    ) : free ? (
       <FreeFlyControls glide={glide} />
     ) : null;
 
@@ -496,6 +649,7 @@ export function CameraRig() {
     <>
       {wallArtHover && <WallArtControls />}
       {pendingCapture && <PhotoControls winner={pendingCapture} maxSeat={maxSeat} />}
+      <DragLookControls glide={glide} dragging={dragLooking} />
       {controls}
     </>
   );

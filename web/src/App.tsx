@@ -203,16 +203,16 @@ function Hud({ connected, mode, onSettings }: { connected: boolean; mode: Return
       : '';
   const label =
     mode.kind === 'free' && buildMode
-      ? 'Build mode — drag objects to move · hold Ctrl while dragging to rotate · red = blocked · B/Esc exit'
+      ? 'Build mode — drag objects to move · hold Ctrl while dragging to rotate · right-drag look · WASD fly · red = blocked · B/Esc exit'
       : mode.kind === 'free'
       ? 'Free camera — click to look (Esc releases) · WASD fly · E/Space up · C down · Shift slow · V for POV tour · M movie mode · B build mode'
       : mode.kind === 'movie'
-        ? 'Movie mode — auto-follows the action · arrows cut now · M/Esc exit'
+        ? 'Movie mode — auto-follows the action · arrows cut now · right-drag for first person · M/Esc exit'
         : mode.kind === 'focus' && mode.target === 'tv'
           ? 'Stats TV — scroll wheel to flip through stats · Esc or click away = back'
         : mode.kind === 'focus'
           ? `Screen: ${focusName} — scroll wheel for history · End = live · Esc or click away = back`
-          : `POV: ${povs[Math.min(mode.index, povs.length - 1)]?.label ?? ''} — Tab/← → cycle · V/Esc exit`;
+          : `POV: ${povs[Math.min(mode.index, povs.length - 1)]?.label ?? ''} — Tab/← → cycle · right-drag for first person · V/Esc exit`;
   return (
     <>
       <div style={hudStyles.topLeft}>

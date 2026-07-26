@@ -97,6 +97,7 @@ export function MonitorScreen({ target, working, fallbackTitle, width = 1.35, he
   });
 
   const focusMonitor = (e: ThreeEvent<PointerEvent>) => {
+    if (e.button !== 0) return; // right-drag aims the camera; it must not park it here
     // while pointer-locked, clicks steer the fly cam — never steal them
     if (document.pointerLockElement) return;
     // in build mode a click on the desk grabs the whole unit, never focuses

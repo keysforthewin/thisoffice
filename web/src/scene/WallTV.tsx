@@ -71,6 +71,7 @@ export function WallTV({ position, rotationY = 0 }: Props) {
   });
 
   const focusTv = (e: ThreeEvent<PointerEvent>) => {
+    if (e.button !== 0) return; // right-drag aims the camera; it must not park it here
     // while pointer-locked, clicks steer the fly cam — never steal them
     if (document.pointerLockElement) return;
     // in build mode a click drags the TV along the wall, never focuses

@@ -56,6 +56,7 @@ function WallArt({ position }: { position: [number, number, number] }) {
   }, [texture, zoom, panX, panY]);
 
   const onPointerDown = (e: ThreeEvent<PointerEvent>) => {
+    if (e.button !== 0) return; // right-drag aims the camera; no file dialog mid-look
     if (document.pointerLockElement) return; // pointer-locked clicks steer the fly cam
     if (useStore.getState().buildMode) return; // build mode drags the frame instead
     e.stopPropagation();
