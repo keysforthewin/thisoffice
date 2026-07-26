@@ -410,6 +410,33 @@ describe('Quiz', () => {
     expect(h2.quiz.getState().question).not.toBeNull();
   });
 
+  it('never flags a canned fallback as an outright guess', async () => {
+    // Haiku is down exactly when a guess is due (Q15+): a canned narrowing
+    // question must not be winnable, or a YES would credit a win for a
+    // question that named nothing.
+    const h = harness();
+    h.quiz.setEnabled(true);
+    await settle();
+    for (let i = 0; i < 14; i++) {
+      h.setReply(`{"question":"Narrow ${i}?","guess":false}`);
+      h.answerCurrent('no');
+      await settle();
+    }
+    expect(h.quiz.getState().askedCount).toBe(15);
+    // now break Haiku and re-issue the forced-guess turn
+    (h.deps.ask as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      throw new Error('spawn claude ENOENT');
+    });
+    h.answerCurrent('no');
+    await settle();
+    const q = h.quiz.getState().question!;
+    expect(q.text.length).toBeGreaterThan(0);
+    expect(q.guess).toBe(false);
+    expect(h.quiz.answer(q.id, 'yes')).toBe('ok');
+    expect(h.quiz.getState().winner).toBeNull();
+    expect(h.wins).toEqual([]);
+  });
+
   it('carries the asker seat on the question and the winner, for the roster-independent bubble', async () => {
     const askers: QuizAsker[] = [{ id: 'e9', name: 'Rey', variant: 'Mage', seat: 5, idle: true }];
     const h = harness({ askers: () => askers, ask: vi.fn(async () => '{"question":"Is it a cat?","guess":true}') });

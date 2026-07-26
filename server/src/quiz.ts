@@ -196,7 +196,11 @@ export class Quiz {
     if (!this.state.enabled) return;
     const asked = new Set(this.state.answers.map((a) => a.question.toLowerCase()));
     if (!parsed || asked.has(parsed.text.toLowerCase())) {
-      parsed = { text: this.freshFallback(asked), guess: mustGuess };
+      // A canned narrowing question is never a guess, even past QUIZ_GUESS_FROM:
+      // flagging it `guess: true` would let a YES win the round — crediting a win
+      // and hanging a photo — for a question that named nothing. Without the flag
+      // the round simply walks on to the honest Q20 concession.
+      parsed = { text: this.freshFallback(asked), guess: false };
     }
     const question: QuizQuestion = {
       id: nextId('q'),
