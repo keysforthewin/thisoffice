@@ -104,6 +104,99 @@ describe('StatsAggregator subagent counting', () => {
   });
 });
 
+describe('StatsAggregator replay dedupe (resume/fork copies prior history into a new file)', () => {
+  it('counts a tool_use id once even if recordTool is called twice with the same id', () => {
+    const s = new StatsAggregator(file);
+    s.recordTool('Bash', 'toolu_1');
+    s.recordTool('Bash', 'toolu_1');
+    expect(s.snapshot().toolCalls['Bash']).toBe(1);
+  });
+
+  it('dedupes a replayed tool_use id across a persistence round-trip', () => {
+    const s1 = new StatsAggregator(file);
+    s1.recordTool('Task', 'toolu_replay');
+    s1.flush();
+
+    const s2 = new StatsAggregator(file);
+    s2.recordTool('Task', 'toolu_replay');
+    expect(s2.snapshot().toolCalls['Task']).toBe(1);
+    expect(s2.snapshot().subagents).toBe(1);
+  });
+
+  it('still counts distinct tool_use ids for the same tool name', () => {
+    const s = new StatsAggregator(file);
+    s.recordTool('Bash', 'toolu_a');
+    s.recordTool('Bash', 'toolu_b');
+    expect(s.snapshot().toolCalls['Bash']).toBe(2);
+  });
+
+  it('counts a tool call without an id (no dedupe possible)', () => {
+    const s = new StatsAggregator(file);
+    s.recordTool('Bash');
+    s.recordTool('Bash');
+    expect(s.snapshot().toolCalls['Bash']).toBe(2);
+  });
+
+  it('counts a prompt uuid once even when replayed', () => {
+    const s = new StatsAggregator(file);
+    s.recordPrompt('prompt-uuid-1');
+    s.recordPrompt('prompt-uuid-1');
+    expect(s.snapshot().prompts).toBe(1);
+  });
+
+  it('dedupes a replayed prompt uuid across a persistence round-trip', () => {
+    const s1 = new StatsAggregator(file);
+    s1.recordPrompt('prompt-uuid-2');
+    s1.flush();
+
+    const s2 = new StatsAggregator(file);
+    s2.recordPrompt('prompt-uuid-2');
+    expect(s2.snapshot().prompts).toBe(1);
+  });
+
+  it('counts a turn uuid once even when replayed', () => {
+    const s = new StatsAggregator(file);
+    s.recordTurn(1000, 'turn-uuid-1');
+    s.recordTurn(1000, 'turn-uuid-1');
+    expect(s.snapshot().turns).toBe(1);
+    expect(s.snapshot().turnMsTotal).toBe(1000);
+  });
+
+  it('dedupes a replayed turn uuid across a persistence round-trip', () => {
+    const s1 = new StatsAggregator(file);
+    s1.recordTurn(2000, 'turn-uuid-2');
+    s1.flush();
+
+    const s2 = new StatsAggregator(file);
+    s2.recordTurn(2000, 'turn-uuid-2');
+    expect(s2.snapshot().turns).toBe(1);
+  });
+});
+
+describe('StatsAggregator.recordHeadcount dirty tracking', () => {
+  it('marks dirty when headcount rises above the current peak', () => {
+    const s = new StatsAggregator(file);
+    s.flush();
+    expect(s.isDirty()).toBe(false);
+    s.recordHeadcount(3);
+    expect(s.isDirty()).toBe(true);
+    expect(s.snapshot().peakHeadcount).toBe(3);
+  });
+
+  it('does not mark dirty when headcount repeats or drops below the peak', () => {
+    const s = new StatsAggregator(file);
+    s.recordHeadcount(5);
+    s.flush();
+    expect(s.isDirty()).toBe(false);
+
+    s.recordHeadcount(5); // same value
+    expect(s.isDirty()).toBe(false);
+    s.recordHeadcount(2); // below peak
+    expect(s.isDirty()).toBe(false);
+    expect(s.snapshot().peakHeadcount).toBe(5);
+  });
+});
+
 describe('StatsAggregator byDay', () => {
   it('records tokens/toolCalls/prompts for today', () => {
     const s = new StatsAggregator(file);

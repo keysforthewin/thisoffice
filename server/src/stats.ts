@@ -2,9 +2,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { DayStats, UsageStats } from '../../shared/types.ts';
 
-/** FIFO caps for the persisted dedupe rings — enough to survive a restart mid-response/session. */
-const LAST_USAGE_MAX = 500;
+/**
+ * FIFO caps for the persisted dedupe rings — enough to survive a restart mid-response/session,
+ * and (crucially) to survive a resume/fork/compact replay, which copies prior history lines
+ * (same uuids/message ids/tool_use ids) into a NEW jsonl file the watcher reads from offset 0.
+ * Entries are tiny (a few dozen bytes each), so these are sized generously against long
+ * sessions rather than trimmed for file size.
+ */
+const LAST_USAGE_MAX = 5000;
 const RECENT_SESSIONS_MAX = 200;
+const RECENT_TOOL_IDS_MAX = 5000;
+const RECENT_PROMPT_IDS_MAX = 2000;
+const RECENT_TURN_IDS_MAX = 2000;
 /** byDay is pruned to this window on every write. */
 const BYDAY_MAX_DAYS = 30;
 
@@ -31,6 +40,42 @@ interface PersistedFile {
   recentMsgIds: Array<[string, UsageSnapshot]>;
   /** most-recently-seen session ids, FIFO capped */
   recentSessionIds: string[];
+  /** most-recently-seen tool_use ids, FIFO capped — guards recordTool against replay */
+  recentToolUseIds?: string[];
+  /** most-recently-seen user-prompt line uuids, FIFO capped — guards recordPrompt against replay */
+  recentPromptIds?: string[];
+  /** most-recently-seen turn_duration line uuids, FIFO capped — guards recordTurn against replay */
+  recentTurnIds?: string[];
+}
+
+/** Simple FIFO-capped id-dedupe ring: a Set for O(1) membership plus an array for eviction order. */
+class IdRing {
+  private seen = new Set<string>();
+  private order: string[] = [];
+
+  constructor(private max: number, initial: string[] = []) {
+    for (const id of initial) this.addIfNew(id);
+  }
+
+  has(id: string): boolean {
+    return this.seen.has(id);
+  }
+
+  /** Records `id`; returns false (no-op) if it was already seen, true if newly recorded. */
+  addIfNew(id: string): boolean {
+    if (this.seen.has(id)) return false;
+    this.seen.add(id);
+    this.order.push(id);
+    if (this.order.length > this.max) {
+      const oldest = this.order.shift();
+      if (oldest !== undefined) this.seen.delete(oldest);
+    }
+    return true;
+  }
+
+  toArray(): string[] {
+    return this.order;
+  }
 }
 
 function todayKey(): string {
@@ -70,6 +115,12 @@ export class StatsAggregator {
   private seenSessions = new Set<string>();
   /** insertion order of seenSessions, capped, for persistence */
   private recentSessionIds: string[] = [];
+  /** tool_use id dedupe ring: same id must never count twice, even across a resume/fork replay. */
+  private recentToolUseIds = new IdRing(RECENT_TOOL_IDS_MAX);
+  /** user-prompt line uuid dedupe ring, same replay guarantee. */
+  private recentPromptIds = new IdRing(RECENT_PROMPT_IDS_MAX);
+  /** turn_duration line uuid dedupe ring, same replay guarantee. */
+  private recentTurnIds = new IdRing(RECENT_TURN_IDS_MAX);
   private dirty = false;
 
   constructor(private dataFile: string) {
@@ -95,6 +146,11 @@ export class StatsAggregator {
     }
     this.recentSessionIds = Array.isArray(persisted.recentSessionIds) ? persisted.recentSessionIds : [];
     for (const id of this.recentSessionIds) this.seenSessions.add(id);
+    // migrating/ignoring files from before these rings existed is fine — they just
+    // start empty and the dedupe window fills back up from here.
+    this.recentToolUseIds = new IdRing(RECENT_TOOL_IDS_MAX, persisted.recentToolUseIds ?? []);
+    this.recentPromptIds = new IdRing(RECENT_PROMPT_IDS_MAX, persisted.recentPromptIds ?? []);
+    this.recentTurnIds = new IdRing(RECENT_TURN_IDS_MAX, persisted.recentTurnIds ?? []);
     const stats = persisted.stats;
     // defensive defaults in case the file predates a field
     return { ...emptyStats(), ...stats };
@@ -196,7 +252,14 @@ export class StatsAggregator {
     this.markDirty();
   }
 
-  recordTool(name: string): void {
+  /**
+   * `toolUseId` dedupes against resume/fork/compact replay (same jsonl content copied
+   * into a new file, read from offset 0). Every real tool_use block carries an id; it's
+   * optional only for defensiveness against malformed/legacy lines, in which case we
+   * fall back to counting without dedupe.
+   */
+  recordTool(name: string, toolUseId?: string): void {
+    if (toolUseId && !this.recentToolUseIds.addIfNew(toolUseId)) return; // replayed line
     this.stats.toolCalls[name] = (this.stats.toolCalls[name] ?? 0) + 1;
     this.dayBucket(todayKey()).toolCalls++;
     // must mirror transcript.ts's `isTask` check (see transcript.ts:653) so the two
@@ -206,7 +269,9 @@ export class StatsAggregator {
     this.markDirty();
   }
 
-  recordPrompt(): void {
+  /** `uuid` is the record's own line uuid; same replay guard as recordTool. */
+  recordPrompt(uuid?: string): void {
+    if (uuid && !this.recentPromptIds.addIfNew(uuid)) return; // replayed line
     this.stats.prompts++;
     this.dayBucket(todayKey()).prompts++;
     const hour = String(new Date().getHours());
@@ -228,7 +293,9 @@ export class StatsAggregator {
     this.markDirty();
   }
 
-  recordTurn(durationMs: number): void {
+  /** `uuid` is the turn_duration record's own line uuid; same replay guard as recordTool. */
+  recordTurn(durationMs: number, uuid?: string): void {
+    if (uuid && !this.recentTurnIds.addIfNew(uuid)) return; // replayed line
     if (!Number.isFinite(durationMs) || durationMs < 0) return;
     this.stats.turns++;
     this.stats.turnMsTotal += durationMs;
@@ -237,7 +304,10 @@ export class StatsAggregator {
   }
 
   recordHeadcount(n: number): void {
-    this.stats.peakHeadcount = Math.max(this.stats.peakHeadcount, n);
+    // only dirty the file (and the 15s broadcast/flush cycle) when the peak actually moves —
+    // otherwise an idle office with a stable headcount flushes/broadcasts forever.
+    if (n <= this.stats.peakHeadcount) return;
+    this.stats.peakHeadcount = n;
     this.markDirty();
   }
 
@@ -252,6 +322,9 @@ export class StatsAggregator {
       stats: this.stats,
       recentMsgIds: [...this.lastUsage.entries()],
       recentSessionIds: this.recentSessionIds,
+      recentToolUseIds: this.recentToolUseIds.toArray(),
+      recentPromptIds: this.recentPromptIds.toArray(),
+      recentTurnIds: this.recentTurnIds.toArray(),
     };
     fs.mkdirSync(path.dirname(this.dataFile), { recursive: true });
     const tmp = this.dataFile + '.tmp';

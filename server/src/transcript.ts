@@ -364,7 +364,7 @@ export class Transcripts {
       return;
     }
     this.touchBoss();
-    this.onUserPrompt(project, text);
+    this.onUserPrompt(project, text, line.uuid);
   }
 
   /** User text starting with '<': slash commands, ! shell passthrough, notifications, reminders. */
@@ -429,7 +429,7 @@ export class Transcripts {
       if (b.type === 'fallback') {
         this.showEphemeral(sessionId, project, 'Model Swap', `⚠ model fallback: ${b.from?.model ?? '?'} → ${b.to?.model ?? '?'}`);
       }
-      if (b.type === 'tool_use') this.stats?.recordTool(b.name);
+      if (b.type === 'tool_use') this.stats?.recordTool(b.name, b.id);
     }
     const toolUses = blocks.filter((b) => b.type === 'tool_use');
     // every content block of one response repeats the response's stop_reason,
@@ -471,7 +471,7 @@ export class Transcripts {
         break;
       }
       case 'turn_duration':
-        this.stats?.recordTurn(line.durationMs);
+        this.stats?.recordTurn(line.durationMs, line.uuid);
         this.digest(file, sessionId, project, `turn: ${Math.round((line.durationMs ?? 0) / 1000)}s, ${line.messageCount ?? 0} msgs`);
         break;
       case 'bridge_status':
@@ -592,8 +592,8 @@ export class Transcripts {
     }
   }
 
-  private onUserPrompt(project: string, text: string) {
-    this.stats?.recordPrompt();
+  private onUserPrompt(project: string, text: string, uuid?: string) {
+    this.stats?.recordPrompt(uuid);
     const preview = text.length > 160 ? text.slice(0, 157) + '…' : text;
     this.office.pushInbox(project, preview, text.slice(0, 4000));
     const inboxId = this.office.lastInboxId;
@@ -843,7 +843,7 @@ export class Transcripts {
         } else if (b.type === 'thinking' && b.thinking?.trim()) {
           this.emitTo(activity, '💭 ' + b.thinking.trim());
         } else if (b.type === 'tool_use') {
-          this.stats?.recordTool(b.name);
+          this.stats?.recordTool(b.name, b.id);
           if (FANOUT_EXCLUDED.has(b.name)) {
             this.emitTo(activity, `> ${b.name} ${oneLine(inputPreview(b.name, b.input ?? {}))}`);
             continue;

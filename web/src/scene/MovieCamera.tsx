@@ -48,6 +48,13 @@ export function MovieCamera() {
     return () => {
       camera.fov = baseFov.current;
       camera.updateProjectionMatrix();
+      // A dutchStatic shot applies camera.rotateZ every frame; if movie mode is
+      // exited mid-shot that roll would otherwise hang around in the free camera
+      // until the user's first mousemove (FreeFlyControls only reseeds yaw/pitch,
+      // dropping roll, on mount and on that first move). Level immediately instead.
+      tmpEuler.setFromQuaternion(camera.quaternion);
+      tmpEuler.z = 0;
+      camera.quaternion.setFromEuler(tmpEuler);
     };
   }, [camera]);
 
@@ -131,3 +138,6 @@ export function MovieCamera() {
 
 const tmpPos = new THREE.Vector3();
 const tmpLook = new THREE.Vector3();
+// 'YXZ' matches CameraRig's FreeFlyControls convention (yaw, pitch, then roll last)
+// so leveling here composes cleanly with how the free camera re-derives its own look.
+const tmpEuler = new THREE.Euler(0, 0, 0, 'YXZ');

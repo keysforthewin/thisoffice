@@ -1233,7 +1233,7 @@ describe('stats aggregator wiring', () => {
       }),
     ]);
     expect(stats.recordUsage).toHaveBeenCalledWith('msg-1', 'claude-fable-5', usage);
-    expect(stats.recordTool).toHaveBeenCalledWith('Bash');
+    expect(stats.recordTool).toHaveBeenCalledWith('Bash', 'tu-1');
   });
 
   it('records usage twice for a streamed repeat of the same message id (dedupe is the aggregator\'s job)', () => {
@@ -1265,8 +1265,8 @@ describe('stats aggregator wiring', () => {
         },
       }),
     ]);
-    expect(stats.recordTool).toHaveBeenCalledWith('Bash');
-    expect(stats.recordTool).toHaveBeenCalledWith('Read');
+    expect(stats.recordTool).toHaveBeenCalledWith('Bash', 'tu-1');
+    expect(stats.recordTool).toHaveBeenCalledWith('Read', 'tu-2');
     expect(stats.recordTool).toHaveBeenCalledTimes(2);
   });
 
@@ -1294,21 +1294,30 @@ describe('stats aggregator wiring', () => {
       }),
     ]);
     expect(stats.recordUsage).toHaveBeenCalledWith('sub-msg-1', 'claude-fable-5', usage);
-    expect(stats.recordTool).toHaveBeenCalledWith('Read');
+    expect(stats.recordTool).toHaveBeenCalledWith('Read', 'tu-sub-1');
   });
 
-  it('records a turn_duration system record', () => {
+  it('records a turn_duration system record, forwarding the line uuid for replay dedupe', () => {
     const { transcripts, stats } = makeHarness();
     transcripts.handleLines(MAIN, [
-      line({ type: 'system', subtype: 'turn_duration', sessionId: 'sess-1', cwd: '/home/user/code/myapp', durationMs: 12000, messageCount: 7 }),
+      line({
+        type: 'system',
+        subtype: 'turn_duration',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        uuid: 'turn-uuid-1',
+        durationMs: 12000,
+        messageCount: 7,
+      }),
     ]);
-    expect(stats.recordTurn).toHaveBeenCalledWith(12000);
+    expect(stats.recordTurn).toHaveBeenCalledWith(12000, 'turn-uuid-1');
   });
 
-  it('records a real user prompt but not meta/tool-result user lines', () => {
+  it('records a real user prompt but not meta/tool-result user lines, forwarding the line uuid', () => {
     const { transcripts, stats } = makeHarness();
-    transcripts.handleLines(MAIN, [userText('please fix the login page')]);
+    transcripts.handleLines(MAIN, [userText('please fix the login page', { uuid: 'prompt-uuid-1' })]);
     expect(stats.recordPrompt).toHaveBeenCalledTimes(1);
+    expect(stats.recordPrompt).toHaveBeenCalledWith('prompt-uuid-1');
 
     transcripts.handleLines(MAIN, [userText('Caveat: injected context', { isMeta: true })]);
     expect(stats.recordPrompt).toHaveBeenCalledTimes(1);
@@ -1321,6 +1330,20 @@ describe('stats aggregator wiring', () => {
       }),
     ]);
     expect(stats.recordPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('forwards the same uuid every time a line is replayed, so the aggregator ring can dedupe it', () => {
+    // Resume/fork/compact copies prior history lines (same uuid) into a NEW jsonl
+    // file the watcher reads from offset 0. transcript.ts's job is just to forward
+    // the id consistently; StatsAggregator (covered in stats.test.ts) is what
+    // actually recognizes the repeat and skips counting it twice.
+    const { transcripts, stats } = makeHarness();
+    const prompt = userText('please fix the login page', { uuid: 'prompt-uuid-replay' });
+    transcripts.handleLines(MAIN, [prompt]);
+    transcripts.handleLines(MAIN, [prompt]);
+    expect(stats.recordPrompt).toHaveBeenCalledTimes(2);
+    expect(stats.recordPrompt).toHaveBeenNthCalledWith(1, 'prompt-uuid-replay');
+    expect(stats.recordPrompt).toHaveBeenNthCalledWith(2, 'prompt-uuid-replay');
   });
 
   it('records the session id for any main line carrying one', () => {

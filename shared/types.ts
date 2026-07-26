@@ -103,7 +103,7 @@ export interface UsageStats {
   toolCalls: Record<string, number>; // by tool name
   prompts: number;
   sessions: number;
-  subagents: number; // Task tool launches
+  subagents: number; // Task|Agent tool launches
   webSearches: number;
   webFetches: number;
   turns: number;
