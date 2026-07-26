@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { useStore } from '../store.ts';
-import { activeSetKey, pickShot, type PickedShot } from './movieShots.ts';
+import { activeSetKey, ARCHETYPES, pickShot, type PickedShot } from './movieShots.ts';
 
 const MIN_HOLD_S = 2.5;
 const CUT_MIN_S = 3;
@@ -36,6 +36,7 @@ export function MovieCamera() {
   const prevPos = useRef<THREE.Vector3 | null>(null);
   const recent = useRef<PickedShot['archetype'][]>([]);
   const recentPrimaries = useRef<string[]>([]);
+  const recentMotion = useRef<boolean[]>([]);
   const pendingRecut = useRef(false);
   // the fov the rest of the app runs at; zoom shots animate camera.fov, so shot
   // picking must use this stable base and unmount must restore it (CameraRig's
@@ -83,11 +84,13 @@ export function MovieCamera() {
         prevPosition: prevPos.current,
         recentArchetypes: recent.current,
         recentPrimaries: recentPrimaries.current,
+        recentMotion: recentMotion.current,
       });
       shot.current = picked;
       // measure the next cut's min distance from where this shot's camera ENDS
       prevPos.current = (picked.positionEnd ?? picked.position).clone();
-      recent.current = [picked.archetype, ...recent.current].slice(0, 2);
+      recent.current = [picked.archetype, ...recent.current].slice(0, 3);
+      recentMotion.current = [!ARCHETYPES[picked.archetype].static, ...recentMotion.current].slice(0, 4);
       if (picked.primaryKey) {
         recentPrimaries.current = [picked.primaryKey, ...recentPrimaries.current].slice(0, 4);
       }
@@ -118,6 +121,9 @@ export function MovieCamera() {
 
     camera.position.copy(tmpPos);
     camera.lookAt(tmpLook);
+    // lookAt recomputes orientation fresh every frame, so a shot with no roll always
+    // renders at roll 0 regardless of the previous shot's roll — only apply when set.
+    if (s.roll) camera.rotateZ(s.roll);
   });
 
   return null;

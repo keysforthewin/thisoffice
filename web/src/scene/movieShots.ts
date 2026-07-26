@@ -54,6 +54,8 @@ export interface Shot {
   ease?: 'linear' | 'inOut';
   /** minimum seconds so slow moves aren't cut short by the random 3–10s duration */
   minDuration?: number;
+  /** canted-angle roll in RADIANS, applied about the view axis after lookAt; absent means no roll */
+  roll?: number;
 }
 
 export function activeKeys(lastActivity: Record<string, number>, now: number): string[] {
@@ -398,8 +400,40 @@ export const MIN_SHOT_DIST = 3.5;
 export type ArchetypeName =
   | 'otsCloseup' | 'highAngle' | 'sideProfile'
   | 'pushInCloseup' | 'orbitArc' | 'zoomPunch' | 'lowPush' | 'boardPan'
-  | 'groupLevel' | 'elevatedGroup' | 'groupArc'
-  | 'overheadGod' | 'highCorner' | 'lowDolly' | 'wideEstablishing';
+  | 'staticCloseup' | 'staticProfile' | 'staticHighAngle' | 'staticLow' | 'dutchStatic' | 'tiltReveal'
+  | 'groupLevel' | 'elevatedGroup' | 'groupArc' | 'staticGroup'
+  | 'overheadGod' | 'highCorner' | 'lowDolly' | 'wideEstablishing' | 'staticWide' | 'staticCorner';
+
+/** Selection weight and static/moving classification per archetype. Statics are
+ *  weighted heavily (3, staticGroup 5 — the group pool only has one static member
+ *  so it needs extra weight to clear the ~55-65% per-pool static-share target);
+ *  gentle authored motion 1.5; big showy moves 1. See pickShot's weighted order(). */
+export const ARCHETYPES: Record<ArchetypeName, { weight: number; static: boolean }> = {
+  otsCloseup: { weight: 1.5, static: false },
+  highAngle: { weight: 1.5, static: false },
+  sideProfile: { weight: 1.5, static: false },
+  pushInCloseup: { weight: 1, static: false },
+  orbitArc: { weight: 1, static: false },
+  zoomPunch: { weight: 1, static: false },
+  lowPush: { weight: 1, static: false },
+  boardPan: { weight: 1.5, static: false },
+  staticCloseup: { weight: 3, static: true },
+  staticProfile: { weight: 3, static: true },
+  staticHighAngle: { weight: 3, static: true },
+  staticLow: { weight: 3, static: true },
+  dutchStatic: { weight: 3, static: true },
+  tiltReveal: { weight: 1.5, static: false },
+  groupLevel: { weight: 1.5, static: false },
+  elevatedGroup: { weight: 1, static: false },
+  groupArc: { weight: 1, static: false },
+  staticGroup: { weight: 5, static: true },
+  overheadGod: { weight: 1, static: false },
+  highCorner: { weight: 1.5, static: false },
+  lowDolly: { weight: 1.5, static: false },
+  wideEstablishing: { weight: 1, static: false },
+  staticWide: { weight: 3.5, static: true },
+  staticCorner: { weight: 3.5, static: true },
+};
 
 export interface PickedShot extends Shot {
   archetype: ArchetypeName;
@@ -490,6 +524,54 @@ function sideProfileCandidate(s: Subject, fovY: number, aspect: number, rng: () 
   return { position, positionEnd, lookAt: s.center.clone() };
 }
 
+function staticCloseupCandidate(s: Subject, fovY: number, aspect: number, rng: () => number, office: OfficeState | null): Shot {
+  // the OTS framing without the push-in: fixed at the closeup distance
+  return dollyCandidate(s, fovY, aspect, rng, office, CLOSEUP_YAW, CLOSEUP_PITCH_MIN, CLOSEUP_PITCH_MAX, 1.05, 1.05, 1.3);
+}
+
+function staticProfileCandidate(s: Subject, fovY: number, aspect: number, rng: () => number, office: OfficeState | null): Shot {
+  // sideProfileCandidate's framing with no lateral truck
+  const sign = rng() < 0.5 ? -1 : 1;
+  const yaw = sign * (deg(55) + rng() * deg(25));
+  const pitch = deg(5) + rng() * deg(15);
+  const dist = fitDistance(s.width, s.height, fovY, aspect, 1.3) * 1.8;
+  const dir = jitterDir(s.normal.clone().applyAxisAngle(UP, yaw), rng, 0, pitch, pitch);
+  const position = clampToRoom(s.center.clone().addScaledVector(dir, dist), office);
+  return { position, lookAt: s.center.clone() };
+}
+
+function staticHighAngleCandidate(s: Subject, fovY: number, aspect: number, rng: () => number, office: OfficeState | null): Shot {
+  // the existing high angle with no arc
+  return dollyCandidate(s, fovY, aspect, rng, office, deg(35), deg(45), deg(65), 1.6, 1.6, 1.3);
+}
+
+function staticLowCandidate(s: Subject, fovY: number, aspect: number, rng: () => number, office: OfficeState | null): Shot {
+  // worm's-eye: camera below screen center looking up; clampToRoom keeps y >= 0.4
+  return dollyCandidate(s, fovY, aspect, rng, office, deg(30), deg(-10), deg(0), 1.4, 1.4, 1.3);
+}
+
+function dutchStaticCandidate(s: Subject, fovY: number, aspect: number, rng: () => number, office: OfficeState | null): Shot {
+  // medium static shot, canted roll for a dutch-angle look
+  const shot = dollyCandidate(s, fovY, aspect, rng, office, CLOSEUP_YAW, CLOSEUP_PITCH_MIN, CLOSEUP_PITCH_MAX, 1.3, 1.3, 1.3);
+  const sign = rng() < 0.5 ? -1 : 1;
+  shot.roll = sign * (deg(8) + rng() * deg(7));
+  return shot;
+}
+
+function tiltRevealCandidate(s: Subject, fovY: number, aspect: number, rng: () => number, office: OfficeState | null): Shot {
+  // static position; the look target tilts up from desk level to the screen
+  const dist = fitDistance(s.width, s.height, fovY, aspect, 1.3) * 1.5;
+  const dir = jitterDir(s.normal, rng, CLOSEUP_YAW, CLOSEUP_PITCH_MIN, CLOSEUP_PITCH_MAX);
+  const position = clampToRoom(s.center.clone().addScaledVector(dir, dist), office);
+  return {
+    position,
+    lookAt: s.center.clone().sub(new THREE.Vector3(0, 0.9, 0)),
+    lookAtEnd: s.center.clone(),
+    ease: 'inOut',
+    minDuration: 4,
+  };
+}
+
 function pushInCloseupCandidate(s: Subject, fovY: number, aspect: number, rng: () => number, office: OfficeState | null): Shot {
   // wide → close-up dolly; needs time to breathe
   return dollyCandidate(s, fovY, aspect, rng, office, CLOSEUP_YAW, deg(0), deg(20), 2.2, 1.0, 1.3, { minDuration: 6 });
@@ -561,6 +643,25 @@ function groupCandidate(
   return shot;
 }
 
+function staticWideCandidate(office: OfficeState | null, rng: () => number): Shot {
+  // the wide establishing framing with no fov zoom and no move
+  const { width, depth, centerZ, height } = roomDims(maxSeat(office));
+  const angle = rng() * Math.PI * 2;
+  const position = clampToRoom(new THREE.Vector3(
+    Math.cos(angle) * width * 0.42, 2.2 + rng() * (height - 4.2), centerZ + Math.sin(angle) * depth * 0.42), office);
+  return { position, lookAt: new THREE.Vector3(0, 1.2, centerZ) };
+}
+
+function staticCornerCandidate(office: OfficeState | null, rng: () => number): Shot {
+  // high-corner position with a fixed look at the room center (no surveillance pan)
+  const { width, depth, centerZ } = roomDims(maxSeat(office));
+  const sx = rng() < 0.5 ? -1 : 1;
+  const sz = rng() < 0.5 ? -1 : 1;
+  const position = clampToRoom(new THREE.Vector3(
+    sx * (width / 2 - 0.6), 3.0 + rng() * 0.5, centerZ + sz * (depth / 2 - 0.6)), office);
+  return { position, lookAt: new THREE.Vector3(0, 1.2, centerZ) };
+}
+
 function overheadGodCandidate(office: OfficeState | null, rng: () => number): Shot {
   const { centerZ, height } = roomDims(maxSeat(office));
   const lookAt = new THREE.Vector3(0, 1.0, centerZ + (rng() - 0.5) * 2);
@@ -618,9 +719,12 @@ function wideEstablishingCandidate(office: OfficeState | null, rng: () => number
   return { position, lookAt: new THREE.Vector3(0, 1.2, centerZ), fov: 50, fovEnd: 43, minDuration: 6 };
 }
 
-export const SINGLE_POOL: ArchetypeName[] = ['otsCloseup', 'highAngle', 'sideProfile', 'pushInCloseup', 'orbitArc', 'zoomPunch', 'lowPush'];
-export const GROUP_POOL: ArchetypeName[] = ['groupLevel', 'elevatedGroup', 'groupArc'];
-export const IDLE_POOL: ArchetypeName[] = ['overheadGod', 'highCorner', 'lowDolly', 'wideEstablishing'];
+export const SINGLE_POOL: ArchetypeName[] = [
+  'otsCloseup', 'highAngle', 'sideProfile', 'pushInCloseup', 'orbitArc', 'zoomPunch', 'lowPush',
+  'staticCloseup', 'staticProfile', 'staticHighAngle', 'staticLow', 'dutchStatic', 'tiltReveal',
+];
+export const GROUP_POOL: ArchetypeName[] = ['groupLevel', 'elevatedGroup', 'groupArc', 'staticGroup'];
+export const IDLE_POOL: ArchetypeName[] = ['overheadGod', 'highCorner', 'lowDolly', 'wideEstablishing', 'staticWide', 'staticCorner'];
 
 export interface ShotContext {
   office: OfficeState | null;
@@ -635,10 +739,13 @@ export interface ShotContext {
   cutIndex: number;
   /** committed position of the previous shot; candidates closer than MIN_SHOT_DIST are rejected */
   prevPosition?: THREE.Vector3 | null;
-  /** archetype names of the last two shots — never repeated */
+  /** archetype names of the last three shots — never repeated */
   recentArchetypes?: ArchetypeName[];
   /** primary subject keys of recent shots, most recent first (least-recently-shot weighting) */
   recentPrimaries?: string[];
+  /** whether each of the recent shots had motion, most recent first — two moving shots
+   *  in a row force the next pick's candidate order to try static archetypes first */
+  recentMotion?: boolean[];
 }
 
 /** Boss screen and wall boards fire rarely; give them extra draw weight so their
@@ -668,14 +775,46 @@ export function pickShot(ctx: ShotContext): PickedShot {
     .map((k) => subjectFor(k, office))
     .filter((s): s is Subject => s !== null);
 
-  /** fresh archetypes first (random order), recently-used ones as a last resort */
+  /** Weighted sampling without replacement: repeatedly draw from the remaining set by
+   *  ARCHETYPES[name].weight. Higher-weight archetypes tend to sort earlier, but it's
+   *  still randomized (not a plain sort), so ties and near-ties still shuffle. */
+  const weightedOrder = (names: ArchetypeName[]): ArchetypeName[] => {
+    const remaining = names.slice();
+    const out: ArchetypeName[] = [];
+    while (remaining.length > 0) {
+      const total = remaining.reduce((sum, n) => sum + ARCHETYPES[n].weight, 0);
+      let r = rng() * total;
+      let idx = remaining.length - 1;
+      for (let i = 0; i < remaining.length; i++) {
+        r -= ARCHETYPES[remaining[i]].weight;
+        if (r < 0) { idx = i; break; }
+      }
+      out.push(remaining[idx]);
+      remaining.splice(idx, 1);
+    }
+    return out;
+  };
+
+  // Two moving shots in a row: break the streak by trying every static candidate —
+  // fresh ones first, then recently-used ones — before any moving candidate at all
+  // (moving archetypes become pure validation fallback for this cut).
+  const breakStreak = ctx.recentMotion?.[0] === true && ctx.recentMotion?.[1] === true;
+
+  /** fresh archetypes first (weighted order), recently-used ones as a last resort;
+   *  under a moving streak, static-ness takes priority over freshness. */
   const order = (pool: ArchetypeName[]): ArchetypeName[] => {
     const fresh = pool.filter((n) => !recent.includes(n));
-    for (let i = fresh.length - 1; i > 0; i--) {         // Fisher–Yates via ctx.rng
-      const j = Math.floor(rng() * (i + 1));
-      [fresh[i], fresh[j]] = [fresh[j], fresh[i]];
+    const used = pool.filter((n) => recent.includes(n));
+    if (breakStreak) {
+      const isStatic = (n: ArchetypeName) => ARCHETYPES[n].static;
+      return [
+        ...weightedOrder(fresh.filter(isStatic)),
+        ...weightedOrder(used.filter(isStatic)),
+        ...weightedOrder(fresh.filter((n) => !isStatic(n))),
+        ...weightedOrder(used.filter((n) => !isStatic(n))),
+      ];
     }
-    return [...fresh, ...pool.filter((n) => recent.includes(n))];
+    return [...weightedOrder(fresh), ...weightedOrder(used)];
   };
 
   const attempt = (name: ArchetypeName, gen: () => Shot, losSubjects: Subject[], minDist: number = MIN_SHOT_DIST): PickedShot | null => {
@@ -713,6 +852,8 @@ export function pickShot(ctx: ShotContext): PickedShot {
       highCorner: () => highCornerCandidate(office, rng),
       lowDolly: () => lowDollyCandidate(office, rng),
       wideEstablishing: () => wideEstablishingCandidate(office, rng),
+      staticWide: () => staticWideCandidate(office, rng),
+      staticCorner: () => staticCornerCandidate(office, rng),
     };
     const hit = tryPool(IDLE_POOL, gens, []);
     if (hit) return hit;
@@ -735,6 +876,12 @@ export function pickShot(ctx: ShotContext): PickedShot {
     zoomPunch: () => zoomPunchCandidate(primary, aspect, rng, office),
     lowPush: () => lowPushCandidate(primary, fovY, aspect, rng, office),
     boardPan: () => boardPanCandidate(primary, fovY, aspect, rng, office),
+    staticCloseup: () => staticCloseupCandidate(primary, fovY, aspect, rng, office),
+    staticProfile: () => staticProfileCandidate(primary, fovY, aspect, rng, office),
+    staticHighAngle: () => staticHighAngleCandidate(primary, fovY, aspect, rng, office),
+    staticLow: () => staticLowCandidate(primary, fovY, aspect, rng, office),
+    dutchStatic: () => dutchStaticCandidate(primary, fovY, aspect, rng, office),
+    tiltReveal: () => tiltRevealCandidate(primary, fovY, aspect, rng, office),
   };
   let pool: ArchetypeName[] = [...SINGLE_POOL];
   if (isWallBoard(primary.key)) pool.push('boardPan');
@@ -743,6 +890,7 @@ export function pickShot(ctx: ShotContext): PickedShot {
     gens.groupLevel = () => groupCandidate(group, fovY, aspect, rng, office, GROUP_PITCH_MIN, GROUP_PITCH_MAX, 'truck');
     gens.elevatedGroup = () => groupCandidate(group, fovY, aspect, rng, office, deg(25), deg(45), 'pushIn');
     gens.groupArc = () => groupCandidate(group, fovY, aspect, rng, office, GROUP_PITCH_MIN, GROUP_PITCH_MAX, 'arc');
+    gens.staticGroup = () => groupCandidate(group, fovY, aspect, rng, office, GROUP_PITCH_MIN, GROUP_PITCH_MAX, 'none');
     pool = [...pool, ...GROUP_POOL];
   }
 
