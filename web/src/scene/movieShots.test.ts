@@ -84,19 +84,28 @@ describe('activeKeys / activeSetKey', () => {
     const la = { fresh: now - 1, stale: now - ACTIVE_WINDOW_MS - 1, edge: now - ACTIVE_WINDOW_MS + 1 };
     expect(activeKeys(la, now).sort()).toEqual(['edge', 'fresh']);
   });
-  it('boss and whiteboard expire after their 14s TTL while monitors keep the shorter global window', () => {
+  it('boss and whiteboard outlive the shorter global monitor window, then expire too', () => {
     const now = 100_000;
-    const la = { boss: now - 12_000, whiteboard: now - 12_000, e1: now - 12_000, statusboard: now - 12_000 };
+    // derived, not hardcoded: these windows track the MovieCamera cut cadence and
+    // are expected to grow with it, but the ordering below must always hold
+    expect(ACTIVE_WINDOW_MS).toBeLessThan(activityTtl('boss'));
+    const between = (ACTIVE_WINDOW_MS + activityTtl('boss')) / 2;
+    const la = { boss: now - between, whiteboard: now - between, e1: now - between, statusboard: now - between };
     expect(activeKeys(la, now).sort()).toEqual(['boss', 'statusboard', 'whiteboard']);
-    const later = { boss: now - 15_000, whiteboard: now - 15_000, statusboard: now - 15_000 };
+    const past = activityTtl('boss') + 1_000;
+    const later = { boss: now - past, whiteboard: now - past, statusboard: now - past };
     expect(activeKeys(later, now)).toEqual(['statusboard']);
   });
   it('activityTtl gives boards their own windows and everything else the global window', () => {
-    expect(activityTtl('boss')).toBe(14_000);
-    expect(activityTtl('whiteboard')).toBe(14_000);
+    // boards must survive a full hold + max shot (MovieCamera MIN_HOLD_S + CUT_MAX_S = 20s)
+    // or a subject can go stale before the director ever cuts to it
+    expect(activityTtl('boss')).toBeGreaterThanOrEqual(20_000);
+    expect(activityTtl('boss')).toBe(24_000);
+    expect(activityTtl('whiteboard')).toBe(24_000);
     expect(activityTtl('statusboard')).toBe(150_000);
     expect(activityTtl('tv')).toBe(150_000);
     expect(activityTtl('e1')).toBe(ACTIVE_WINDOW_MS);
+    expect(ACTIVE_WINDOW_MS).toBeGreaterThanOrEqual(20_000);
   });
   it('the two wall boards resolve as distinct non-overlapping subjects on the right wall', () => {
     const wb = subjectFor('whiteboard', null)!;
@@ -172,25 +181,24 @@ describe('subjectFor', () => {
     expect(isWallBoard('tv')).toBe(true);
   });
 
-  it('the tv default offset is anchored to the back wall (stable z, stable x) as maxSeat/room size grows', () => {
-    // defaultWallOffset('tv', maxSeat) = depth/2 - 1.9, i.e. world z = centerZ - ox
-    // is pinned to BACK_Z + 1.9 regardless of how far the room grows at the front —
-    // both x (off the left wall) and z should hold steady across two very different maxSeat values.
+  it('the tv default offset tracks the room forward (stable x, z follows centerZ) as maxSeat/room size grows', () => {
+    // defaultWallOffset('tv') is a constant 5.0 along the wall, so world z = centerZ - 5
+    // slides toward the employees as the room grows at the front, while x (off the left
+    // wall) holds steady. It used to be pinned to BACK_Z + 1.9 hugging the back corner.
     const small = subjectFor('tv', makeOffice({ employees: [makeEmployee({ id: 'e1', seat: 1 })] }))!;
     const big = subjectFor(
       'tv',
       makeOffice({ employees: Array.from({ length: 9 }, (_, i) => makeEmployee({ id: `e${i}`, seat: i + 1 })) }),
     )!;
-    expect(small.center.z).toBeCloseTo(big.center.z, 6);
     expect(small.center.x).toBeCloseTo(big.center.x, 6);
+    expect(big.center.z).toBeGreaterThan(small.center.z);
     // and the two room sizes actually differ (sanity check the fixture is meaningful)
     expect(roomDims(3).depth).not.toBeCloseTo(roomDims(9).depth, 1);
     // matches the raw formula the layout/render side uses directly
     for (const ms of [3, 9]) {
-      const { width, depth, centerZ } = roomDims(ms);
-      const expectedZ = centerZ - (depth / 2 - 1.9);
+      const { width, centerZ } = roomDims(ms);
       const s = subjectFor('tv', makeOffice({ employees: Array.from({ length: ms }, (_, i) => makeEmployee({ id: `e${i}`, seat: i + 1 })) }))!;
-      expect(s.center.z).toBeCloseTo(expectedZ, 6);
+      expect(s.center.z).toBeCloseTo(centerZ - 5.0, 6);
       expect(s.center.x).toBeCloseTo(-width / 2 + 0.07, 6);
     }
   });

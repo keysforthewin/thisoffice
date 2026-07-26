@@ -5,6 +5,9 @@ import { Office } from './scene/Office.tsx';
 import { DuskSky } from './scene/DuskSky.tsx';
 import { CameraRig, usePovList } from './scene/CameraRig.tsx';
 import { SettingsPanel } from './settings/SettingsPanel.tsx';
+import { PerfPanel, PerfSampler } from './scene/PerfOverlay.tsx';
+import { ShadowControl } from './scene/ShadowControl.tsx';
+import { AdaptiveQuality, MAX_DPR } from './scene/AdaptiveQuality.tsx';
 import { loadCatalog } from './characters/catalog.ts';
 
 export default function App() {
@@ -13,6 +16,7 @@ export default function App() {
   const setMode = useStore((s) => s.setCameraMode);
   const settingsOpen = useStore((s) => s.settingsOpen);
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
+  const perfOverlay = useStore((s) => s.perfOverlay);
   // shared with the actual list CameraRig renders — never hand-count spots here again
   const povCount = usePovList().length;
 
@@ -54,6 +58,11 @@ export default function App() {
         st.setBuildMode(!st.buildMode);
         return;
       }
+      if (e.key === 'p' || e.key === 'P') {
+        const st = useStore.getState();
+        st.setPerfOverlay(!st.perfOverlay);
+        return;
+      }
       if (e.key === 'v' || e.key === 'V') {
         setMode(cur.kind === 'free' ? { kind: 'pov', index: 0 } : { kind: 'free' });
       } else if (e.key === 'Escape') {
@@ -83,6 +92,10 @@ export default function App() {
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
       <Canvas
         shadows
+        // R3F defaults to [1, 2]; on a retina/4K panel that is 4× the fragment
+        // work of dpr 1 for a scene that is already fragment-bound. AdaptiveQuality
+        // steps down from this ceiling when frames start dropping.
+        dpr={[1, MAX_DPR]}
         camera={{ position: [7.5, 6.5, 9], fov: 50 }}
         onPointerMissed={() => {
           // click away from the monitor exits — but only if this same gesture
@@ -104,8 +117,12 @@ export default function App() {
           <Office />
         </Suspense>
         <CameraRig />
+        <ShadowControl />
+        <AdaptiveQuality />
+        {perfOverlay && <PerfSampler />}
       </Canvas>
 
+      {perfOverlay && <PerfPanel />}
       {mode.kind === 'free' && pointerLocked && <Crosshair />}
       <Hud connected={connected} mode={mode} onSettings={() => setSettingsOpen(true)} />
       {settingsOpen && <SettingsPanel />}

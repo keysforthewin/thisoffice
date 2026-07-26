@@ -4,6 +4,7 @@ import { useFrame } from '@react-three/fiber';
 import { useStore } from '../store.ts';
 import { boardContent, type BoardContent } from './whiteboardContent.ts';
 import { statusBoardContent, type StatusBoardContent } from './statusBoardContent.ts';
+import { BOARD_POLL_MS, shouldRecheck } from './redrawGate.ts';
 import type { OfficeState } from '../../../shared/types.ts';
 
 const W = 640;
@@ -29,13 +30,24 @@ function BoardMesh<T>({ position, rotationY = 0, content, draw }: BoardMeshProps
     const ctx = canvas.getContext('2d')!;
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = 4; // boards are read at a glancing angle from most seats
     return { ctx, texture };
   }, []);
 
   const drawnKey = useRef('');
+  // gate state: only re-derive content when the office object changed or the
+  // poll elapsed, instead of stringifying the whole board every frame
+  const lastOffice = useRef<OfficeState | null | undefined>(undefined);
+  const lastCheck = useRef(0);
 
-  useFrame(() => {
-    const c = content(useStore.getState().office);
+  useFrame(({ clock }) => {
+    const office = useStore.getState().office;
+    const now = clock.elapsedTime * 1000;
+    if (!shouldRecheck(now, lastCheck.current, BOARD_POLL_MS, office, lastOffice.current)) return;
+    lastCheck.current = now;
+    lastOffice.current = office;
+
+    const c = content(office);
     const key = JSON.stringify(c);
     if (key === drawnKey.current) return;
     drawnKey.current = key;

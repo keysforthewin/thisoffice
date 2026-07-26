@@ -62,9 +62,9 @@ export interface ItemPose {
 export interface OfficeLayout {
   /** desk-unit overrides keyed by seat number (0 = boss) */
   seats?: Record<number, ItemPose>;
-  /** floor furniture keyed by stable id: couch, couch2, lampBack, lampCouch, lampCouch2, cactusBig, cactusSmall */
+  /** floor furniture keyed by stable id: couch, couch2, lampBack, lampCouch, lampCouch2, cactusSmall, catPerson */
   furniture?: Record<string, ItemPose>;
-  /** wall-mounted items keyed by id: windowBack, windowLeft, wallArt, pictureFrame → along-wall offset (the wall's local `ox` frame) */
+  /** wall-mounted items keyed by id: windowBack, windowLeft, wallArt, tv → along-wall offset (the wall's local `ox` frame) */
   wallItems?: Record<string, number>;
 }
 
@@ -115,7 +115,7 @@ export interface UsageStats {
   hires: number;
   /** keyed YYYY-MM-DD, last ~30 days */
   byDay: Record<string, DayStats>;
-  /** hour-of-day 0-23 → prompt count */
+  /** UTC hour-of-day 0-23 → prompt count (the client renders it in the viewer's local zone) */
   hourCounts: Record<string, number>;
 }
 
@@ -160,6 +160,9 @@ export interface CharacterEntry {
   seatOffset?: number;
   /** vertical offset of chair + character as a unit (lines hands up with the desk); absent = 0 */
   chairHeight?: number;
+  /** forward/back offset of the character alone along the desk axis (+ = toward the desk,
+   *  − = back into the chair, for characters that perch on the front edge); absent = 0 */
+  chairForward?: number;
 }
 
 export interface CharacterCatalog {

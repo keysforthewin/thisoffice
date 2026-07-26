@@ -139,6 +139,8 @@ export interface FurnitureLight {
 export interface ResolvedFurniture {
   id: string;
   url: string;
+  /** render as an animated catalog character (looping `clip`) instead of a static GLB */
+  character?: { variant: string; name: string; clip: string };
   y: number;
   scale?: [number, number, number];
   footprint: Footprint;
@@ -184,13 +186,18 @@ export function defaultFurniture(maxSeat: number): ResolvedFurniture[] {
       pose: { x: width / 2 - 0.7, z: centerZ + 1.4, rotY: -Math.PI / 3 },
     },
     {
-      id: 'cactusBig',
-      handleH: 1.0,
-      url: '/models/furniture/cactus_medium_A.gltf',
+      // The office cat: a mascot who stands in the back-left corner playing the
+      // shared Idle clip. She is the same rigged catalog GLB employees can wear,
+      // so `url` is unused — `character` routes her through <Person> for the
+      // animation and name tag. rotY turns her in off the corner to face the room.
+      id: 'catPerson',
+      handleH: 2.5,
+      url: '/models/characters/CatPerson.glb',
+      character: { variant: 'CatPerson', name: 'Kat Person', clip: 'Idle' },
       y: 0,
-      footprint: { w: 0.5, d: 0.5, cz: 0 },
+      footprint: { w: 1.3, d: 0.9, cz: -0.2 },
       collides: true,
-      pose: { x: -width / 2 + 0.8, z: backZ + 0.8, rotY: 0 },
+      pose: { x: -width / 2 + 1.05, z: backZ + 1.05, rotY: Math.PI / 6 },
     },
     {
       id: 'cactusSmall',
@@ -258,7 +265,6 @@ export const WALL_ITEMS: WallItemDef[] = [
   { id: 'windowBack', wall: 'back', halfW: 1.9 },
   { id: 'windowLeft', wall: 'left', halfW: 1.9 },
   { id: 'wallArt', wall: 'back', halfW: 1.0 },
-  { id: 'pictureFrame', wall: 'back', halfW: 0.6 },
   { id: 'tv', wall: 'left', halfW: 1.5 },
 ];
 
@@ -277,13 +283,13 @@ export function defaultWallOffset(id: string, maxSeat: number): number {
       return 1.5;
     case 'wallArt':
       return width / 4 + 0.5;
-    case 'pictureFrame':
-      return 0;
     case 'tv':
-      // room-relative to the BACK end: left-wall `ox` maps to world z = centerZ - ox,
-      // so this puts the TV center at world z = BACK_Z + 1.9 = -6.5 (span [-8.0, -5.0]),
-      // above cactusBig at (-6.8, -7.6).
-      return roomDims(maxSeat).depth / 2 - 1.9;
+      // Left-wall `ox` maps to world z = centerZ - ox, so a SMALLER ox sits further
+      // forward (nearer the employees). 5.0 is the furthest forward the TV can go:
+      // windowLeft is pinned at 1.5 and the two half-widths sum to 3.4, so anything
+      // below 4.9 overlaps the window. Unlike the old room-relative offset this is
+      // constant, so the TV slides toward the employees as the room grows.
+      return 5.0;
     default:
       return 0;
   }

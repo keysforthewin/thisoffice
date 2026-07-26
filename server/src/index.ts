@@ -97,12 +97,12 @@ const server = http.createServer((req, res) => {
       const id = sanitizeId(charMatch[1]);
       if (!id) return send(400, { error: 'bad character id' });
       const body = await readBody();
-      const patch: { scale?: number; seatOffset?: number; chairHeight?: number } = {};
-      for (const f of ['scale', 'seatOffset', 'chairHeight'] as const) {
+      const patch: { scale?: number; seatOffset?: number; chairHeight?: number; chairForward?: number } = {};
+      for (const f of ['scale', 'seatOffset', 'chairHeight', 'chairForward'] as const) {
         if (typeof body?.[f] === 'number' && Number.isFinite(body[f])) patch[f] = body[f];
       }
       if (Object.keys(patch).length === 0) {
-        return send(400, { error: 'need at least one finite number: scale, seatOffset, chairHeight' });
+        return send(400, { error: 'need at least one finite number: scale, seatOffset, chairHeight, chairForward' });
       }
       // builtins are never in the imported list, so adjust 404s them too
       if (!characters.adjust(id, patch)) {

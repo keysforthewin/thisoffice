@@ -4,11 +4,6 @@ import { ScreenStreamer } from './streamer.ts';
 import { Transcripts } from './transcript.ts';
 import type { ServerMsg } from '../../shared/types.ts';
 
-vi.mock('./summarizer.ts', () => ({
-  summarizePrompt: async () => null,
-  nameNewHire: async () => null,
-}));
-
 const MAIN = '/proj/-home-user-code-myapp/sess-1.jsonl';
 
 function line(obj: unknown): string {

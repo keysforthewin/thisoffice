@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { validMagic, clampScale, clampOffset, CharacterStore } from './characters.ts';
+import { validMagic, clampScale, clampOffset, CharacterStore, CHAIR_FORWARD_RANGE } from './characters.ts';
 
 describe('validMagic', () => {
   it('accepts GLB headers', () => {
@@ -66,16 +66,39 @@ describe('CharacterStore.adjust', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('persists clamped seatOffset/chairHeight and surfaces them in the catalog', () => {
+  it('persists clamped seatOffset/chairHeight/chairForward and surfaces them in the catalog', () => {
     const store = new CharacterStore(tempDir);
     store.register('test_char', 'Test Character');
     // Create a dummy GLB file so it's not filtered out
     fs.writeFileSync(store.modelPath('test_char'), '');
 
-    expect(store.adjust('test_char', { seatOffset: 0.9, chairHeight: -0.2 })).toBe(true);
+    expect(store.adjust('test_char', { seatOffset: 0.9, chairHeight: -0.2, chairForward: -0.15 })).toBe(true);
     const entry = store.mergedCatalog().characters.find((c) => c.id === 'test_char')!;
     expect(entry.seatOffset).toBe(0.5); // clamped
     expect(entry.chairHeight).toBe(-0.2);
+    expect(entry.chairForward).toBe(-0.15);
+  });
+
+  it('clamps chairForward to its own range in both directions', () => {
+    const store = new CharacterStore(tempDir);
+    store.register('test_char', 'Test Character');
+    fs.writeFileSync(store.modelPath('test_char'), '');
+
+    store.adjust('test_char', { chairForward: 99 });
+    expect(store.mergedCatalog().characters.find((c) => c.id === 'test_char')!.chairForward).toBe(CHAIR_FORWARD_RANGE);
+    store.adjust('test_char', { chairForward: -99 });
+    expect(store.mergedCatalog().characters.find((c) => c.id === 'test_char')!.chairForward).toBe(-CHAIR_FORWARD_RANGE);
+  });
+
+  it('survives a reload of the store (chairForward is written to meta)', () => {
+    const store = new CharacterStore(tempDir);
+    store.register('test_char', 'Test Character');
+    fs.writeFileSync(store.modelPath('test_char'), '');
+    store.adjust('test_char', { chairForward: -0.25 });
+
+    const reloaded = new CharacterStore(tempDir);
+    const entry = reloaded.mergedCatalog().characters.find((c) => c.id === 'test_char')!;
+    expect(entry.chairForward).toBe(-0.25);
   });
 
   it('returns false for unknown ids', () => {

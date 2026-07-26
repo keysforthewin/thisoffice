@@ -125,6 +125,16 @@
         "human"
       ],
       "displayName": "Rogue Hooded 2.0"
+    },
+    "CatPerson": {
+      "displayName": "Kat Person",
+      "pack": "Special",
+      "tags": [
+        "cat",
+        "feline",
+        "mascot",
+        "special"
+      ]
     }
   }
 }

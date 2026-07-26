@@ -2,7 +2,6 @@ import path from 'node:path';
 import type { Office } from './office.ts';
 import type { ScreenStreamer } from './streamer.ts';
 import type { StatsAggregator } from './stats.ts';
-import { summarizePrompt, nameNewHire } from './summarizer.ts';
 import { MONITOR_IMAGE_MARKER, type Employee } from '../../shared/types.ts';
 
 /**
@@ -193,12 +192,9 @@ export class Transcripts {
     }
     // only name genuinely new hires; a rehire into a remembered seat keeps their name
     if (hired && employee.name === 'New Hire') {
-      nameNewHire(title).then((name) => {
-        if (name) {
-          this.office.rename(employee.id, name);
-          this.office.pushStatus('hire', `New hire: ${name} joined the office`);
-        }
-      });
+      const name = this.office.pickHireName();
+      this.office.rename(employee.id, name);
+      this.office.pushStatus('hire', `New hire: ${name} joined the office`);
     }
     this.office.monitor(employee.id, { clear: true, title: fullTitle });
     this.streamer.enqueue(employee.id, body);
@@ -592,19 +588,20 @@ export class Transcripts {
     }
   }
 
+  /**
+   * The boss's screen shows the prompt itself, verbatim. `preview` is the head
+   * of the real text (clipped only so one status-board line can't swallow the
+   * board); the untruncated prompt rides along as the inbox item's fullText, and
+   * the focus camera scrolls it.
+   *
+   * This used to fire an LLM summary that rewrote both strings a second later.
+   * That is gone on purpose — no generated text, no second write.
+   */
   private onUserPrompt(project: string, text: string, uuid?: string) {
     this.stats?.recordPrompt(uuid);
     const preview = text.length > 160 ? text.slice(0, 157) + '…' : text;
     this.office.pushInbox(project, preview, text.slice(0, 4000));
-    const inboxId = this.office.lastInboxId;
     this.office.pushStatus('boss', `Message from upstairs: ${preview}`);
-    const statusId = this.office.lastStatusId;
-    summarizePrompt(text).then((summary) => {
-      if (summary) {
-        this.office.updateInboxText(inboxId, summary);
-        this.office.updateStatusText(statusId, `Message from upstairs: ${summary}`);
-      }
-    });
   }
 
   /** The main Claude's own text/thinking: an employee walks it over to the Boss. */
@@ -704,12 +701,9 @@ export class Transcripts {
     this.activities.set(toolUseId, activity);
 
     if (hired && employee && employee.name === 'New Hire') {
-      nameNewHire(label).then((n) => {
-        if (n) {
-          this.office.rename(employee.id, n);
-          this.office.pushStatus('hire', `New hire: ${n} joined the office`);
-        }
-      });
+      const n = this.office.pickHireName();
+      this.office.rename(employee.id, n);
+      this.office.pushStatus('hire', `New hire: ${n} joined the office`);
     }
 
     if (employee) {

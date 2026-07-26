@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { UsageStats } from '../../../shared/types.ts';
 import { formatDuration, formatTokens, formatUSD, tvContent, tvPageIndex, tvPages } from './tvContent.ts';
 
@@ -131,10 +131,31 @@ describe('tvPages', () => {
     expect(page.value).toBe('$18.00');
   });
 
-  it('reports the busiest hour in 12-hour format', () => {
+  it('reports the busiest hour in 12-hour format, converted to the local zone', () => {
+    // buckets are UTC; the expected label follows whatever zone the test host is in
+    const local = new Date();
+    local.setUTCHours(15, 0, 0, 0);
+    const h = local.getHours();
+    const expected = `${h % 12 === 0 ? 12 : h % 12} ${h < 12 ? 'AM' : 'PM'} is peak hour`;
+
     const stats = baseStats({ prompts: 5, hourCounts: { '15': 3, '9': 2 } });
     const page = tvPages(stats).find((p) => p.title === 'Prompts')!;
-    expect(page.sub).toBe('3 PM is peak hour');
+    expect(page.sub).toBe(expected);
+  });
+
+  it('shifts the UTC bucket into the local zone', () => {
+    const tz = process.env.TZ;
+    process.env.TZ = 'America/Toronto';
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-26T02:00:00Z')); // EDT, UTC-4
+    try {
+      const stats = baseStats({ prompts: 5, hourCounts: { '1': 3 } });
+      const page = tvPages(stats).find((p) => p.title === 'Prompts')!;
+      expect(page.sub).toBe('9 PM is peak hour');
+    } finally {
+      vi.useRealTimers();
+      process.env.TZ = tz;
+    }
   });
 
   it('skips the prompts sub when hourCounts is empty', () => {

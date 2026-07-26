@@ -3,11 +3,6 @@ import { Transcripts } from './transcript.ts';
 import type { Office } from './office.ts';
 import type { ScreenStreamer } from './streamer.ts';
 
-vi.mock('./summarizer.ts', () => ({
-  summarizePrompt: async () => null,
-  nameNewHire: async () => null,
-}));
-
 const MAIN = '/proj/-home-user-code-myapp/sess-1.jsonl';
 const AGENT = '/proj/-home-user-code-myapp/sess-1/subagents/agent-abc.jsonl';
 
@@ -15,7 +10,7 @@ function line(obj: unknown): string {
   return JSON.stringify(obj);
 }
 
-function makeHarness(opts: { queue?: boolean } = {}) {
+function makeHarness(opts: { queue?: boolean; hire?: boolean } = {}) {
   const enqueued: Array<{ id: string; text: string }> = [];
   const monitors: any[] = [];
   const finished: string[] = [];
@@ -28,10 +23,19 @@ function makeHarness(opts: { queue?: boolean } = {}) {
     assign: vi.fn((key: string, task: string) => {
       if (opts.queue) return { employee: null, hired: false };
       return {
-        employee: { id: `emp-${++seq}`, name: 'E', seat: seq, variant: 'Knight', hiredAt: '', status: 'working', task },
-        hired: false,
+        employee: {
+          id: `emp-${++seq}`,
+          name: opts.hire ? 'New Hire' : 'E',
+          seat: seq,
+          variant: 'Knight',
+          hiredAt: '',
+          status: 'working',
+          task,
+        },
+        hired: !!opts.hire,
       };
     }),
+    pickHireName: vi.fn(() => 'Tab Completion'),
     finish: vi.fn((key: string) => finished.push(key)),
     cancelQueued: vi.fn(),
     monitor: vi.fn((target: string, opts: any) => monitors.push({ target, ...opts })),
@@ -1352,5 +1356,55 @@ describe('stats aggregator wiring', () => {
       line({ type: 'system', subtype: 'away_summary', sessionId: 'sess-1', cwd: '/home/user/code/myapp', content: 'back now' }),
     ]);
     expect(stats.recordSession).toHaveBeenCalledWith('sess-1');
+  });
+});
+
+describe('hire naming (no LLM)', () => {
+  it('names an auto-hired employee synchronously from the built-in list', () => {
+    const h = makeHarness({ hire: true });
+    startBash(h.transcripts, 'tu-hire');
+    // no await anywhere: the rename lands in the same tick as the hire
+    expect(vi.mocked(h.office.pickHireName).mock.calls.length).toBe(1);
+    expect(vi.mocked(h.office.rename).mock.lastCall?.[1]).toBe('Tab Completion');
+    expect(
+      vi.mocked(h.office.pushStatus).mock.calls.some(
+        (c) => c[0] === 'hire' && String(c[1]).includes('Tab Completion'),
+      ),
+    ).toBe(true);
+  });
+
+  it('leaves a rehire into a remembered seat alone', () => {
+    const h = makeHarness(); // employee comes back named 'E', hired: false
+    startBash(h.transcripts, 'tu-rehire');
+    expect(vi.mocked(h.office.pickHireName).mock.calls.length).toBe(0);
+    expect(vi.mocked(h.office.rename).mock.calls.length).toBe(0);
+  });
+});
+
+describe('user prompt display (no summary)', () => {
+  it('shows the prompt itself and never rewrites it afterwards', async () => {
+    const h = makeHarness();
+    const prompt = 'Please refactor the parser and add tests';
+    h.transcripts.handleLines(MAIN, [
+      line({ type: 'user', sessionId: 'sess-1', cwd: '/home/user/code/myapp', message: { role: 'user', content: prompt } }),
+    ]);
+    expect(vi.mocked(h.office.pushInbox).mock.lastCall?.[1]).toBe(prompt);
+    expect(vi.mocked(h.office.pushStatus).mock.lastCall?.[1]).toContain(prompt);
+
+    // the old summarizer rewrote both a tick later; nothing may do that now
+    await new Promise((r) => setTimeout(r, 20));
+    expect(vi.mocked(h.office.updateInboxText).mock.calls.length).toBe(0);
+    expect(vi.mocked(h.office.updateStatusText).mock.calls.length).toBe(0);
+  });
+
+  it('clips only the status/inbox preview, keeping the full prompt as fullText', () => {
+    const h = makeHarness();
+    const long = 'x'.repeat(500);
+    h.transcripts.handleLines(MAIN, [
+      line({ type: 'user', sessionId: 'sess-1', cwd: '/home/user/code/myapp', message: { role: 'user', content: long } }),
+    ]);
+    const call = vi.mocked(h.office.pushInbox).mock.lastCall!;
+    expect(call[1]).toBe('x'.repeat(157) + '…'); // preview: the real text, clipped
+    expect(call[2]).toBe(long); // fullText: untouched, what the focus camera scrolls
   });
 });

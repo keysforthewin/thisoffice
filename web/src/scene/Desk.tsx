@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { memo, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, type ThreeElements } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
@@ -19,6 +19,8 @@ interface Props {
   boss?: boolean;
   /** blinks the boss desk's red light: a session is waiting for user input */
   waiting?: boolean;
+  /** highest occupied seat, sizing the room — computed once in Office, not per desk */
+  maxSeat: number;
 }
 
 export function FurnitureModel({ url, ...props }: { url: string } & ThreeElements['group']) {
@@ -60,19 +62,22 @@ const CHAIR_LEG_XZ = [
  *  floating. Slightly inset so they hide inside the real legs at rest; fully
  *  below the floor when the chair isn't raised. (The picker preview has no
  *  floor, so it intentionally omits these and shows the raw offset.) */
+// Shared once for the whole room: inline <boxGeometry>/<meshStandardMaterial>
+// give every mesh its own geometry and material, so a full office was allocating
+// four identical leg geometries and four identical materials per desk — a dozen
+// desks meant ~50 redundant GPU buffers and as many shader-uniform sets.
+const LEG_GEOMETRY = new THREE.BoxGeometry(0.16, 0.6, 0.16);
+const LEG_MATERIAL = new THREE.MeshStandardMaterial({ color: '#d4885f', roughness: 0.9 });
+const PLINTH_GEOMETRY = new THREE.BoxGeometry(1.7, 0.6, 1.5);
+const PLINTH_MATERIAL = new THREE.MeshStandardMaterial({ color: '#a5664c', roughness: 0.9 });
+
 function ChairLegExtensions({ boss }: { boss?: boolean }) {
   return boss ? (
-    <mesh position={[0, -0.31, 0.05]}>
-      <boxGeometry args={[1.7, 0.6, 1.5]} />
-      <meshStandardMaterial color="#a5664c" roughness={0.9} />
-    </mesh>
+    <mesh position={[0, -0.31, 0.05]} geometry={PLINTH_GEOMETRY} material={PLINTH_MATERIAL} />
   ) : (
     <>
       {CHAIR_LEG_XZ.map(([x, z]) => (
-        <mesh key={`${x},${z}`} position={[x, -0.2, z]}>
-          <boxGeometry args={[0.16, 0.6, 0.16]} />
-          <meshStandardMaterial color="#d4885f" roughness={0.9} />
-        </mesh>
+        <mesh key={`${x},${z}`} position={[x, -0.2, z]} geometry={LEG_GEOMETRY} material={LEG_MATERIAL} />
       ))}
     </>
   );
@@ -82,6 +87,10 @@ function ChairLegExtensions({ boss }: { boss?: boolean }) {
  * Small desk beacon: dark base + red bulb that blinks while a tailed session is
  * waiting for user input. Always part of the desk; dark when idle.
  */
+const BEACON_BASE_GEOMETRY = new THREE.CylinderGeometry(0.055, 0.065, 0.04);
+const BEACON_BASE_MATERIAL = new THREE.MeshStandardMaterial({ color: '#1a1a1f', roughness: 0.6 });
+const BEACON_BULB_GEOMETRY = new THREE.SphereGeometry(0.05, 16, 12);
+
 function WaitingLight({ on }: { on: boolean }) {
   const mat = useRef<THREE.MeshStandardMaterial>(null);
   const glow = useRef<THREE.PointLight>(null);
@@ -92,15 +101,16 @@ function WaitingLight({ on }: { on: boolean }) {
   });
   return (
     <group position={[0.7, 1.0, 0.25]}>
-      <mesh castShadow position={[0, 0.02, 0]}>
-        <cylinderGeometry args={[0.055, 0.065, 0.04]} />
-        <meshStandardMaterial color="#1a1a1f" roughness={0.6} />
-      </mesh>
-      <mesh position={[0, 0.07, 0]}>
-        <sphereGeometry args={[0.05, 16, 12]} />
+      <mesh castShadow position={[0, 0.02, 0]} geometry={BEACON_BASE_GEOMETRY} material={BEACON_BASE_MATERIAL} />
+      {/* the bulb material is per-instance: its emissiveIntensity is animated */}
+      <mesh position={[0, 0.07, 0]} geometry={BEACON_BULB_GEOMETRY}>
         <meshStandardMaterial ref={mat} color="#3a0d0d" emissive="#ff2222" emissiveIntensity={0.15} />
       </mesh>
-      <pointLight ref={glow} position={[0, 0.12, 0]} color="#ff3b30" intensity={0} distance={1.6} />
+      {/* Mounted only while actually waiting. An intensity-0 light still counts
+          toward NUM_POINT_LIGHTS and is evaluated by every StandardMaterial
+          fragment in the room; the shader recompile when it toggles is a
+          one-off, and the beacon changes state rarely. */}
+      {on && <pointLight ref={glow} position={[0, 0.12, 0]} color="#ff3b30" intensity={0} distance={1.6} />}
     </group>
   );
 }
@@ -109,9 +119,8 @@ function WaitingLight({ on }: { on: boolean }) {
  * A workstation: table + chair + monitor + seated character.
  * Local space: desk faces +z (screen readable from -z, i.e. from behind the chair).
  */
-export function Desk({ seat, variant, working, monitorTarget, name, fallbackTitle, boss, waiting }: Props) {
+function DeskImpl({ seat, variant, working, monitorTarget, name, fallbackTitle, boss, waiting, maxSeat }: Props) {
   const layout = useStore((s) => s.office?.layout);
-  const maxSeat = useStore((s) => Math.max(3, ...(s.office?.employees.map((e) => e.seat) ?? [])));
   const buildMode = useStore((s) => s.buildMode);
   const buildHold = useStore((s) => s.buildHold);
   const resolved = resolveSeat(layout, seat, maxSeat);
@@ -125,6 +134,8 @@ export function Desk({ seat, variant, working, monitorTarget, name, fallbackTitl
   const rotationY = pose.rotY;
   const deskScale = boss ? 1.15 : 1;
   const chairHeight = useStore((s) => catalogEntry(s.catalog, variant)?.chairHeight ?? 0);
+  // + = toward the desk, − = back into the chair (for rigs that perch on the front edge)
+  const chairForward = useStore((s) => catalogEntry(s.catalog, variant)?.chairForward ?? 0);
   // the focus camera parks where this character's head is — hide them while viewing
   const focusedHere = useStore(
     (s) => s.cameraMode.kind === 'focus' && s.cameraMode.target === monitorTarget,
@@ -160,7 +171,7 @@ export function Desk({ seat, variant, working, monitorTarget, name, fallbackTitl
           key={variant}
           variant={variant}
           working={working}
-          position={[0, PERSON_LIFT_Y + chairHeight, PERSON_OFFSET_Z]}
+          position={[0, PERSON_LIFT_Y + chairHeight, PERSON_OFFSET_Z + chairForward]}
           rotationY={0}
           name={name}
           accent={boss ? '#d2a8ff' : working ? '#7ee787' : '#8b949e'}
@@ -169,6 +180,15 @@ export function Desk({ seat, variant, working, monitorTarget, name, fallbackTitl
     </group>
   );
 }
+
+/**
+ * All props are primitives, so the default shallow compare is exact. This is
+ * what keeps an unrelated status push — which replaces the whole office object —
+ * from re-rendering every desk, monitor and character in the room. Desks still
+ * re-render on the things they subscribe to directly (layout, build mode,
+ * catalog, focus).
+ */
+export const Desk = memo(DeskImpl);
 
 useGLTF.preload('/models/furniture/table_medium.gltf');
 useGLTF.preload('/models/furniture/chair_A.gltf');

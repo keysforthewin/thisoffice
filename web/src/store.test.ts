@@ -6,7 +6,9 @@ import {
   resetStatusKeyForTest,
   resetTvStatsKeyForTest,
   resetWhiteboardKeyForTest,
+  parseCameraMode,
   shouldExitFocusOnMissedClick,
+  toPersistedCameraMode,
   useStore,
   type CameraMode,
   type CameraPose,
@@ -351,5 +353,113 @@ describe('build mode', () => {
     useStore.setState({ buildMode: true });
     useStore.getState().setCameraMode({ kind: 'movie' });
     expect(useStore.getState().buildMode).toBe(false);
+  });
+});
+
+describe('camera mode persistence', () => {
+  it('keeps free, movie and the pov index', () => {
+    expect(toPersistedCameraMode({ kind: 'free' })).toEqual({ kind: 'free' });
+    expect(toPersistedCameraMode({ kind: 'movie' })).toEqual({ kind: 'movie' });
+    expect(toPersistedCameraMode({ kind: 'pov', index: 4 })).toEqual({ kind: 'pov', index: 4 });
+  });
+
+  it('stores focus mode as the mode it would exit to, however deeply nested', () => {
+    const fromPov: CameraMode = { kind: 'focus', target: 'emp-1', from: { kind: 'pov', index: 2 } };
+    expect(toPersistedCameraMode(fromPov)).toEqual({ kind: 'pov', index: 2 });
+    // focus entered from focus (monitor -> monitor) still resolves to a durable mode
+    const nested: CameraMode = { kind: 'focus', target: 'emp-2', from: fromPov };
+    expect(toPersistedCameraMode(nested)).toEqual({ kind: 'pov', index: 2 });
+  });
+
+  it('round-trips through JSON', () => {
+    for (const m of [{ kind: 'free' }, { kind: 'movie' }, { kind: 'pov', index: 7 }] as CameraMode[]) {
+      expect(parseCameraMode(JSON.stringify(toPersistedCameraMode(m)))).toEqual(toPersistedCameraMode(m));
+    }
+  });
+
+  it('falls back to free for missing, corrupt or unrecognized entries', () => {
+    expect(parseCameraMode(null)).toEqual({ kind: 'free' });
+    expect(parseCameraMode('')).toEqual({ kind: 'free' });
+    expect(parseCameraMode('not json')).toEqual({ kind: 'free' });
+    expect(parseCameraMode('{"kind":"focus","target":"emp-1"}')).toEqual({ kind: 'free' });
+    expect(parseCameraMode('{"kind":"pov"}')).toEqual({ kind: 'free' });
+    expect(parseCameraMode('{"kind":"pov","index":-1}')).toEqual({ kind: 'free' });
+    expect(parseCameraMode('{"kind":"pov","index":1.5}')).toEqual({ kind: 'free' });
+  });
+
+  it('setCameraMode writes the durable mode to storage', () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    });
+    try {
+      useStore.getState().setCameraMode({ kind: 'pov', index: 3 });
+      expect(parseCameraMode(store.get('thisoffice.cameraMode') ?? null)).toEqual({ kind: 'pov', index: 3 });
+      // focus is stored as the mode it would exit to, not as focus
+      useStore.getState().setCameraMode({ kind: 'focus', target: 'boss', from: { kind: 'movie' } });
+      expect(parseCameraMode(store.get('thisoffice.cameraMode') ?? null)).toEqual({ kind: 'movie' });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('a throwing localStorage does not break mode changes', () => {
+    vi.stubGlobal('localStorage', {
+      getItem: () => { throw new Error('denied'); },
+      setItem: () => { throw new Error('denied'); },
+    });
+    try {
+      expect(() => useStore.getState().setCameraMode({ kind: 'movie' })).not.toThrow();
+      expect(useStore.getState().cameraMode).toEqual({ kind: 'movie' });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('layout reference stability', () => {
+  beforeEach(() => {
+    useStore.setState({ office: null });
+    resetWhiteboardKeyForTest();
+    resetInboxKeyForTest();
+    resetStatusKeyForTest();
+  });
+
+  const layout = () => ({ seats: { 1: { x: 1, z: 2, rotY: 0 } }, furniture: {}, wallItems: {} });
+
+  it('carries the previous layout reference forward when the layout is unchanged', () => {
+    const apply = useStore.getState().applyServerMsg;
+    apply({ type: 'state', state: makeOffice({ layout: layout() } as never) });
+    const first = useStore.getState().office!.layout;
+
+    // a later broadcast (status push, hire, monitor title) re-parses everything
+    apply({ type: 'state', state: makeOffice({ layout: layout(), bossStatus: 'working' } as never) });
+    const second = useStore.getState().office!.layout;
+
+    expect(second).toBe(first); // identity preserved → Desks don't re-render
+    expect(useStore.getState().office!.bossStatus).toBe('working'); // rest still updates
+  });
+
+  it('takes the new layout when it actually changed', () => {
+    const apply = useStore.getState().applyServerMsg;
+    apply({ type: 'state', state: makeOffice({ layout: layout() } as never) });
+    const first = useStore.getState().office!.layout;
+
+    const moved = layout();
+    moved.seats[1].x = 9;
+    apply({ type: 'state', state: makeOffice({ layout: moved } as never) });
+    const second = useStore.getState().office!.layout;
+
+    expect(second).not.toBe(first);
+    expect((second as never as ReturnType<typeof layout>).seats[1].x).toBe(9);
+  });
+
+  it('handles a missing layout on either side', () => {
+    const apply = useStore.getState().applyServerMsg;
+    apply({ type: 'state', state: makeOffice() });
+    expect(useStore.getState().office!.layout).toBeUndefined();
+    apply({ type: 'state', state: makeOffice({ layout: layout() } as never) });
+    expect(useStore.getState().office!.layout).toBeDefined();
   });
 });

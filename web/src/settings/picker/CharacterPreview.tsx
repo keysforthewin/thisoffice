@@ -69,15 +69,16 @@ export function CharacterPreview({ entry }: { entry?: CharacterEntry }) {
 }
 
 /** The character sitting at a real desk+chair — same offsets as Desk.tsx — so
- *  Size / Seat offset / Chair height are judged against desk-top and seat. */
+ *  Size / Seat offset / Chair height / Chair forward offset are judged against desk-top and seat. */
 function SeatedPreview({ entry }: { entry: CharacterEntry }) {
   const live = useStore((s) => catalogEntry(s.catalog, entry.id));
   const chairHeight = live?.chairHeight ?? 0;
+  const chairForward = live?.chairForward ?? 0;
   return (
     <group rotation={[0, 0.55, 0]}>
       <FurnitureModel url="/models/furniture/table_medium.gltf" />
       <FurnitureModel url="/models/furniture/chair_A.gltf" position={[0, chairHeight, CHAIR_OFFSET_Z]} />
-      <SeatedModel entry={entry} position={[0, PERSON_LIFT_Y + chairHeight, PERSON_OFFSET_Z]} />
+      <SeatedModel entry={entry} position={[0, PERSON_LIFT_Y + chairHeight, PERSON_OFFSET_Z + chairForward]} />
     </group>
   );
 }
@@ -154,7 +155,7 @@ function PreviewModel({ entry }: { entry: CharacterEntry }) {
 }
 
 interface AdjustSpec {
-  field: 'scale' | 'seatOffset' | 'chairHeight';
+  field: 'scale' | 'seatOffset' | 'chairHeight' | 'chairForward';
   label: string;
   min: number; max: number; step: number;
   fallback: number;
@@ -171,9 +172,11 @@ const ADJUSTS: AdjustSpec[] = [
     toSlider: (v) => v, fromSlider: (v) => v, format: (v) => v.toFixed(2) },
   { field: 'chairHeight', label: 'Chair height', min: -0.4, max: 0.4, step: 0.01, fallback: 0,
     toSlider: (v) => v, fromSlider: (v) => v, format: (v) => v.toFixed(2) },
+  { field: 'chairForward', label: 'Chair forward offset', min: -0.5, max: 0.5, step: 0.01, fallback: 0,
+    toSlider: (v) => v, fromSlider: (v) => v, format: (v) => v.toFixed(2) },
 ];
 
-/** Generalized slider for scale / seatOffset / chairHeight: same debounce/flush/PATCH pattern. */
+/** Generalized slider for scale / seatOffset / chairHeight / chairForward: same debounce/flush/PATCH pattern. */
 function AdjustSlider({ id, spec }: { id: string; spec: AdjustSpec }) {
   const value = useStore((s) => catalogEntry(s.catalog, id)?.[spec.field] ?? spec.fallback);
   const patchCharacter = useStore((s) => s.patchCharacter);

@@ -4,16 +4,18 @@ import { roomDims, whiteboardTransform, statusBoardTransform } from './layout.ts
 import { resolveSeat, resolveWallOffset } from './buildLayout.ts';
 import { TV_SCREEN_W, TV_SCREEN_H } from './WallTV.tsx';
 
-export const ACTIVE_WINDOW_MS = 10_000;
+export const ACTIVE_WINDOW_MS = 22_000;
 
 /**
  * Boss inbox and whiteboard changes are single events (not streams), so their
  * activity window differs from streaming employee monitors: long enough to
- * survive the min shot hold + cut cadence (14s), and the status board stays a
- * cut target for minutes after an update.
+ * survive the min shot hold + cut cadence (MIN_HOLD_S + CUT_MAX_S = 20s, so 24s
+ * leaves margin), and the status board stays a cut target for minutes after an
+ * update. These track the MovieCamera cadence — if the cut timing changes, these
+ * have to grow with it or a subject can go stale before it is ever cut to.
  */
-const ACTIVITY_TTL_MS: Record<string, number> = { boss: 14_000, whiteboard: 14_000, statusboard: 150_000, tv: 150_000 };
-const WALL_BOARD_TTL_MS = 14_000;
+const ACTIVITY_TTL_MS: Record<string, number> = { boss: 24_000, whiteboard: 24_000, statusboard: 150_000, tv: 150_000 };
+const WALL_BOARD_TTL_MS = 24_000;
 
 export function activityTtl(key: string): number {
   return ACTIVITY_TTL_MS[key] ?? (isWallBoard(key) ? WALL_BOARD_TTL_MS : ACTIVE_WINDOW_MS);

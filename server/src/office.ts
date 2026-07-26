@@ -107,23 +107,49 @@ export interface ScreenStream {
 
 const DEFAULT_EMPLOYEE_NAMES = ['Pat Chindexer', 'Sam Greppleton', 'Dee Bugger'];
 
-/** Names for manually hired employees, same pun energy as the defaults */
+/**
+ * Names for every hire — the settings-panel button and the auto-hire that fires
+ * when a new tool call finds no idle desk.
+ *
+ * Sized past `maxEmployees` (12) with room to spare so a full office never has
+ * to repeat, and so the "unused names" pool is still large when most of the
+ * roster is occupied. Auto-hire used to ask Haiku to invent a name per hire;
+ * this list replaced that, so it also has to carry the whole range of pun
+ * energy on its own.
+ */
 const HIRE_NAMES = [
   'Anna Lyzer',
+  'Barb Wire',
+  'Bea Yaml',
   'Cash Money',
+  'Cliff Hanger',
+  'Dot Enviro',
+  'Ed Gecase',
+  'Faye Talerror',
   'Gil Blameless',
   'Hugh Mergeconflict',
+  'Ida Klarative',
+  'Jay Sonparse',
   'Kay Oss',
   'Lin Terror',
+  'Manny Festfile',
   'Mona Torlogs',
   'Nell Pointer',
+  'Otto Complete',
+  'Paige Fault',
   'Perl Scriptor',
   'Polly Fill',
+  'Quinn Tessence',
   'Rachel Basecase',
   'Rex Ecutable',
+  'Ruby Onrails',
   'Sara Bellum',
   'Stan Dupmeeting',
   'Tab Completion',
+  'Terra Form',
+  'Vi Malcolm',
+  'Webb Hooke',
+  'Yui Component',
 ];
 
 const CATALOG_FILE = path.resolve(__dirname, '../../web/public/models/characters/catalog.json');
@@ -556,14 +582,24 @@ export class Office {
     return this.state.employees.find((e) => e.id === id);
   }
 
+  /**
+   * A hire name nobody in the office is using, or a random one if all 32 are
+   * somehow taken. Synchronous by design — auto-hire previously shelled out to
+   * the `claude` CLI for a generated name, which meant the employee sat at their
+   * desk labelled "New Hire" until the call returned.
+   */
+  pickHireName(): string {
+    const usedNames = new Set(this.state.employees.map((e) => e.name));
+    const fresh = HIRE_NAMES.filter((n) => !usedNames.has(n));
+    const names = fresh.length ? fresh : HIRE_NAMES;
+    return names[Math.floor(Math.random() * names.length)];
+  }
+
   /** Settings-panel hire: remembered identity if the seat has one, else random; editable afterwards. */
   hireManual(): Employee {
     const employee = this.hire();
     if (employee.name === 'New Hire') {
-      const usedNames = new Set(this.state.employees.map((e) => e.name));
-      const fresh = HIRE_NAMES.filter((n) => !usedNames.has(n));
-      const names = fresh.length ? fresh : HIRE_NAMES;
-      employee.name = names[Math.floor(Math.random() * names.length)];
+      employee.name = this.pickHireName();
       const usedVariants = new Set([this.state.boss.variant, ...this.state.employees.map((e) => e.variant)]);
       const unusedVariants = this.variantPool.filter((v) => !usedVariants.has(v));
       const variants = unusedVariants.length ? unusedVariants : this.variantPool;

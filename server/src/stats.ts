@@ -274,7 +274,9 @@ export class StatsAggregator {
     if (uuid && !this.recentPromptIds.addIfNew(uuid)) return; // replayed line
     this.stats.prompts++;
     this.dayBucket(todayKey()).prompts++;
-    const hour = String(new Date().getHours());
+    // UTC, like todayKey() — the server may run in a different zone than the viewer
+    // (it does in Docker: the container is UTC), so the client shifts to browser-local.
+    const hour = String(new Date().getUTCHours());
     this.stats.hourCounts[hour] = (this.stats.hourCounts[hour] ?? 0) + 1;
     this.pruneByDay();
     this.markDirty();

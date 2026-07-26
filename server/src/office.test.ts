@@ -755,7 +755,7 @@ describe('layout persistence', () => {
     office.setLayout({
       seats: { 1: { x: Infinity, z: 0, rotY: 0 }, 2: { x: 1, z: 1, rotY: 1 } },
       furniture: { couch: { x: 0 } as any, shelf: { x: 1, z: 2, rotY: 3 } },
-      wallItems: { wallArt: NaN, pictureFrame: 1.5 },
+      wallItems: { wallArt: NaN, tv: 1.5 },
     });
     const layout = office.getState().layout!;
     expect(layout.seats![1]).toBeUndefined();
@@ -763,7 +763,7 @@ describe('layout persistence', () => {
     expect(layout.furniture!.couch).toBeUndefined();
     expect(layout.furniture!.shelf).toEqual({ x: 1, z: 2, rotY: 3 });
     expect(layout.wallItems!.wallArt).toBeUndefined();
-    expect(layout.wallItems!.pictureFrame).toBe(1.5);
+    expect(layout.wallItems!.tv).toBe(1.5);
   });
 
   it('caps each map at 200 keys', () => {
@@ -832,5 +832,39 @@ describe('officeName', () => {
     fs.writeFileSync(file, JSON.stringify(raw));
     const reloaded = new Office(() => ['Knight'], file);
     expect(reloaded.getState().officeName).toBe('This Office');
+  });
+});
+
+describe('pickHireName', () => {
+  it('offers at least 32 distinct names, comfortably past maxEmployees', () => {
+    const o = makeOffice();
+    const seen = new Set<string>();
+    // no employees on staff → every draw comes from the full pool
+    for (let i = 0; i < 2000; i++) seen.add(o.pickHireName());
+    expect(seen.size).toBeGreaterThanOrEqual(32);
+  });
+
+  it('never returns a name already on the roster while any are free', () => {
+    const o = makeOffice();
+    const taken = new Set<string>();
+    // fill most of the office, checking each new name is unused at the time
+    for (let i = 0; i < 12; i++) {
+      const name = o.pickHireName();
+      expect(taken.has(name)).toBe(false);
+      const emp = o.hireManual();
+      o.rename(emp.id, name);
+      taken.add(name);
+    }
+  });
+
+  // The pool (32) is larger than maxEmployees, so hiring can never exhaust it;
+  // this just pins that a fully-staffed office still gets a real name back.
+  it('still returns a usable name with the office fully staffed', () => {
+    const o = makeOffice();
+    for (let i = 0; i < 40; i++) {
+      const emp = o.hireManual();
+      o.rename(emp.id, `Dup ${i}`);
+    }
+    expect(o.pickHireName().length).toBeGreaterThan(0);
   });
 });

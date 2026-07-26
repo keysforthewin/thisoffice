@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-07-24T20:42:38.850Z",
+  "generatedAt": "2026-07-26T03:49:34.033Z",
   "clipAliases": {
     "Sit_Chair_Idle": [
       "Sit_Chair_Idle"
@@ -166,6 +166,18 @@
         "sword"
       ],
       "rig": "embedded"
+    },
+    {
+      "id": "CatPerson",
+      "displayName": "Kat Person",
+      "pack": "Special",
+      "tags": [
+        "cat",
+        "feline",
+        "mascot",
+        "special"
+      ],
+      "rig": "shared"
     }
   ]
 }

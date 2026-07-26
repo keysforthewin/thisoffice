@@ -1,7 +1,9 @@
 import { useMemo } from 'react';
+import * as THREE from 'three';
 import { useTexture } from '@react-three/drei';
 import { useStore } from '../store.ts';
 import { Desk, FurnitureModel } from './Desk.tsx';
+import { Person } from './Person.tsx';
 import { Whiteboard, StatusBoard } from './Whiteboard.tsx';
 import { WallTV } from './WallTV.tsx';
 import { roomDims, whiteboardTransform, statusBoardTransform, BACK_Z } from './layout.ts';
@@ -66,31 +68,53 @@ function WallWithWindow({ w, h, ox, oy, ow, oh }: { w: number; h: number; ox: nu
   );
 }
 
-/** Hanging ceiling fixture: rod + housing + emissive panel + point light. */
-function CeilingLight({ position, castShadow = false }: { position: [number, number, number]; castShadow?: boolean }) {
+// One set of buffers and materials for all four identical fixtures.
+const ROD_GEOMETRY = new THREE.CylinderGeometry(0.02, 0.02, 1.0);
+const ROD_MATERIAL = new THREE.MeshStandardMaterial({ color: '#26242c' });
+const HOUSING_GEOMETRY = new THREE.BoxGeometry(1.7, 0.1, 0.45);
+const HOUSING_MATERIAL = new THREE.MeshStandardMaterial({ color: '#2b2b30', metalness: 0.4, roughness: 0.5 });
+const PANEL_GEOMETRY = new THREE.PlaneGeometry(1.6, 0.38);
+const PANEL_MATERIAL = new THREE.MeshBasicMaterial({ color: '#fff7e6' });
+
+/** Lit fixtures carry more intensity now that only two of the four emit. */
+const CEILING_INTENSITY = 50;
+
+/**
+ * Hanging ceiling fixture: rod + housing + emissive panel, and optionally a
+ * point light.
+ *
+ * `light` is separate from the fixture on purpose. Every point light is
+ * evaluated per fragment by every StandardMaterial in the room, so four of them
+ * is a real cost — but they are also visible objects, and deleting two would
+ * leave two bare patches of ceiling. Keeping all four fixtures and lighting two
+ * of them diagonally preserves the look at half the shading cost; the emissive
+ * panel means an unlit fixture still reads as "on".
+ */
+function CeilingLight({
+  position,
+  castShadow = false,
+  light = false,
+}: {
+  position: [number, number, number];
+  castShadow?: boolean;
+  light?: boolean;
+}) {
   return (
     <group position={position}>
-      <mesh position={[0, -0.5, 0]}>
-        <cylinderGeometry args={[0.02, 0.02, 1.0]} />
-        <meshStandardMaterial color="#26242c" />
-      </mesh>
-      <mesh position={[0, -1.05, 0]} castShadow={false}>
-        <boxGeometry args={[1.7, 0.1, 0.45]} />
-        <meshStandardMaterial color="#2b2b30" metalness={0.4} roughness={0.5} />
-      </mesh>
-      <mesh position={[0, -1.11, 0]} rotation={[Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[1.6, 0.38]} />
-        <meshBasicMaterial color="#fff7e6" />
-      </mesh>
-      <pointLight
-        color="#f4f1e8"
-        intensity={32}
-        distance={20}
-        decay={2}
-        position={[0, -1.3, 0]}
-        castShadow={castShadow}
-        {...(castShadow ? { 'shadow-mapSize': [1024, 1024] as [number, number], 'shadow-bias': -0.002 } : {})}
-      />
+      <mesh position={[0, -0.5, 0]} geometry={ROD_GEOMETRY} material={ROD_MATERIAL} />
+      <mesh position={[0, -1.05, 0]} castShadow={false} geometry={HOUSING_GEOMETRY} material={HOUSING_MATERIAL} />
+      <mesh position={[0, -1.11, 0]} rotation={[Math.PI / 2, 0, 0]} geometry={PANEL_GEOMETRY} material={PANEL_MATERIAL} />
+      {light && (
+        <pointLight
+          color="#f4f1e8"
+          intensity={CEILING_INTENSITY}
+          distance={20}
+          decay={2}
+          position={[0, -1.3, 0]}
+          castShadow={castShadow}
+          {...(castShadow ? { 'shadow-mapSize': [1024, 1024] as [number, number], 'shadow-bias': -0.002 } : {})}
+        />
+      )}
     </group>
   );
 }
@@ -107,11 +131,12 @@ export function Office() {
   const layout = office?.layout;
   const buildMode = useStore((s) => s.buildMode);
   const buildHold = useStore((s) => s.buildHold);
-  const furniture = resolveFurniture(layout, maxSeat);
+  // layout keeps its reference across unrelated state messages (see stableLayout
+  // in store.ts), so this recomputes only when the layout or desk count changes
+  const furniture = useMemo(() => resolveFurniture(layout, maxSeat), [layout, maxSeat]);
   const backOx = useWallOffset('windowBack', maxSeat);
   const leftOx = useWallOffset('windowLeft', maxSeat);
   const artOx = useWallOffset('wallArt', maxSeat);
-  const frameOx = useWallOffset('pictureFrame', maxSeat);
   const tvOx = useWallOffset('tv', maxSeat);
   const wallItem = (id: string) => WALL_ITEMS.find((w) => w.id === id)!;
 
@@ -164,18 +189,29 @@ export function Office() {
         <planeGeometry args={[width, depth]} />
         <meshBasicMaterial color="#2a2731" />
       </mesh>
-      {/* hanging fixtures: one shadow-caster, three fill */}
-      <CeilingLight position={[-width / 4, height, centerZ - depth / 4]} castShadow />
+      {/* four fixtures, two of them lit on the diagonal: same ceiling, half the
+          per-fragment light loop (see the CeilingLight comment) */}
+      <CeilingLight position={[-width / 4, height, centerZ - depth / 4]} light castShadow />
       <CeilingLight position={[width / 4, height, centerZ - depth / 4]} />
       <CeilingLight position={[-width / 4, height, centerZ + depth / 4]} />
-      <CeilingLight position={[width / 4, height, centerZ + depth / 4]} />
+      <CeilingLight position={[width / 4, height, centerZ + depth / 4]} light />
 
       {/* decor — same KayKit furniture set, positions resolved through the build-mode layout */}
       {furniture.map((f) => {
         const pose = displayPose(buildHold, 'furniture', f.id, f.pose);
         return (
           <group key={f.id} position={[pose.x, f.y, pose.z]} rotation={[0, pose.rotY, 0]}>
-            <FurnitureModel url={f.url} scale={f.scale} />
+            {f.character ? (
+              <Person
+                variant={f.character.variant}
+                clip={f.character.clip}
+                name={f.character.name}
+                working={false}
+                accent="#f0b3d0"
+              />
+            ) : (
+              <FurnitureModel url={f.url} scale={f.scale} />
+            )}
             {f.light && (
               <pointLight
                 color={f.light.color}
@@ -192,11 +228,9 @@ export function Office() {
         );
       })}
       <WallArt url="/decor/wallart_1.jpg" position={[artOx, 2.15, backZ + 0.05]} />
-      <FurnitureModel url="/models/furniture/pictureframe_medium.gltf" position={[frameOx, 2.25, backZ + 0.04]} />
       {buildMode && (
         <group position={[0, 0, backZ]}>
           <WallHandle id="wallArt" wall="back" ox={artOx} oy={2.15} w={wallItem('wallArt').halfW * 2} h={1.7} />
-          <WallHandle id="pictureFrame" wall="back" ox={frameOx} oy={2.25} w={wallItem('pictureFrame').halfW * 2} h={1.0} />
         </group>
       )}
 
@@ -219,6 +253,7 @@ export function Office() {
           name={office.boss.name}
           boss
           waiting={office.waitingForInput}
+          maxSeat={maxSeat}
         />
       )}
       {/* employees */}
@@ -231,6 +266,7 @@ export function Office() {
           monitorTarget={e.id}
           name={e.name}
           fallbackTitle={`${e.name} · idle`}
+          maxSeat={maxSeat}
         />
       ))}
     </group>

@@ -19,6 +19,7 @@ const SCALE_MIN = 0.1;
 const SCALE_MAX = 10;
 export const SEAT_OFFSET_RANGE = 0.5;
 export const CHAIR_HEIGHT_RANGE = 0.4;
+export const CHAIR_FORWARD_RANGE = 0.5;
 const GLB_MAGIC = Buffer.from('glTF', 'ascii');
 /** Binary FBX files always start with this signature */
 const FBX_MAGIC = Buffer.from('Kaydara FBX Binary', 'ascii');
@@ -37,6 +38,7 @@ export interface CharacterAdjust {
   scale?: number;
   seatOffset?: number;
   chairHeight?: number;
+  chairForward?: number;
 }
 
 interface ImportedMeta {
@@ -46,6 +48,7 @@ interface ImportedMeta {
   scale?: number;
   seatOffset?: number;
   chairHeight?: number;
+  chairForward?: number;
 }
 
 export const sanitizeId = sanitizeCharacterId;
@@ -140,6 +143,7 @@ export class CharacterStore {
       scale: m.scale,
       seatOffset: m.seatOffset,
       chairHeight: m.chairHeight,
+      chairForward: m.chairForward,
     }));
     return { ...builtin, characters: [...builtin.characters, ...importedEntries] };
   }
@@ -162,6 +166,7 @@ export class CharacterStore {
     if (adj.scale !== undefined) meta.scale = clampScale(adj.scale);
     if (adj.seatOffset !== undefined) meta.seatOffset = clampOffset(adj.seatOffset, SEAT_OFFSET_RANGE);
     if (adj.chairHeight !== undefined) meta.chairHeight = clampOffset(adj.chairHeight, CHAIR_HEIGHT_RANGE);
+    if (adj.chairForward !== undefined) meta.chairForward = clampOffset(adj.chairForward, CHAIR_FORWARD_RANGE);
     this.saveMeta();
     return true;
   }

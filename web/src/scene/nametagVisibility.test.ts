@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { NO_RAYCAST, findHeadBone, isTagFullyVisible, tagSamplePoints } from './nametagVisibility.ts';
+import {
+  NO_RAYCAST,
+  crownOffset,
+  findHeadBone,
+  isTagFullyVisible,
+  resetOccluderCache,
+  tagSamplePoints,
+} from './nametagVisibility.ts';
 
 // Camera at origin looking down -z (identity quaternion): right=+x, up=+y.
 const CAM_POS = new THREE.Vector3(0, 0, 0);
@@ -54,6 +61,58 @@ describe('tagSamplePoints', () => {
     const ys = pts.map((p) => p.y);
     expect(Math.max(...ys)).toBeCloseTo(TAG_W / 2);
     expect(Math.max(...xs)).toBeCloseTo(TAG_H / 2);
+  });
+});
+
+describe('tagSamplePoints scratch reuse', () => {
+  it('returns the same array and vectors on every call (documented scratch contract)', () => {
+    const a = tagSamplePoints(TAG_CENTER, CAM_QUAT, TAG_W, TAG_H);
+    const firstA = a[0];
+    const b = tagSamplePoints(new THREE.Vector3(9, 9, 9), CAM_QUAT, TAG_W, TAG_H);
+    expect(b).toBe(a);
+    expect(b[0]).toBe(firstA);
+    // and it really did recompute rather than hand back stale values
+    expect(b[0].x).toBeCloseTo(9);
+  });
+});
+
+describe('occluder cache', () => {
+  it('reuses the collected occluders inside the refresh window', () => {
+    resetOccluderCache();
+    const scene = sceneWith(planeAt(-8));
+    expect(isTagFullyVisible(scene, CAM_POS, CAM_QUAT, TAG_CENTER, TAG_W, TAG_H, undefined, 1000)).toBe(true);
+
+    // a wall appears, but within the window the cached list has not seen it
+    scene.add(planeAt(-3));
+    scene.updateMatrixWorld(true);
+    expect(isTagFullyVisible(scene, CAM_POS, CAM_QUAT, TAG_CENTER, TAG_W, TAG_H, undefined, 1100)).toBe(true);
+  });
+
+  it('picks up new geometry after the refresh window elapses', () => {
+    resetOccluderCache();
+    const scene = sceneWith(planeAt(-8));
+    expect(isTagFullyVisible(scene, CAM_POS, CAM_QUAT, TAG_CENTER, TAG_W, TAG_H, undefined, 1000)).toBe(true);
+
+    scene.add(planeAt(-3));
+    scene.updateMatrixWorld(true);
+    expect(isTagFullyVisible(scene, CAM_POS, CAM_QUAT, TAG_CENTER, TAG_W, TAG_H, undefined, 2000)).toBe(false);
+  });
+
+  it('rebuilds when the scene identity changes even inside the window', () => {
+    resetOccluderCache();
+    const a = sceneWith(planeAt(-8));
+    expect(isTagFullyVisible(a, CAM_POS, CAM_QUAT, TAG_CENTER, TAG_W, TAG_H, undefined, 1000)).toBe(true);
+    const b = sceneWith(planeAt(-3));
+    expect(isTagFullyVisible(b, CAM_POS, CAM_QUAT, TAG_CENTER, TAG_W, TAG_H, undefined, 1010)).toBe(false);
+  });
+
+  it('omitting `now` forces a fresh walk (the test/default path)', () => {
+    resetOccluderCache();
+    const scene = sceneWith(planeAt(-8));
+    expect(isTagFullyVisible(scene, CAM_POS, CAM_QUAT, TAG_CENTER, TAG_W, TAG_H)).toBe(true);
+    scene.add(planeAt(-3));
+    scene.updateMatrixWorld(true);
+    expect(isTagFullyVisible(scene, CAM_POS, CAM_QUAT, TAG_CENTER, TAG_W, TAG_H)).toBe(false);
   });
 });
 
@@ -138,5 +197,95 @@ describe('findHeadBone', () => {
     mesh.name = 'head';
     root.add(mesh);
     expect(findHeadBone(root)).toBeNull();
+  });
+});
+
+describe('crownOffset', () => {
+  /** SkinnedMesh with a `head` bone bound at `boneY` and geometry topping out at `topY`. */
+  function makeCharacter(boneY: number, topY: number) {
+    const root = new THREE.Object3D();
+    const hips = new THREE.Bone();
+    hips.name = 'hips';
+    const head = new THREE.Bone();
+    head.name = 'head';
+    head.position.y = boneY;
+    hips.add(head);
+    root.add(hips);
+    root.updateMatrixWorld(true);
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0, topY, 0], 3));
+    const mesh = new THREE.SkinnedMesh(geometry, new THREE.MeshBasicMaterial());
+    mesh.bind(new THREE.Skeleton([hips, head]));
+    root.add(mesh);
+    root.updateMatrixWorld(true);
+    return { root, head };
+  }
+
+  it('measures skull height above the head bone', () => {
+    // Knight: head bone binds at 1.241, skinned head geometry tops out at 2.31
+    const { root, head } = makeCharacter(1.241, 2.31);
+    expect(crownOffset(root, head)).toBeCloseTo(2.31 - 1.241, 5);
+  });
+
+  it('reports a much larger offset for a chibi head than the old 0.3 constant', () => {
+    const { root, head } = makeCharacter(1.241, 2.464); // the cat person
+    expect(crownOffset(root, head)!).toBeGreaterThan(0.3);
+  });
+
+  it('ignores unskinned meshes parented to bones (KayKit weapons are bone-local)', () => {
+    const { root, head } = makeCharacter(1.241, 2.31);
+    // a 2H sword hanging off a hand bone: local bounds say 1.96, model space says otherwise
+    const sword = new THREE.Mesh(new THREE.BoxGeometry(0.1, 3.92, 0.1), new THREE.MeshBasicMaterial());
+    sword.name = '2H_Sword';
+    head.add(sword);
+    root.updateMatrixWorld(true);
+    expect(crownOffset(root, head)).toBeCloseTo(2.31 - 1.241, 5);
+  });
+
+  it('returns null without a head bone or without skinned geometry', () => {
+    const { root } = makeCharacter(1.241, 2.31);
+    expect(crownOffset(root, null)).toBeNull();
+    const bare = new THREE.Object3D();
+    const loose = new THREE.Bone();
+    loose.name = 'head';
+    bare.add(loose);
+    bare.updateMatrixWorld(true);
+    expect(crownOffset(bare, loose)).toBeNull();
+  });
+
+  it('converts centimetre skin space to root units (Mixamo armature scale)', () => {
+    // Mixamo: geometry in cm under an armature node scaled back to metres.
+    const root = new THREE.Object3D();
+    const armature = new THREE.Object3D();
+    armature.scale.setScalar(0.01);
+    root.add(armature);
+    const hips = new THREE.Bone();
+    hips.name = 'hips';
+    const head = new THREE.Bone();
+    head.name = 'mixamorigHead';
+    head.position.y = 150;
+    hips.add(head);
+    armature.add(hips);
+    root.updateMatrixWorld(true);
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0, 180, 0], 3));
+    const mesh = new THREE.SkinnedMesh(geometry, new THREE.MeshBasicMaterial());
+    armature.add(mesh);
+    // GLTFLoader binds with the file's inverseBindMatrices and an identity bind
+    // matrix, so the inverses stay in the skin's own (centimetre) space rather
+    // than picking up the armature scale from bone.matrixWorld.
+    const inverses = [new THREE.Matrix4(), new THREE.Matrix4().makeTranslation(0, -150, 0)];
+    mesh.bind(new THREE.Skeleton([hips, head], inverses), new THREE.Matrix4());
+    root.updateMatrixWorld(true);
+
+    // 30 cm of skull, not 30 metres
+    expect(crownOffset(root, head)).toBeCloseTo(0.3, 5);
+  });
+
+  it('never returns a negative offset', () => {
+    const { root, head } = makeCharacter(2.0, 1.0); // bone above the silhouette top
+    expect(crownOffset(root, head)).toBe(0);
   });
 });

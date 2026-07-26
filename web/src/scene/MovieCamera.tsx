@@ -4,9 +4,15 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { useStore } from '../store.ts';
 import { activeSetKey, ARCHETYPES, pickShot, type PickedShot } from './movieShots.ts';
 
-const MIN_HOLD_S = 2.5;
-const CUT_MIN_S = 3;
-const CUT_MAX_S = 10;
+/**
+ * This is a visualizer, not a trailer — shots dwell so you can actually read a
+ * monitor or the status board before it cuts away. MIN_HOLD_S is the floor an
+ * activity-driven recut cannot preempt; in a busy office that floor, not the
+ * duration, is what sets the cut rate, so it has to move with the rest.
+ */
+const MIN_HOLD_S = 5;
+const CUT_MIN_S = 5;
+const CUT_MAX_S = 15;
 /** handheld position noise amplitude (world units; world scale is 1.35× human) */
 const SHAKE_AMP = 0.015;
 /** look-target drift amplitude */

@@ -51,11 +51,19 @@ function sum(record: Record<string, number>): number {
   return Object.values(record).reduce((a, b) => a + b, 0);
 }
 
+/** hourCounts is bucketed in UTC (see shared/types.ts); shift into the viewer's zone,
+ *  using today's offset so DST is applied as the viewer currently experiences it. */
+function toLocalHour(utcHour: number): number {
+  const d = new Date();
+  d.setUTCHours(utcHour, 0, 0, 0);
+  return d.getHours();
+}
+
 function topHour(hourCounts: Record<string, number>): string | undefined {
   const entries = Object.entries(hourCounts);
   if (entries.length === 0) return undefined;
   const [hourStr] = entries.reduce((best, cur) => (cur[1] > best[1] ? cur : best));
-  const hour = Number(hourStr);
+  const hour = toLocalHour(Number(hourStr));
   const period = hour < 12 ? 'AM' : 'PM';
   const twelve = hour % 12 === 0 ? 12 : hour % 12;
   return `${twelve} ${period} is peak hour`;

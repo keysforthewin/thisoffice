@@ -30,6 +30,70 @@ export type CameraMode =
    */
   | { kind: 'focus'; target: string; from: CameraMode; returnPose?: CameraPose; relock?: boolean };
 
+const CAMERA_MODE_KEY = 'thisoffice.cameraMode';
+
+/**
+ * The slice of CameraMode worth surviving a reload. Focus mode is deliberately
+ * excluded: it points at one monitor, and that employee may have been evicted
+ * by the time the page comes back — it persists as the mode it would exit to.
+ */
+export type PersistedCameraMode = { kind: 'free' } | { kind: 'pov'; index: number } | { kind: 'movie' };
+
+export function toPersistedCameraMode(m: CameraMode): PersistedCameraMode {
+  if (m.kind === 'focus') return toPersistedCameraMode(m.from);
+  if (m.kind === 'pov') return { kind: 'pov', index: m.index };
+  return { kind: m.kind };
+}
+
+/** Tolerant of absent/corrupt/hand-edited entries — anything unrecognized falls back to free. */
+export function parseCameraMode(raw: string | null): PersistedCameraMode {
+  if (!raw) return { kind: 'free' };
+  try {
+    const v = JSON.parse(raw);
+    if (v?.kind === 'movie') return { kind: 'movie' };
+    // a stale index (roster shrank while away) is safe: CameraRig clamps to the list
+    if (v?.kind === 'pov' && Number.isInteger(v.index) && v.index >= 0) return { kind: 'pov', index: v.index };
+  } catch {
+    // fall through
+  }
+  return { kind: 'free' };
+}
+
+/** localStorage throws in some privacy modes, so both sides are best-effort. */
+function loadCameraMode(): CameraMode {
+  try {
+    return parseCameraMode(localStorage.getItem(CAMERA_MODE_KEY));
+  } catch {
+    return { kind: 'free' };
+  }
+}
+
+function saveCameraMode(m: CameraMode): void {
+  try {
+    localStorage.setItem(CAMERA_MODE_KEY, JSON.stringify(toPersistedCameraMode(m)));
+  } catch {
+    // ignore
+  }
+}
+
+const PERF_OVERLAY_KEY = 'thisoffice.perfOverlay';
+
+function loadPerfOverlay(): boolean {
+  try {
+    return localStorage.getItem(PERF_OVERLAY_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function savePerfOverlay(v: boolean): void {
+  try {
+    localStorage.setItem(PERF_OVERLAY_KEY, v ? '1' : '0');
+  } catch {
+    // ignore
+  }
+}
+
 /**
  * Should a missed click (R3F onPointerMissed) exit focus mode? Only when the
  * gesture started AND ended parked in the very same focus mode. A tap that
@@ -93,6 +157,8 @@ interface AppStore {
   /** B toggles: cursor visible, camera frozen, objects draggable */
   buildMode: boolean;
   buildHold: BuildHold | null;
+  /** P toggles the dev fps/draw-call readout */
+  perfOverlay: boolean;
   applyServerMsg: (msg: ServerMsg) => void;
   setConnected: (v: boolean) => void;
   setCameraMode: (m: CameraMode) => void;
@@ -102,9 +168,10 @@ interface AppStore {
   setSettingsOpen: (v: boolean) => void;
   setCatalog: (c: CharacterCatalog) => void;
   /** optimistic local patch while an adjustment slider drags; server broadcast confirms it */
-  patchCharacter: (id: string, patch: { scale?: number; seatOffset?: number; chairHeight?: number }) => void;
+  patchCharacter: (id: string, patch: { scale?: number; seatOffset?: number; chairHeight?: number; chairForward?: number }) => void;
   setBuildMode: (v: boolean) => void;
   setBuildHold: (h: BuildHold | null) => void;
+  setPerfOverlay: (v: boolean) => void;
   /** optimistic local merge on drop; the server broadcast confirms it */
   patchLayout: (patch: OfficeLayout) => void;
 }
@@ -116,6 +183,27 @@ let inboxKey: string | null = null;
 let statusKey: string | null = null;
 /** last-seen stats snapshot key; guards against re-stamping the TV on the connect replay */
 let tvStatsKey: string | null = null;
+
+/**
+ * Carry the previous `layout` reference forward when the new one is identical.
+ *
+ * ws.ts `JSON.parse`s every state message, so every nested object arrives as a
+ * fresh reference even when nothing about it changed — and the office broadcasts
+ * full state on every status push, hire, todo update and monitor title change.
+ * Every Desk and wall item subscribes to `office.layout`, so without this they
+ * all re-render on traffic that has nothing to do with them, and `React.memo`
+ * on Desk would be defeated before it ever ran.
+ *
+ * One serialization per message (of a small object that changes only in build
+ * mode) buys reference stability for a dozen subscribers.
+ */
+function stableLayout(prev: OfficeState | null, next: OfficeState): OfficeState {
+  const prevLayout = prev?.layout;
+  if (!prevLayout || !next.layout) return next;
+  if (prevLayout === next.layout) return next;
+  if (JSON.stringify(prevLayout) !== JSON.stringify(next.layout)) return next;
+  return { ...next, layout: prevLayout };
+}
 
 /** stamp `key` as active now, dropping entries that have already fallen outside the movie camera's window */
 function stampActivity(lastActivity: Record<string, number>, key: string): Record<string, number> {
@@ -138,11 +226,12 @@ export const useStore = create<AppStore>((set, get) => ({
   monitorHover: null,
   lastActivity: {},
   connected: false,
-  cameraMode: { kind: 'free' },
+  cameraMode: loadCameraMode(),
   settingsOpen: false,
   catalog: null,
   buildMode: false,
   buildHold: null,
+  perfOverlay: loadPerfOverlay(),
 
   applyServerMsg: (msg) => {
     if (msg.type === 'state') {
@@ -161,7 +250,7 @@ export const useStore = create<AppStore>((set, get) => ({
       if (prevKey !== null && prevKey !== key) lastActivity = stampActivity(lastActivity, 'whiteboard');
       if (prevInboxKey !== null && prevInboxKey !== tailId) lastActivity = stampActivity(lastActivity, 'boss');
       if (prevStatusKey !== null && prevStatusKey !== statusTailId) lastActivity = stampActivity(lastActivity, 'statusboard');
-      set({ office: msg.state, lastActivity });
+      set({ office: stableLayout(get().office, msg.state), lastActivity });
       return;
     }
     if (msg.type === 'catalog') {
@@ -214,14 +303,16 @@ export const useStore = create<AppStore>((set, get) => ({
   setConnected: (connected) => set({ connected }),
   // any mode change lands on the live tail: entering focus starts unscrolled,
   // and exiting mid-history must not leave a stale offset for the next visit
-  setCameraMode: (cameraMode) =>
+  setCameraMode: (cameraMode) => {
+    saveCameraMode(cameraMode);
     // a pending relock only makes sense heading back into the fly cam;
     // build mode only exists in the free camera — any other mode ends it
     set({
       cameraMode,
       focusScroll: 0,
       ...(cameraMode.kind !== 'free' ? { pendingRelock: false, buildMode: false, buildHold: null } : {}),
-    }),
+    });
+  },
   setFocusScroll: (focusScroll) => set({ focusScroll }),
   setPendingRelock: (pendingRelock) => set({ pendingRelock }),
   // called per-frame from the fly-cam crosshair raycast — skip no-op updates
@@ -242,6 +333,10 @@ export const useStore = create<AppStore>((set, get) => ({
     ),
   setBuildMode: (buildMode) => set({ buildMode, buildHold: null }),
   setBuildHold: (buildHold) => set({ buildHold }),
+  setPerfOverlay: (perfOverlay) => {
+    savePerfOverlay(perfOverlay);
+    set({ perfOverlay });
+  },
   patchLayout: (patch) =>
     set((s) => {
       if (!s.office) return {};

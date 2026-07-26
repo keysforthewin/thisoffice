@@ -4,6 +4,7 @@ import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { enterFocusMode, useStore, type CameraPose } from '../store.ts';
 import { FurnitureModel } from './Desk.tsx';
 import { tvContent, tvPageIndex, TV_PAGE_MS, type TvPage } from './tvContent.ts';
+import type { UsageStats } from '../../../shared/types.ts';
 
 const W = 640;
 const H = 360;
@@ -40,13 +41,19 @@ export function WallTV({ position, rotationY = 0 }: Props) {
     const ctx = canvas.getContext('2d')!;
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = 4; // the TV is almost always viewed off-axis
     return { ctx, texture };
   }, []);
 
-  const drawnKey = useRef('');
   const gl = useThree((s) => s.gl);
   /** clock page captured when focus on the TV begins; null while unfocused */
   const focusBase = useRef<number | null>(null);
+  // What the canvas currently shows. The TV's only inputs are the page index and
+  // the stats object, and `applyServerMsg` replaces stats wholesale, so these two
+  // comparisons catch every real change — no need to derive and serialize the
+  // page content every frame just to discover it is unchanged.
+  const drawnPage = useRef<number | null>(null);
+  const drawnStats = useRef<UsageStats | null | undefined>(undefined);
 
   useFrame(({ clock }) => {
     const autoPage = Math.floor((clock.elapsedTime * 1000) / TV_PAGE_MS);
@@ -55,10 +62,10 @@ export function WallTV({ position, rotationY = 0 }: Props) {
     if (!focused) focusBase.current = null;
     else if (focusBase.current === null) focusBase.current = autoPage;
     const page = tvPageIndex(autoPage, focusBase.current, st.focusScroll);
+    if (page === drawnPage.current && st.stats === drawnStats.current) return;
+    drawnPage.current = page;
+    drawnStats.current = st.stats;
     const content = tvContent(st.stats, page);
-    const key = JSON.stringify(content);
-    if (key === drawnKey.current) return;
-    drawnKey.current = key;
     drawTvPage(ctx, content.page, content.pageNum, content.pageCount);
     texture.needsUpdate = true;
   });

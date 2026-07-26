@@ -163,16 +163,19 @@ describe('wall items', () => {
     // was 4.5 before the TV moved in; 1.5 keeps window and TV non-colliding at every room size
     expect(defaultWallOffset('windowLeft', 3)).toBeCloseTo(1.5, 6);
     expect(defaultWallOffset('wallArt', 3)).toBeCloseTo(width / 4 + 0.5, 6);
-    expect(defaultWallOffset('pictureFrame', 3)).toBeCloseTo(0, 6);
   });
 
-  it('has a tv item on the left wall, above cactusBig near the back corner', () => {
+  it('has a tv item on the left wall, forward of the back corner', () => {
     expect(WALL_ITEMS.find((w) => w.id === 'tv')).toMatchObject({ wall: 'left', halfW: 1.5 });
-    // world z = BACK_Z + 1.9 = -6.5 (span [-8.0, -5.0]), independent of room size
+    // constant along-wall offset, so the TV slides toward the employees as the room
+    // grows rather than staying pinned near the back corner
+    for (const maxSeat of [3, 12]) {
+      expect(defaultWallOffset('tv', maxSeat)).toBeCloseTo(5.0, 6);
+    }
+    // ...and it always clears the back wall it used to hug
     for (const maxSeat of [3, 12]) {
       const { centerZ } = roomDims(maxSeat);
-      const ox = defaultWallOffset('tv', maxSeat);
-      expect(centerZ - ox).toBeCloseTo(BACK_Z + 1.9, 6);
+      expect(centerZ - defaultWallOffset('tv', maxSeat)).toBeGreaterThan(BACK_Z + 1.9);
     }
   });
 
@@ -214,8 +217,8 @@ describe('wall items', () => {
   });
 
   it('rejects same-wall overlap but allows cross-wall coexistence', () => {
-    // wall art dropped onto the picture frame (both on the back wall)
-    expect(isWallPlacementValid(undefined, 'wallArt', 0, 3)).toBe(false);
+    // wall art dropped onto the back window (both on the back wall)
+    expect(isWallPlacementValid(undefined, 'wallArt', defaultWallOffset('windowBack', 3), 3)).toBe(false);
     // defaults are valid placements
     expect(isWallPlacementValid(undefined, 'wallArt', defaultWallOffset('wallArt', 3), 3)).toBe(true);
     // the left window shares no wall with the back-wall items
