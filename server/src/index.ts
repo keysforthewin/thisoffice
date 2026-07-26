@@ -144,6 +144,12 @@ const server = http.createServer((req, res) => {
           : send(404, { error: 'no such employee' });
       }
     }
+    if (url.pathname === '/api/office' && req.method === 'PUT') {
+      const body = await readBody();
+      if (typeof body.name !== 'string') return send(400, { error: 'name must be a string' });
+      office.setOfficeName(body.name);
+      return send(200, { ok: true });
+    }
     if (url.pathname === '/api/settings' && req.method === 'PUT') {
       const body = await readBody();
       office.setBoss({ name: body.name, variant: body.variant });
