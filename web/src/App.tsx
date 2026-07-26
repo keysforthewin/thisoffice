@@ -143,6 +143,8 @@ function Hud({ connected, mode, onSettings }: { connected: boolean; mode: Return
       ? 'Free camera — click to look (Esc releases) · WASD fly · E/Space up · C down · Shift slow · V for POV tour · M movie mode · B build mode'
       : mode.kind === 'movie'
         ? 'Movie mode — auto-follows the action · arrows cut now · M/Esc exit'
+        : mode.kind === 'focus' && mode.target === 'tv'
+          ? 'Stats TV — scroll wheel to flip through stats · Esc or click away = back'
         : mode.kind === 'focus'
           ? `Screen: ${focusName} — scroll wheel for history · End = live · Esc or click away = back`
           : `POV: ${povs[Math.min(mode.index, povs.length - 1)]?.label ?? ''} — Tab/← → cycle · V/Esc exit`;
