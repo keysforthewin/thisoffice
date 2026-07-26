@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { MONITOR_IMAGE_MARKER, type CharacterCatalog, type ItemPose, type OfficeLayout, type OfficeState, type ServerMsg, type UsageStats, type WallArtConfig } from '../../shared/types.ts';
+import { MONITOR_IMAGE_MARKER, type CharacterCatalog, type ItemPose, type OfficeLayout, type OfficeState, type QuizState, type QuizWinner, type ServerMsg, type UsageStats, type WallArtConfig } from '../../shared/types.ts';
 import { boardContent } from './scene/whiteboardContent.ts';
 import { activityTtl } from './scene/movieShots.ts';
 import { appendHistory } from './scene/monitorScrollback.ts';
@@ -137,6 +137,13 @@ export interface BuildHold {
 interface AppStore {
   office: OfficeState | null;
   stats: UsageStats | null;
+  quiz: QuizState | null;
+  /**
+   * Set only when THIS client was the one asked to photograph the winner. The
+   * server assigns one client, so this stays null in every other tab.
+   */
+  pendingCapture: QuizWinner | null;
+  clearPendingCapture: () => void;
   monitors: Record<string, MonitorContent>;
   /** bumps every time a monitor changes so screens know to redraw */
   monitorVersion: Record<string, number>;
@@ -223,6 +230,8 @@ function stampActivity(lastActivity: Record<string, number>, key: string): Recor
 export const useStore = create<AppStore>((set, get) => ({
   office: null,
   stats: null,
+  quiz: null,
+  pendingCapture: null,
   monitors: {},
   monitorVersion: {},
   monitorHistory: {},
@@ -268,6 +277,15 @@ export const useStore = create<AppStore>((set, get) => ({
       tvStatsKey = key;
       const lastActivity = prevKey !== null && prevKey !== key ? stampActivity(get().lastActivity, 'tv') : get().lastActivity;
       set({ stats: msg.stats, lastActivity });
+      return;
+    }
+    if (msg.type === 'quiz') {
+      set({
+        quiz: msg.quiz,
+        // an explicit assignment wins; otherwise keep an existing assignment
+        // only while the server is still awaiting a photo; otherwise clear it
+        pendingCapture: msg.capture ?? (msg.quiz.awaitingPhoto ? get().pendingCapture : null),
+      });
       return;
     }
     if (msg.type === 'monitor') {
@@ -324,6 +342,7 @@ export const useStore = create<AppStore>((set, get) => ({
   setMonitorHover: (monitorHover) =>
     get().monitorHover === monitorHover ? undefined : set({ monitorHover }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
+  clearPendingCapture: () => set({ pendingCapture: null }),
   setCatalog: (catalog) => set({ catalog }),
   patchCharacter: (id, patch) =>
     set((s) =>
