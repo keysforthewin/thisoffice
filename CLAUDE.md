@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A 3D WebGL office (Three.js / React Three Fiber) that visualizes live Claude Code sessions: the boss's monitor shows incoming prompts, every tool call / subagent lights up an employee's screen, and the office auto-hires when it runs out of idle employees. See README.md for user-facing controls and the Mixamo/KayKit import workflows.
+A 3D WebGL office (Three.js / React Three Fiber) that visualizes live Claude Code sessions: the boss's monitor shows incoming prompts, every tool call / subagent lights up an employee's screen, and the office auto-hires when it runs out of idle employees. The Mixamo import flow lives in the settings picker's Import tab; KayKit import commands are below.
 
 ## Commands
 
