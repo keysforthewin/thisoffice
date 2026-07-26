@@ -437,6 +437,22 @@ describe('Quiz', () => {
     expect(h.wins).toEqual([]);
   });
 
+  it('does not publish a question when the game is disabled while the call is in flight', async () => {
+    // the inertness guarantee: "zero LLM-driven state while disabled" has to
+    // survive a disable that lands between the ask and its reply
+    let release: (reply: string) => void = () => {};
+    const ask = vi.fn(() => new Promise<string>((resolve) => (release = resolve)));
+    const h = harness({ ask });
+    h.quiz.setEnabled(true);
+    expect(h.deps.ask).toHaveBeenCalledTimes(1);
+    h.quiz.setEnabled(false);
+    release('{"question":"Is it alive?","guess":false}');
+    await settle();
+    expect(h.quiz.getState().question).toBeNull();
+    expect(h.quiz.getState().askedCount).toBe(0);
+    expect(h.emitted.every((m) => m.type !== 'quiz' || m.quiz.question === null)).toBe(true);
+  });
+
   it('carries the asker seat on the question and the winner, for the roster-independent bubble', async () => {
     const askers: QuizAsker[] = [{ id: 'e9', name: 'Rey', variant: 'Mage', seat: 5, idle: true }];
     const h = harness({ askers: () => askers, ask: vi.fn(async () => '{"question":"Is it a cat?","guess":true}') });
