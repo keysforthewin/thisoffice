@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { UsageStats } from '../../../shared/types.ts';
-import { formatDuration, formatTokens, formatUSD, tvContent, tvPages } from './tvContent.ts';
+import { formatDuration, formatTokens, formatUSD, tvContent, tvPageIndex, tvPages } from './tvContent.ts';
 
 function baseStats(overrides: Partial<UsageStats> = {}): UsageStats {
   return {
@@ -166,5 +166,26 @@ describe('tvContent', () => {
     const c2 = tvContent(stats, 2);
     expect(c2.page).toEqual(c0.page);
     expect(c2.pageNum).toBe(c0.pageNum);
+  });
+});
+
+describe('tvPageIndex', () => {
+  it('follows the clock page when not focused', () => {
+    expect(tvPageIndex(7, null, 0)).toBe(7);
+  });
+
+  it('freezes at the focus-entry base page while focused', () => {
+    expect(tvPageIndex(9, 7, 0)).toBe(7);
+  });
+
+  it('offsets from the base by focusScroll while focused', () => {
+    expect(tvPageIndex(9, 7, 3)).toBe(10);
+    expect(tvPageIndex(9, 7, -2)).toBe(5);
+  });
+
+  it('may go negative — tvContent wraps it modulo the page list', () => {
+    expect(tvPageIndex(0, 0, -1)).toBe(-1);
+    const stats = baseStats({ prompts: 1 }); // 2 pages
+    expect(tvContent(stats, -1).pageNum).toBe(2);
   });
 });

@@ -191,3 +191,10 @@ export function tvContent(stats: UsageStats | null, pageIndex: number): { page: 
   const idx = ((pageIndex % pages.length) + pages.length) % pages.length;
   return { page: pages[idx], pageNum: idx + 1, pageCount: pages.length };
 }
+
+/** Displayed page index: while the TV is camera-focused (`focusedBase` set at
+ *  focus entry) the clock is ignored and the wheel offset applies; result may
+ *  be negative — `tvContent` wraps it modulo the page list. */
+export function tvPageIndex(autoPage: number, focusedBase: number | null, focusScroll: number): number {
+  return focusedBase === null ? autoPage : focusedBase + focusScroll;
+}
