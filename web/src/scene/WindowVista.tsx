@@ -1,7 +1,8 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import { useTexture } from '@react-three/drei';
 import { VISTA_LAYERS } from './vistaLayers.ts';
+import { vistaGeometry } from './vistaGeometry.ts';
 
 const srgb = (t: THREE.Texture | THREE.Texture[]) => {
   for (const tex of Array.isArray(t) ? t : [t]) {
@@ -22,41 +23,44 @@ export function WindowVista({ id }: { id: 'back' | 'left' }) {
    * Grow each plane downward by `extend` without moving or stretching the
    * artwork.
    *
-   * The plane becomes `h + extend` tall with its TOP edge unchanged, and V is
-   * rescaled so the image still occupies exactly `h` at the top: with
-   * `repeat.y = k` and `offset.y = 1 - k` (k = (h + extend) / h), the plane's
-   * top samples v = 1 and the artwork's original bottom lands at v = 0. Below
-   * that v goes negative, and ClampToEdgeWrapping pins it to the image's bottom
-   * pixel row — so each building's window columns continue straight down and the
-   * transparent gaps between buildings stay transparent, instead of the whole
-   * skyline ending on a hard horizontal line.
+   * The mesh is two quads (see vistaGeometry.ts): the upper one holds the
+   * artwork exactly where `w`/`h`/`x`/`y` place it, and the lower one repeats
+   * the UV row of the artwork's lowest *opaque* pixel (`trimBottom`) straight
+   * down — so each building's window columns continue and the transparent gaps
+   * between buildings stay transparent, instead of the whole skyline ending on
+   * a hard horizontal line.
    *
-   * Each URL appears exactly once across both vistas, so mutating the cached
-   * texture here can't bleed into another layer.
+   * This used to be done with `repeat.y`/`offset.y` and ClampToEdgeWrapping
+   * pinning v < 0 to the image's bottom pixel row. That silently did nothing
+   * for the `mid` layers, whose images carry ~15% transparent padding below the
+   * artwork: the clamp faithfully repeated the padding. Encoding the trim in the
+   * geometry's UVs makes the clamp line the artwork's edge instead of the
+   * image's.
    */
+  const geos = useMemo(
+    () => layers.map((l) => vistaGeometry(l.w, l.h, l.extend ?? 0, l.trimBottom ?? 0)),
+    [layers],
+  );
+  useEffect(() => () => geos.forEach((g) => g.dispose()), [geos]);
+
   useMemo(() => {
-    layers.forEach((l, i) => {
-      const tex = layerTex[i];
-      if (!tex) return;
-      const k = (l.h + (l.extend ?? 0)) / l.h;
+    for (const tex of layerTex) {
+      if (!tex) continue;
+      tex.wrapS = THREE.ClampToEdgeWrapping;
       tex.wrapT = THREE.ClampToEdgeWrapping;
-      tex.repeat.y = k;
-      tex.offset.y = 1 - k;
+      tex.repeat.set(1, 1);
+      tex.offset.set(0, 0);
       tex.needsUpdate = true;
-    });
-  }, [layers, layerTex]);
+    }
+  }, [layerTex]);
 
   return (
     <group>
-      {layers.map((l, i) => {
-        const ext = l.extend ?? 0;
-        return (
-          <mesh key={l.url} position={[l.x, l.y - ext / 2, l.z]}>
-            <planeGeometry args={[l.w, l.h + ext]} />
-            <meshBasicMaterial map={layerTex[i]} alphaTest={0.5} fog={false} />
-          </mesh>
-        );
-      })}
+      {layers.map((l, i) => (
+        <mesh key={l.url} position={[l.x, l.y, l.z]} geometry={geos[i]}>
+          <meshBasicMaterial map={layerTex[i]} alphaTest={0.5} fog={false} />
+        </mesh>
+      ))}
     </group>
   );
 }

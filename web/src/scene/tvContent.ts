@@ -8,7 +8,18 @@ export interface TvPage {
   title: string;
   value: string;
   sub?: string;
+  /** when set, WallTV draws this chart in place of the big centered `value` */
+  chart?: DowHourChart;
 }
+
+/** Token usage as [weekday 0=Mon … 6=Sun][hour 0-23], in the viewer's local zone. */
+export interface DowHourChart {
+  kind: 'dowHours';
+  grid: number[][];
+}
+
+/** Monday-first, matching the chart's row order and legend. */
+export const DOW_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 /** `999`, `12.4k`, `1.2M`, `3.4B` — count/token formatting shared by every page. */
 export function formatTokens(n: number): string {
@@ -67,6 +78,54 @@ function topHour(hourCounts: Record<string, number>): string | undefined {
   const period = hour < 12 ? 'AM' : 'PM';
   const twelve = hour % 12 === 0 ? 12 : hour % 12;
   return `${twelve} ${period} is peak hour`;
+}
+
+/**
+ * `tokensByDowHour` is bucketed in UTC (see shared/types.ts). Shift it into the
+ * viewer's zone — which, unlike the 1-D hourCounts, can also move a bucket to
+ * the neighbouring weekday when the hour wraps past midnight.
+ *
+ * `offsetMinutes` is minutes *east* of UTC (the negation of
+ * `Date.prototype.getTimezoneOffset`), defaulting to the viewer's current
+ * offset so DST is applied as they experience it today. Zones on a half-hour
+ * offset land between buckets; the earlier hour wins.
+ *
+ * Rows are Monday-first (DOW_LABELS); the incoming keys are Sunday-first.
+ */
+export function localDowHourGrid(
+  tokensByDowHour: Record<string, number>,
+  offsetMinutes = -new Date().getTimezoneOffset(),
+): number[][] {
+  const grid = Array.from({ length: 7 }, () => new Array<number>(24).fill(0));
+  const WEEK_MINUTES = 7 * 24 * 60;
+  for (const [key, tokens] of Object.entries(tokensByDowHour)) {
+    const [dowStr, hourStr] = key.split('-');
+    const dow = Number(dowStr);
+    const hour = Number(hourStr);
+    if (!Number.isInteger(dow) || !Number.isInteger(hour) || dow < 0 || dow > 6 || hour < 0 || hour > 23) continue;
+    const minutes = (((dow * 24 + hour) * 60 + offsetMinutes) % WEEK_MINUTES + WEEK_MINUTES) % WEEK_MINUTES;
+    const localDow = Math.floor(minutes / 1440); // still Sunday-first
+    const localHour = Math.floor((minutes % 1440) / 60);
+    grid[(localDow + 6) % 7][localHour] += tokens; // → Monday-first
+  }
+  return grid;
+}
+
+/** `peak Tue 09:00 · 4.2M`, or undefined when the grid is empty. */
+function peakCell(grid: number[][]): string | undefined {
+  let best = 0;
+  let at: [number, number] | null = null;
+  grid.forEach((row, d) =>
+    row.forEach((v, h) => {
+      if (v > best) {
+        best = v;
+        at = [d, h];
+      }
+    }),
+  );
+  if (!at) return undefined;
+  const [d, h] = at as [number, number];
+  return `peak ${DOW_LABELS[d]} ${String(h).padStart(2, '0')}:00 · ${formatTokens(best)}`;
 }
 
 /** Builds the page list: only pages whose backing stat is non-zero/non-empty are included. */
@@ -174,12 +233,23 @@ export function tvPages(stats: UsageStats | null): TvPage[] {
     });
   }
 
-  // 14. Office
-  if (stats.hires > 0 || stats.peakHeadcount > 0) {
-    pages.push({ title: 'Office', value: `${stats.hires} hires`, sub: `peak headcount ${stats.peakHeadcount}` });
+  // 14. Head count
+  if (stats.headcount > 0 || stats.peakHeadcount > 0) {
+    pages.push({
+      title: 'Head count',
+      value: String(stats.headcount),
+      sub: `peak ${stats.peakHeadcount}`,
+    });
   }
 
-  // 15. Tracking since — always present when stats exist
+  // 15. Busiest hours — token usage by hour, stacked by weekday
+  const grid = localDowHourGrid(stats.tokensByDowHour ?? {});
+  const peak = peakCell(grid);
+  if (peak) {
+    pages.push({ title: 'Busiest hours', value: '', sub: peak, chart: { kind: 'dowHours', grid } });
+  }
+
+  // 16. Tracking since — always present when stats exist
   const days = Math.max(0, Math.round((Date.now() - Date.parse(stats.trackingSince)) / 86_400_000));
   pages.push({
     title: 'Tracking since',

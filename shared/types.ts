@@ -68,6 +68,28 @@ export interface OfficeLayout {
   wallItems?: Record<string, number>;
 }
 
+/** Image formats accepted for the wall painting, and the extension each is stored under. */
+export const WALL_ART_EXTS = ['png', 'jpg', 'webp'] as const;
+export type WallArtExt = (typeof WALL_ART_EXTS)[number];
+
+/**
+ * A user-uploaded painting for the frame behind the boss. Absent = the built-in
+ * artwork. Cleared along with the layout when the room is reset, since the
+ * painting is a wall hanging like any other.
+ */
+export interface WallArtConfig {
+  /** upload timestamp; doubles as the cache-buster on /api/decor/wallart */
+  v: number;
+  ext: WallArtExt;
+  /** 1 = the image covers the frame exactly; >1 zooms in */
+  zoom: number;
+  /** -1..1 of the horizontal overflow; 0 = centred */
+  panX: number;
+}
+
+export const WALL_ART_ZOOM_MIN = 1;
+export const WALL_ART_ZOOM_MAX = 6;
+
 export interface OfficeState {
   /** HUD title; user-editable, defaults to "This Office" */
   officeName: string;
@@ -83,6 +105,8 @@ export interface OfficeState {
   waitingForInput: boolean;
   /** build-mode overrides; absent = default layout */
   layout?: OfficeLayout;
+  /** uploaded painting behind the boss; absent = the built-in artwork */
+  wallArt?: WallArtConfig;
 }
 
 export interface ModelTokens {
@@ -112,11 +136,18 @@ export interface UsageStats {
   turnMsTotal: number;
   longestTurnMs: number;
   peakHeadcount: number;
-  hires: number;
+  /** employees on staff right now; sampled server-side, so the TV needs no roster access */
+  headcount: number;
   /** keyed YYYY-MM-DD, last ~30 days */
   byDay: Record<string, DayStats>;
   /** UTC hour-of-day 0-23 → prompt count (the client renders it in the viewer's local zone) */
   hourCounts: Record<string, number>;
+  /**
+   * `"<dow>-<hour>"` (dow 0=Sunday, both UTC) → input+output tokens, all time,
+   * never pruned — 168 keys at most. UTC like hourCounts; the client shifts it
+   * into the viewer's zone, which rolls the weekday when the hour wraps.
+   */
+  tokensByDowHour: Record<string, number>;
 }
 
 /**

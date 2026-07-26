@@ -11,6 +11,8 @@ import { clampOffset, wrapLines } from './monitorScrollback.ts';
 import { pickMonitorTarget } from './monitorPicking.ts';
 import { bossScreenLines } from './bossScreen.ts';
 import { MONITOR_COLS, MONITOR_ROWS } from './MonitorScreen.tsx';
+import { pickWallArtImage, reframeWallArt } from '../wallArt.ts';
+import { clampPan, clampZoom } from './wallArtTexture.ts';
 
 export interface Pov {
   label: string;
@@ -112,6 +114,13 @@ function FreeFlyControls({ glide }: { glide: React.MutableRefObject<Glide | null
       if (document.pointerLockElement === dom) {
         // first-person: the crosshair is the cursor
         const target = crosshairTarget();
+        if (target === 'wallArt') {
+          // the painting isn't a focus subject — a click hangs a new picture,
+          // and the file dialog needs the pointer back
+          document.exitPointerLock();
+          pickWallArtImage();
+          return;
+        }
         if (target) {
           const pose: CameraPose = {
             position: camera.position.toArray() as [number, number, number],
@@ -261,6 +270,7 @@ function FocusControls({ target }: { target: string }) {
 export function CameraRig() {
   const mode = useStore((s) => s.cameraMode);
   const buildMode = useStore((s) => s.buildMode);
+  const wallArtHover = useStore((s) => s.wallArtHover);
   const povs = usePovList();
   const office = useStore((s) => s.office);
   const camera = useThree((s) => s.camera);
@@ -337,12 +347,57 @@ export function CameraRig() {
     camera.lookAt(lookTarget.current);
   });
 
-  if (mode.kind === 'movie') return <MovieCamera />;
-  if (mode.kind === 'focus') return <FocusControls target={mode.target} />;
-  // build mode: camera holds still, cursor drags objects — unmounting the fly
-  // controls also releases any pointer lock via their cleanup
-  return free && !buildMode ? <FreeFlyControls glide={glide} /> : null;
+  const controls =
+    mode.kind === 'movie' ? (
+      <MovieCamera />
+    ) : mode.kind === 'focus' ? (
+      <FocusControls target={mode.target} />
+    ) : // build mode: camera holds still, cursor drags objects — unmounting the fly
+    // controls also releases any pointer lock via their cleanup
+    free && !buildMode ? (
+      <FreeFlyControls glide={glide} />
+    ) : null;
+
+  return (
+    <>
+      {wallArtHover && <WallArtControls />}
+      {controls}
+    </>
+  );
 }
+
+/**
+ * Wheel → reframe the painting, while the cursor is over it. Mounted only on
+ * hover, so it never competes with FocusControls' own wheel listener.
+ *
+ * This has to be a native non-passive listener rather than an R3F `onWheel`
+ * prop: ctrl+wheel is the browser's page-zoom gesture, and only
+ * `preventDefault` on a non-passive listener suppresses it.
+ */
+function WallArtControls() {
+  const gl = useThree((s) => s.gl);
+
+  useEffect(() => {
+    const onWheel = (e: WheelEvent) => {
+      const art = useStore.getState().office?.wallArt;
+      if (!art) return; // the built-in artwork has no framing to change
+      e.preventDefault();
+      if (e.ctrlKey) {
+        reframeWallArt({ panX: clampPan(art.panX + (e.deltaY > 0 ? PAN_PER_TICK : -PAN_PER_TICK)) });
+      } else {
+        reframeWallArt({ zoom: clampZoom(art.zoom * (e.deltaY > 0 ? 1 / ZOOM_PER_TICK : ZOOM_PER_TICK)) });
+      }
+    };
+    const dom = gl.domElement;
+    dom.addEventListener('wheel', onWheel, { passive: false });
+    return () => dom.removeEventListener('wheel', onWheel);
+  }, [gl]);
+
+  return null;
+}
+
+const ZOOM_PER_TICK = 1.12;
+const PAN_PER_TICK = 0.08;
 
 const UP = new THREE.Vector3(0, 1, 0);
 const CENTER_NDC = new THREE.Vector2(0, 0);

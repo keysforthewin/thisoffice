@@ -15,6 +15,8 @@ export const ANIM_SLOTS = ['sit', 'idle'] as const;
 export type AnimSlot = (typeof ANIM_SLOTS)[number];
 
 const MAX_UPLOAD_BYTES = 64 * 1024 * 1024;
+/** Decor images are wall art, not rigged models — a far smaller ceiling is plenty. */
+const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
 const SCALE_MIN = 0.1;
 const SCALE_MAX = 10;
 export const SEAT_OFFSET_RANGE = 0.5;
@@ -23,6 +25,11 @@ export const CHAIR_FORWARD_RANGE = 0.5;
 const GLB_MAGIC = Buffer.from('glTF', 'ascii');
 /** Binary FBX files always start with this signature */
 const FBX_MAGIC = Buffer.from('Kaydara FBX Binary', 'ascii');
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff]);
+/** WebP is RIFF<4-byte size>WEBP, so the tag sits at offset 8 */
+const RIFF_MAGIC = Buffer.from('RIFF', 'ascii');
+const WEBP_TAG = Buffer.from('WEBP', 'ascii');
 
 export function clampScale(scale: number): number {
   if (!Number.isFinite(scale)) return 1;
@@ -189,10 +196,24 @@ export class CharacterStore {
   }
 }
 
-export function validMagic(head: Buffer, kind: 'glb' | 'fbx'): boolean {
-  const magic = kind === 'glb' ? GLB_MAGIC : FBX_MAGIC;
-  return head.length >= magic.length && head.subarray(0, magic.length).equals(magic);
+export type UploadKind = 'glb' | 'fbx' | 'image';
+
+const startsWith = (head: Buffer, magic: Buffer) =>
+  head.length >= magic.length && head.subarray(0, magic.length).equals(magic);
+
+export function validMagic(head: Buffer, kind: UploadKind): boolean {
+  if (kind === 'image') {
+    if (startsWith(head, PNG_MAGIC) || startsWith(head, JPEG_MAGIC)) return true;
+    return startsWith(head, RIFF_MAGIC) && head.length >= 12 && head.subarray(8, 12).equals(WEBP_TAG);
+  }
+  return startsWith(head, kind === 'glb' ? GLB_MAGIC : FBX_MAGIC);
 }
+
+const KIND_ERRORS: Record<UploadKind, string> = {
+  glb: 'not a GLB file',
+  fbx: 'not a binary FBX file',
+  image: 'not a PNG, JPEG or WebP image',
+};
 
 /**
  * Stream a binary upload to destPath. Validates the magic bytes of the first
@@ -202,13 +223,15 @@ export function validMagic(head: Buffer, kind: 'glb' | 'fbx'): boolean {
 export function saveUpload(
   req: IncomingMessage,
   destPath: string,
-  kind: 'glb' | 'fbx',
+  kind: UploadKind,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   return new Promise((resolve) => {
+    const maxBytes = kind === 'image' ? MAX_IMAGE_BYTES : MAX_UPLOAD_BYTES;
+    const tooLarge = `file too large (max ${Math.round(maxBytes / (1024 * 1024))} MB)`;
     const declared = Number(req.headers['content-length'] ?? 0);
-    if (declared > MAX_UPLOAD_BYTES) {
+    if (declared > maxBytes) {
       req.resume();
-      return resolve({ ok: false, error: 'file too large (max 64 MB)' });
+      return resolve({ ok: false, error: tooLarge });
     }
     fs.mkdirSync(path.dirname(destPath), { recursive: true });
     const tmpPath = path.join(path.dirname(destPath), `.tmp-${crypto.randomUUID()}`);
@@ -231,12 +254,10 @@ export function saveUpload(
       if (failed) return;
       if (!checkedMagic) {
         checkedMagic = true;
-        if (!validMagic(chunk, kind)) {
-          return fail(kind === 'glb' ? 'not a GLB file' : 'not a binary FBX file');
-        }
+        if (!validMagic(chunk, kind)) return fail(KIND_ERRORS[kind]);
       }
       bytes += chunk.length;
-      if (bytes > MAX_UPLOAD_BYTES) return fail('file too large (max 64 MB)');
+      if (bytes > maxBytes) return fail(tooLarge);
     });
     req.pipe(out);
     out.on('finish', () => {

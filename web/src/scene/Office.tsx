@@ -1,7 +1,10 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import { useTexture } from '@react-three/drei';
+import { useThree, type ThreeEvent } from '@react-three/fiber';
 import { useStore } from '../store.ts';
+import { pickWallArtImage } from '../wallArt.ts';
+import { wallArtTransform } from './wallArtTexture.ts';
 import { Desk, FurnitureModel } from './Desk.tsx';
 import { Person } from './Person.tsx';
 import { Whiteboard, StatusBoard } from './Whiteboard.tsx';
@@ -12,16 +15,68 @@ import { BuildHandle, WallHandle, displayPose, useWallOffset } from './build.tsx
 import { wallStrips } from './wallOpenings.ts';
 import { WindowVista } from './WindowVista.tsx';
 
-function WallArt({ url, position }: { url: string; position: [number, number, number] }) {
+const ART_W = 1.84;
+const ART_H = 1.38;
+
+/**
+ * The framed painting behind the boss. Clicking it uploads a replacement; the
+ * wheel reframes it (ctrl = pan). Both are no-ops in build mode, where the
+ * click drags the frame along the wall instead (see WallHandle below).
+ */
+function WallArt({ position }: { position: [number, number, number] }) {
+  const art = useStore((s) => s.office?.wallArt);
+  // one primitive per dependency: `office.wallArt` is a fresh object on every
+  // state broadcast, so depending on the object itself would redo this constantly
+  const v = art?.v;
+  const zoom = art?.zoom ?? 1;
+  const panX = art?.panX ?? 0;
+  const url = v ? `/api/decor/wallart?v=${v}` : '/decor/wallart_1.jpg';
   const texture = useTexture(url);
+  const gl = useThree((s) => s.gl);
+
+  useEffect(() => {
+    const img = texture.image as { width?: number; height?: number } | undefined;
+    if (!img?.width || !img?.height) return;
+    const { repeat, offset } = wallArtTransform(img.width / img.height, ART_W / ART_H, zoom, panX);
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.repeat.set(repeat[0], repeat[1]);
+    texture.offset.set(offset[0], offset[1]);
+    texture.needsUpdate = true;
+  }, [texture, zoom, panX]);
+
+  const onPointerDown = (e: ThreeEvent<PointerEvent>) => {
+    if (document.pointerLockElement) return; // pointer-locked clicks steer the fly cam
+    if (useStore.getState().buildMode) return; // build mode drags the frame instead
+    e.stopPropagation();
+    gl.domElement.style.cursor = '';
+    pickWallArtImage();
+  };
+  const hoverStart = () => {
+    if (document.pointerLockElement) return;
+    if (useStore.getState().buildMode) return;
+    useStore.getState().setWallArtHover(true);
+    gl.domElement.style.cursor = 'pointer';
+  };
+  const hoverEnd = () => {
+    useStore.getState().setWallArtHover(false);
+    gl.domElement.style.cursor = '';
+  };
+
   return (
     <group position={position}>
       <mesh castShadow>
         <boxGeometry args={[2.0, 1.55, 0.06]} />
         <meshStandardMaterial color="#3a3340" roughness={0.5} />
       </mesh>
-      <mesh position={[0, 0, 0.035]}>
-        <planeGeometry args={[1.84, 1.38]} />
+      <mesh
+        position={[0, 0, 0.035]}
+        userData={{ monitorTarget: 'wallArt' }}
+        onPointerDown={onPointerDown}
+        onPointerEnter={hoverStart}
+        onPointerLeave={hoverEnd}
+      >
+        <planeGeometry args={[ART_W, ART_H]} />
         <meshStandardMaterial map={texture} roughness={0.9} />
       </mesh>
     </group>
@@ -227,7 +282,7 @@ export function Office() {
           </group>
         );
       })}
-      <WallArt url="/decor/wallart_1.jpg" position={[artOx, 2.15, backZ + 0.05]} />
+      <WallArt position={[artOx, 2.15, backZ + 0.05]} />
       {buildMode && (
         <group position={[0, 0, backZ]}>
           <WallHandle id="wallArt" wall="back" ox={artOx} oy={2.15} w={wallItem('wallArt').halfW * 2} h={1.7} />

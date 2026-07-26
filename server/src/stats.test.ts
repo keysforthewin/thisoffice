@@ -183,7 +183,7 @@ describe('StatsAggregator.recordHeadcount dirty tracking', () => {
     expect(s.snapshot().peakHeadcount).toBe(3);
   });
 
-  it('does not mark dirty when headcount repeats or drops below the peak', () => {
+  it('does not mark dirty when the headcount repeats', () => {
     const s = new StatsAggregator(file);
     s.recordHeadcount(5);
     s.flush();
@@ -191,8 +191,15 @@ describe('StatsAggregator.recordHeadcount dirty tracking', () => {
 
     s.recordHeadcount(5); // same value
     expect(s.isDirty()).toBe(false);
-    s.recordHeadcount(2); // below peak
-    expect(s.isDirty()).toBe(false);
+  });
+
+  it('tracks the live headcount downward while the peak only rises', () => {
+    const s = new StatsAggregator(file);
+    s.recordHeadcount(5);
+    s.flush();
+    s.recordHeadcount(2); // below peak, but the live count moved
+    expect(s.isDirty()).toBe(true);
+    expect(s.snapshot().headcount).toBe(2);
     expect(s.snapshot().peakHeadcount).toBe(5);
   });
 });
@@ -231,7 +238,6 @@ describe('StatsAggregator persistence', () => {
     s1.recordSession('sess-1');
     s1.recordTurn(1234);
     s1.recordHeadcount(4);
-    s1.recordHire();
     expect(s1.isDirty()).toBe(true);
     s1.flush();
     expect(s1.isDirty()).toBe(false);

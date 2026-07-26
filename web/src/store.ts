@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { MONITOR_IMAGE_MARKER, type CharacterCatalog, type ItemPose, type OfficeLayout, type OfficeState, type ServerMsg, type UsageStats } from '../../shared/types.ts';
+import { MONITOR_IMAGE_MARKER, type CharacterCatalog, type ItemPose, type OfficeLayout, type OfficeState, type ServerMsg, type UsageStats, type WallArtConfig } from '../../shared/types.ts';
 import { boardContent } from './scene/whiteboardContent.ts';
 import { activityTtl } from './scene/movieShots.ts';
 import { appendHistory } from './scene/monitorScrollback.ts';
@@ -174,6 +174,11 @@ interface AppStore {
   setPerfOverlay: (v: boolean) => void;
   /** optimistic local merge on drop; the server broadcast confirms it */
   patchLayout: (patch: OfficeLayout) => void;
+  /** true while the cursor is over the painting, so the wheel reframes it instead of doing nothing */
+  wallArtHover: boolean;
+  setWallArtHover: (v: boolean) => void;
+  /** optimistic local framing update while the wheel spins; the PUT lands debounced */
+  patchWallArt: (patch: Partial<WallArtConfig>) => void;
 }
 
 let whiteboardKey: string | null = null;
@@ -349,6 +354,12 @@ export const useStore = create<AppStore>((set, get) => ({
       };
       return { office: { ...s.office, layout } };
     }),
+  wallArtHover: false,
+  setWallArtHover: (wallArtHover) => (get().wallArtHover === wallArtHover ? undefined : set({ wallArtHover })),
+  patchWallArt: (patch) =>
+    set((s) =>
+      s.office?.wallArt ? { office: { ...s.office, wallArt: { ...s.office.wallArt, ...patch } } } : {},
+    ),
 }));
 
 /** test-only: forget the cached whiteboard key so the next state msg counts as "first" */

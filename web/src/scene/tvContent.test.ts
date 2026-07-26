@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { UsageStats } from '../../../shared/types.ts';
-import { formatDuration, formatTokens, formatUSD, tvContent, tvPageIndex, tvPages } from './tvContent.ts';
+import {
+  formatDuration,
+  formatTokens,
+  formatUSD,
+  localDowHourGrid,
+  tvContent,
+  tvPageIndex,
+  tvPages,
+} from './tvContent.ts';
 
 function baseStats(overrides: Partial<UsageStats> = {}): UsageStats {
   return {
@@ -16,9 +24,10 @@ function baseStats(overrides: Partial<UsageStats> = {}): UsageStats {
     turnMsTotal: 0,
     longestTurnMs: 0,
     peakHeadcount: 0,
-    hires: 0,
+    headcount: 0,
     byDay: {},
     hourCounts: {},
+    tokensByDowHour: {},
     ...overrides,
   };
 }
@@ -85,7 +94,8 @@ describe('tvPages', () => {
     expect(titles).not.toContain('Prompts');
     expect(titles).not.toContain('Avg turn');
     expect(titles).not.toContain('Web searches');
-    expect(titles).not.toContain('Office');
+    expect(titles).not.toContain('Head count');
+    expect(titles).not.toContain('Busiest hours');
     expect(titles).not.toContain('Cache reads');
     expect(titles).not.toContain('Cache writes');
     // tracking-since is always present
@@ -164,10 +174,57 @@ describe('tvPages', () => {
     expect(page.sub).toBeUndefined();
   });
 
+  it('shows the live head count, not lifetime hires', () => {
+    const stats = baseStats({ headcount: 4, peakHeadcount: 9 });
+    const page = tvPages(stats).find((p) => p.title === 'Head count')!;
+    expect(page.value).toBe('4');
+    expect(page.sub).toBe('peak 9');
+  });
+
+  it('still shows the head-count page for an empty office that once had staff', () => {
+    const titles = tvPages(baseStats({ headcount: 0, peakHeadcount: 3 })).map((p) => p.title);
+    expect(titles).toContain('Head count');
+  });
+
+  it('builds the busiest-hours chart page from the dow/hour grid', () => {
+    const stats = baseStats({ tokensByDowHour: { '2-9': 4_200_000 } }); // Tue 09:00 UTC
+    const page = tvPages(stats).find((p) => p.title === 'Busiest hours')!;
+    expect(page.chart?.kind).toBe('dowHours');
+    expect(page.chart!.grid).toHaveLength(7);
+    expect(page.chart!.grid[0]).toHaveLength(24);
+    expect(page.sub).toMatch(/^peak \w{3} \d\d:00 · 4\.2M$/);
+  });
+
   it('always includes tracking-since when stats exist', () => {
     const stats = baseStats();
     const page = tvPages(stats).find((p) => p.title === 'Tracking since')!;
     expect(page.value).toBe('3 days');
+  });
+});
+
+describe('localDowHourGrid', () => {
+  it('puts a UTC bucket on the matching Monday-first row when the zone is UTC', () => {
+    const grid = localDowHourGrid({ '2-9': 100 }, 0); // Tuesday 09:00
+    expect(grid[1][9]).toBe(100); // row 1 = Tue
+    expect(grid.flat().reduce((a, b) => a + b, 0)).toBe(100);
+  });
+
+  it('rolls back a day when the local shift crosses midnight backwards', () => {
+    // Tue 01:00 UTC in UTC-4 is Mon 21:00
+    const grid = localDowHourGrid({ '2-1': 50 }, -240);
+    expect(grid[0][21]).toBe(50);
+  });
+
+  it('rolls forward a day when the local shift crosses midnight forwards', () => {
+    // Sun 23:00 UTC in UTC+2 is Mon 01:00 — and Sunday is the last row, so it wraps
+    const grid = localDowHourGrid({ '0-23': 7 }, 120);
+    expect(grid[0][1]).toBe(7);
+  });
+
+  it('sums collisions and ignores malformed keys', () => {
+    const grid = localDowHourGrid({ '2-9': 3, '9-9': 100, 'x-1': 5, '2-99': 7 }, 0);
+    expect(grid[1][9]).toBe(3);
+    expect(grid.flat().reduce((a, b) => a + b, 0)).toBe(3);
   });
 });
 

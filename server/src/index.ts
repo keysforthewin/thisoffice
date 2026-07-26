@@ -6,6 +6,7 @@ import { Office } from './office.ts';
 import { startWatcher } from './watcher.ts';
 import { StatsAggregator } from './stats.ts';
 import { CharacterStore, sanitizeId, isAnimSlot, saveUpload, streamFile } from './characters.ts';
+import { DecorStore, isWallArtExt, wallArtContentType } from './decor.ts';
 
 const PORT = 4680;
 /** ~8k chars is the recommended bio size; hard cap leaves generous headroom */
@@ -17,6 +18,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATS_FILE = path.resolve(__dirname, '../../data/usage.json');
 
 const characters = new CharacterStore();
+const decor = new DecorStore();
 const office = new Office(() => characters.variantIds());
 const stats = new StatsAggregator(STATS_FILE);
 
@@ -162,8 +164,40 @@ const server = http.createServer((req, res) => {
       return send(200, { ok: true });
     }
     if (url.pathname === '/api/layout' && req.method === 'DELETE') {
+      // the painting is a wall hanging: resetting the room restores the built-in art
+      decor.clearWallArt();
       office.resetLayout();
       return send(200, { ok: true });
+    }
+    if (url.pathname === '/api/decor/wallart') {
+      if (req.method === 'GET') {
+        const art = office.getState().wallArt;
+        if (!art || !streamFile(decor.wallArtPath(art.ext), res, wallArtContentType(art.ext), 'public, max-age=31536000, immutable')) {
+          return send(404, { error: 'no custom wall art' });
+        }
+        return;
+      }
+      if (req.method === 'POST') {
+        const ext = (url.searchParams.get('ext') ?? '').toLowerCase();
+        if (!isWallArtExt(ext)) return send(400, { error: 'ext must be png, jpg or webp' });
+        const result = await saveUpload(req, decor.wallArtPath(ext), 'image');
+        if (!result.ok) return send(400, { error: result.error });
+        decor.clearWallArt(ext); // one painting at a time, whatever the previous format was
+        // a fresh upload resets the framing; `v` busts the immutable cache entry
+        office.setWallArt({ v: Date.now(), ext, zoom: 1, panX: 0 });
+        return send(200, { ok: true, wallArt: office.getState().wallArt });
+      }
+      if (req.method === 'PUT') {
+        const body = await readBody();
+        if (!office.getState().wallArt) return send(404, { error: 'no custom wall art' });
+        office.setWallArt({ zoom: body?.zoom, panX: body?.panX });
+        return send(200, { ok: true, wallArt: office.getState().wallArt });
+      }
+      if (req.method === 'DELETE') {
+        decor.clearWallArt();
+        office.clearWallArt();
+        return send(200, { ok: true });
+      }
     }
     if (url.pathname === '/api/employees' && req.method === 'POST') {
       return send(200, { ok: true, employee: office.hireManual() });
@@ -203,17 +237,8 @@ office.subscribe((msg) => broadcast(msg));
 
 startWatcher(office, stats);
 
-// No clean hook into Office's hire path is reachable from here (hire() is
-// private and assign()/hireManual() aren't instrumented), so hires are
-// inferred from headcount deltas on the same cadence as the headcount sample.
-let lastHeadcount = office.getState().employees.length;
 setInterval(() => {
-  const headcount = office.getState().employees.length;
-  if (headcount > lastHeadcount) {
-    for (let i = 0; i < headcount - lastHeadcount; i++) stats.recordHire();
-  }
-  lastHeadcount = headcount;
-  stats.recordHeadcount(headcount);
+  stats.recordHeadcount(office.getState().employees.length);
   if (stats.isDirty()) {
     stats.flush();
     broadcast({ type: 'stats', stats: stats.snapshot() });

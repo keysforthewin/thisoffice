@@ -790,6 +790,90 @@ describe('layout persistence', () => {
   });
 });
 
+describe('wall art', () => {
+  function tempFile() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'office-test-'));
+    return path.join(dir, 'office.json');
+  }
+
+  it('has no wall art until something is uploaded', () => {
+    expect(new Office(() => ['Knight'], tempFile()).getState().wallArt).toBeUndefined();
+  });
+
+  it('stores an upload and survives a reload', () => {
+    const file = tempFile();
+    const office = new Office(() => ['Knight'], file);
+    office.setWallArt({ v: 1234, ext: 'png', zoom: 1, panX: 0 });
+    expect(office.getState().wallArt).toEqual({ v: 1234, ext: 'png', zoom: 1, panX: 0 });
+    expect(new Office(() => ['Knight'], file).getState().wallArt).toEqual({ v: 1234, ext: 'png', zoom: 1, panX: 0 });
+  });
+
+  it('applies a framing-only patch on top of the stored upload', () => {
+    const office = new Office(() => ['Knight'], tempFile());
+    office.setWallArt({ v: 1, ext: 'jpg', zoom: 1, panX: 0 });
+    office.setWallArt({ zoom: 2.5, panX: -0.4 });
+    expect(office.getState().wallArt).toEqual({ v: 1, ext: 'jpg', zoom: 2.5, panX: -0.4 });
+  });
+
+  it('ignores a framing patch when no image is stored', () => {
+    const office = new Office(() => ['Knight'], tempFile());
+    office.setWallArt({ zoom: 3 });
+    expect(office.getState().wallArt).toBeUndefined();
+  });
+
+  it('clamps zoom and pan, and rejects an unknown extension', () => {
+    const office = new Office(() => ['Knight'], tempFile());
+    office.setWallArt({ v: 1, ext: 'png', zoom: 99, panX: 7 });
+    expect(office.getState().wallArt).toMatchObject({ zoom: 6, panX: 1 });
+    office.setWallArt({ zoom: 0.01, panX: -7 });
+    expect(office.getState().wallArt).toMatchObject({ zoom: 1, panX: -1 });
+    office.setWallArt({ v: 2, ext: 'gif' as any });
+    expect(office.getState().wallArt).toMatchObject({ v: 1, ext: 'png' });
+  });
+
+  it('drops non-finite framing values instead of storing them', () => {
+    const office = new Office(() => ['Knight'], tempFile());
+    office.setWallArt({ v: 1, ext: 'webp', zoom: 2, panX: 0.5 });
+    office.setWallArt({ zoom: NaN, panX: Infinity });
+    expect(office.getState().wallArt).toEqual({ v: 1, ext: 'webp', zoom: 2, panX: 0.5 });
+  });
+
+  it('clearWallArt and resetLayout both go back to the built-in artwork', () => {
+    const file = tempFile();
+    const office = new Office(() => ['Knight'], file);
+    office.setWallArt({ v: 1, ext: 'png' });
+    office.clearWallArt();
+    expect(office.getState().wallArt).toBeUndefined();
+    expect(new Office(() => ['Knight'], file).getState().wallArt).toBeUndefined();
+
+    office.setWallArt({ v: 2, ext: 'png' });
+    office.resetLayout();
+    expect(office.getState().wallArt).toBeUndefined();
+    expect(new Office(() => ['Knight'], file).getState().wallArt).toBeUndefined();
+  });
+
+  it('re-sanitizes a hand-edited office.json', () => {
+    const file = tempFile();
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        boss: { name: 'B', variant: 'Knight' },
+        employees: [],
+        wallArt: { v: 5, ext: 'png', zoom: 500, panX: -9 },
+      }),
+    );
+    expect(new Office(() => ['Knight'], file).getState().wallArt).toEqual({ v: 5, ext: 'png', zoom: 6, panX: -1 });
+  });
+
+  it('broadcasts state after a wall-art change', () => {
+    const office = new Office(() => ['Knight'], tempFile());
+    const msgs: any[] = [];
+    office.subscribe((m) => msgs.push(m));
+    office.setWallArt({ v: 9, ext: 'png' });
+    expect(msgs.find((m) => m.type === 'state')?.state.wallArt).toMatchObject({ v: 9, ext: 'png' });
+  });
+});
+
 describe('officeName', () => {
   function tempFile() {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'office-test-'));

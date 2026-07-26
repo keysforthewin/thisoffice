@@ -76,14 +76,19 @@ export function SettingsPanel() {
         <button
           style={styles.hire}
           onClick={() => {
-            if (confirm('Reset the office layout? Every desk, furniture piece, window and wall hanging returns to its default spot.'))
+            if (
+              confirm(
+                'Reset the office layout? Every desk, furniture piece, window and wall hanging returns to its default spot, and the painting goes back to the original artwork.',
+              )
+            )
               api('/layout', 'DELETE');
           }}
         >
           ↺ Reset layout
         </button>
         <div style={{ fontSize: 12, color: '#9aa4b0', marginTop: 6 }}>
-          Tip: press <b>B</b> in the free camera to rearrange the office.
+          Tip: press <b>B</b> in the free camera to rearrange the office. Click the painting behind the boss to hang
+          your own picture — scroll over it to zoom, ctrl+scroll to pan.
         </div>
       </div>
     </div>

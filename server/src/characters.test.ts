@@ -18,6 +18,19 @@ describe('validMagic', () => {
     expect(validMagic(Buffer.from('gl'), 'glb')).toBe(false);
     expect(validMagic(Buffer.from(''), 'glb')).toBe(false);
   });
+
+  it('accepts PNG, JPEG and WebP image headers', () => {
+    expect(validMagic(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]), 'image')).toBe(true);
+    expect(validMagic(Buffer.from([0xff, 0xd8, 0xff, 0xe0]), 'image')).toBe(true);
+    expect(validMagic(Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBP')]), 'image')).toBe(true);
+  });
+
+  it('rejects non-images, including a RIFF container that is not WebP', () => {
+    expect(validMagic(Buffer.from('glTF\x02\x00\x00\x00'), 'image')).toBe(false);
+    expect(validMagic(Buffer.from('<svg xmlns='), 'image')).toBe(false);
+    expect(validMagic(Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WAVE')]), 'image')).toBe(false);
+    expect(validMagic(Buffer.from('RIFF'), 'image')).toBe(false); // truncated
+  });
 });
 
 describe('clampScale', () => {

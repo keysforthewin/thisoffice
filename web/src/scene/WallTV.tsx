@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { enterFocusMode, useStore, type CameraPose } from '../store.ts';
 import { FurnitureModel } from './Desk.tsx';
-import { tvContent, tvPageIndex, TV_PAGE_MS, type TvPage } from './tvContent.ts';
+import { DOW_LABELS, formatTokens, tvContent, tvPageIndex, TV_PAGE_MS, type TvPage } from './tvContent.ts';
 import type { UsageStats } from '../../../shared/types.ts';
 
 const W = 640;
@@ -136,22 +136,32 @@ function drawTvPage(ctx: CanvasRenderingContext2D, page: TvPage, pageNum: number
   ctx.textAlign = 'center';
   drawLetterspaced(ctx, page.title.toUpperCase(), W / 2, 76, 2.5);
 
-  // value: huge centered, shrink-to-fit if wider than the canvas
-  const maxValueWidth = W - 60;
-  let valueSize = 88;
-  ctx.font = `bold ${valueSize}px ui-monospace, Menlo, monospace`;
-  while (ctx.measureText(page.value).width > maxValueWidth && valueSize > 32) {
-    valueSize -= 4;
+  if (page.chart) {
+    // chart pages trade the big value for the plot; the sub line moves up under the title
+    if (page.sub) {
+      ctx.fillStyle = SUB_COLOR;
+      ctx.font = '20px ui-monospace, Menlo, monospace';
+      ctx.fillText(page.sub, W / 2, 104);
+    }
+    drawDowHourChart(ctx, page.chart.grid);
+  } else {
+    // value: huge centered, shrink-to-fit if wider than the canvas
+    const maxValueWidth = W - 60;
+    let valueSize = 88;
     ctx.font = `bold ${valueSize}px ui-monospace, Menlo, monospace`;
-  }
-  ctx.fillStyle = VALUE_COLOR;
-  ctx.fillText(page.value, W / 2, H / 2 + valueSize * 0.32);
+    while (ctx.measureText(page.value).width > maxValueWidth && valueSize > 32) {
+      valueSize -= 4;
+      ctx.font = `bold ${valueSize}px ui-monospace, Menlo, monospace`;
+    }
+    ctx.fillStyle = VALUE_COLOR;
+    ctx.fillText(page.value, W / 2, H / 2 + valueSize * 0.32);
 
-  // sub line
-  if (page.sub) {
-    ctx.fillStyle = SUB_COLOR;
-    ctx.font = '28px ui-monospace, Menlo, monospace';
-    ctx.fillText(page.sub, W / 2, H / 2 + 62);
+    // sub line
+    if (page.sub) {
+      ctx.fillStyle = SUB_COLOR;
+      ctx.font = '28px ui-monospace, Menlo, monospace';
+      ctx.fillText(page.sub, W / 2, H / 2 + 62);
+    }
   }
 
   // page dots
@@ -170,6 +180,72 @@ function drawTvPage(ctx: CanvasRenderingContext2D, page: TvPage, pageNum: number
   }
 
   ctx.textAlign = 'left';
+}
+
+/** One colour per weekday, in DOW_LABELS order (Mon→Sun). */
+const DOW_COLORS = ['#7ee787', '#79c0ff', '#d2a8ff', '#ffa657', '#f778ba', '#ffd866', '#56d4dd'];
+const AXIS_COLOR = '#2a2f38';
+
+/** 24 hourly bars, each stacked by weekday, plus an hour axis and a weekday legend. */
+function drawDowHourChart(ctx: CanvasRenderingContext2D, grid: number[][]) {
+  const left = 48;
+  const right = W - 48;
+  const baseline = 268;
+  const top = 128;
+  const pitch = (right - left) / 24;
+  const barW = Math.floor(pitch) - 6;
+
+  const hourTotals = Array.from({ length: 24 }, (_, h) => grid.reduce((a, row) => a + (row[h] ?? 0), 0));
+  const max = Math.max(...hourTotals);
+  if (max <= 0) return;
+  const scale = (baseline - top) / max;
+
+  ctx.fillStyle = AXIS_COLOR;
+  ctx.fillRect(left, baseline, right - left, 1);
+
+  for (let h = 0; h < 24; h++) {
+    const x = Math.round(left + h * pitch + (pitch - barW) / 2);
+    let y = baseline;
+    for (let d = 0; d < 7; d++) {
+      const v = grid[d]?.[h] ?? 0;
+      if (v <= 0) continue;
+      // every non-zero weekday stays visible, however thin its slice of the hour
+      const segH = Math.max(1, v * scale);
+      y -= segH;
+      ctx.fillStyle = DOW_COLORS[d];
+      ctx.fillRect(x, y, barW, segH);
+    }
+  }
+
+  // hour ticks — only a few, so they stay legible from across the room
+  ctx.fillStyle = SUB_COLOR;
+  ctx.font = '15px ui-monospace, Menlo, monospace';
+  ctx.textAlign = 'center';
+  for (const h of [0, 6, 12, 18, 23]) {
+    ctx.fillText(String(h), left + h * pitch + pitch / 2, baseline + 20);
+  }
+
+  // peak-scale hint above the plot, so the bars have a magnitude
+  ctx.textAlign = 'left';
+  ctx.fillText(formatTokens(max), left, top - 6);
+
+  // legend
+  ctx.textAlign = 'left';
+  ctx.font = '15px ui-monospace, Menlo, monospace';
+  const chip = 9;
+  const items = DOW_LABELS.map((label) => ({ label, w: chip + 5 + ctx.measureText(label).width }));
+  const gap = 12;
+  const totalW = items.reduce((a, it) => a + it.w, 0) + gap * (items.length - 1);
+  let x = W / 2 - totalW / 2;
+  const y = 306;
+  items.forEach((it, d) => {
+    ctx.fillStyle = DOW_COLORS[d];
+    ctx.fillRect(x, y - chip + 1, chip, chip);
+    ctx.fillStyle = SUB_COLOR;
+    ctx.fillText(it.label, x + chip + 5, y);
+    x += it.w + gap;
+  });
+  ctx.textAlign = 'center';
 }
 
 function drawLetterspaced(ctx: CanvasRenderingContext2D, text: string, cx: number, y: number, spacing: number) {

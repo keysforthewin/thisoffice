@@ -302,9 +302,10 @@ describe('lastActivity stamping', () => {
       turnMsTotal: 0,
       longestTurnMs: 0,
       peakHeadcount: 0,
-      hires: 0,
+      headcount: 0,
       byDay: {},
       hourCounts: {},
+      tokensByDowHour: {},
     };
     useStore.getState().applyServerMsg({ type: 'stats', stats });
     expect(useStore.getState().stats).toEqual(stats);

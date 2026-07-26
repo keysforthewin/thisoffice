@@ -102,9 +102,10 @@ function emptyStats(): UsageStats {
     turnMsTotal: 0,
     longestTurnMs: 0,
     peakHeadcount: 0,
-    hires: 0,
+    headcount: 0,
     byDay: {},
     hourCounts: {},
+    tokensByDowHour: {},
   };
 }
 
@@ -237,6 +238,10 @@ export class StatsAggregator {
 
     if (dInput + dOutput > 0) {
       this.dayBucket(todayKey()).tokens += dInput + dOutput;
+      // UTC weekday+hour, same clock and same reasoning as hourCounts
+      const now = new Date();
+      const key = `${now.getUTCDay()}-${now.getUTCHours()}`;
+      this.stats.tokensByDowHour[key] = (this.stats.tokensByDowHour[key] ?? 0) + dInput + dOutput;
     }
 
     // update (or insert) the msgId snapshot; re-inserting on update keeps it
@@ -306,15 +311,12 @@ export class StatsAggregator {
   }
 
   recordHeadcount(n: number): void {
-    // only dirty the file (and the 15s broadcast/flush cycle) when the peak actually moves —
-    // otherwise an idle office with a stable headcount flushes/broadcasts forever.
-    if (n <= this.stats.peakHeadcount) return;
-    this.stats.peakHeadcount = n;
-    this.markDirty();
-  }
-
-  recordHire(): void {
-    this.stats.hires++;
+    // only dirty the file (and the 15s broadcast/flush cycle) when something actually
+    // moves — otherwise an idle office with a stable headcount flushes/broadcasts forever.
+    const changed = n !== this.stats.headcount || n > this.stats.peakHeadcount;
+    if (!changed) return;
+    this.stats.headcount = n;
+    this.stats.peakHeadcount = Math.max(this.stats.peakHeadcount, n);
     this.markDirty();
   }
 

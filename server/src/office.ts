@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { CharacterCatalog, Employee, OfficeState, InboxItem, ItemPose, OfficeLayout, StatusItem, TodoItem, ServerMsg, WorkerStatus, StaffingSettings } from '../../shared/types.ts';
-import { CHARACTER_VARIANTS, MONITOR_IMAGE_MARKER } from '../../shared/types.ts';
+import type { CharacterCatalog, Employee, OfficeState, InboxItem, ItemPose, OfficeLayout, StatusItem, TodoItem, ServerMsg, WallArtConfig, WallArtExt, WorkerStatus, StaffingSettings } from '../../shared/types.ts';
+import { CHARACTER_VARIANTS, MONITOR_IMAGE_MARKER, WALL_ART_EXTS, WALL_ART_ZOOM_MAX, WALL_ART_ZOOM_MIN } from '../../shared/types.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.resolve(__dirname, '../../data');
@@ -54,6 +54,29 @@ interface PersistedState {
   status?: StatusItem[];
   /** build-mode layout overrides; absent = default layout */
   layout?: OfficeLayout;
+  /** uploaded painting + its framing; the image itself lives in data/decor/ */
+  wallArt?: WallArtConfig;
+}
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+/**
+ * Merge a (possibly hostile, possibly hand-edited) wall-art patch. Returns
+ * undefined unless the result names a stored image, so a framing-only patch can
+ * never resurrect a painting that isn't on disk.
+ */
+export function mergeWallArt(base: WallArtConfig | undefined, patch: Partial<WallArtConfig>): WallArtConfig | undefined {
+  const ext = patch.ext ?? base?.ext;
+  const v = Number.isFinite(patch.v) ? patch.v! : base?.v;
+  if (!ext || !(WALL_ART_EXTS as readonly string[]).includes(ext) || v === undefined) return undefined;
+  const zoom = Number.isFinite(patch.zoom) ? patch.zoom! : base?.zoom ?? 1;
+  const panX = Number.isFinite(patch.panX) ? patch.panX! : base?.panX ?? 0;
+  return {
+    v,
+    ext: ext as WallArtExt,
+    zoom: clamp(zoom, WALL_ART_ZOOM_MIN, WALL_ART_ZOOM_MAX),
+    panX: clamp(panX, -1, 1),
+  };
 }
 
 /** Per-map key cap: a layout only ever holds a few dozen items; this is a garbage guard. */
@@ -350,6 +373,10 @@ export class Office {
       staffing: clampStaffing(persisted.staffing),
       // re-sanitize on load: office.json may have been hand-edited
       ...(persisted.layout ? { layout: mergeLayout(undefined, persisted.layout) } : {}),
+      ...(() => {
+        const art = persisted.wallArt ? mergeWallArt(undefined, persisted.wallArt) : undefined;
+        return art ? { wallArt: art } : {};
+      })(),
     };
   }
 
@@ -366,6 +393,7 @@ export class Office {
       todos: this.state.todos,
       status: this.state.status,
       ...(this.state.layout ? { layout: this.state.layout } : {}),
+      ...(this.state.wallArt ? { wallArt: this.state.wallArt } : {}),
     };
     fs.mkdirSync(path.dirname(this.dataFile), { recursive: true });
     fs.writeFileSync(this.dataFile, JSON.stringify(persisted, null, 2));
@@ -700,9 +728,30 @@ export class Office {
     this.broadcastState();
   }
 
-  /** Settings-panel reset: everything returns to the built-in default layout. */
+  /** Settings-panel reset: everything returns to the built-in default layout.
+   *  The uploaded painting is a wall hanging too, so it goes back to the
+   *  built-in artwork — deleting the stored image is the caller's job (the
+   *  route owns the filesystem side; see index.ts). */
   resetLayout() {
     delete this.state.layout;
+    delete this.state.wallArt;
+    this.save();
+    this.broadcastState();
+  }
+
+  /** A new upload (`v` + `ext`) or a framing change (`zoom`/`panX`) for the painting. */
+  setWallArt(patch: Partial<WallArtConfig>) {
+    const next = mergeWallArt(this.state.wallArt, patch);
+    if (!next) return;
+    this.state.wallArt = next;
+    this.save();
+    this.broadcastState();
+  }
+
+  /** Back to the built-in artwork. */
+  clearWallArt() {
+    if (!this.state.wallArt) return;
+    delete this.state.wallArt;
     this.save();
     this.broadcastState();
   }
