@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { askerAnchor } from './askerAnchor.ts';
+import { askerAnchor, fallbackAnchor } from './askerAnchor.ts';
 import { seatTransform, roomDims } from '../scene/layout.ts';
 import type { OfficeLayout } from '../../../shared/types.ts';
 
@@ -43,5 +43,22 @@ describe('askerAnchor', () => {
     // an unknown asker resolves to a null seat (the caller couldn't find them)
     expect(askerAnchor('ghost', null, noLayout, 5)).toBeNull();
     expect(askerAnchor('boss', null, null, 5)).toBeNull();
+  });
+
+  it('places an evicted asker at their old seat rather than nowhere', () => {
+    // the seat rides the question, so the asker's absence from the roster is
+    // irrelevant — the bubble stays put, and therefore stays answerable
+    const [x, , z] = askerAnchor('evicted-emp-1', 4, noLayout, 3)!;
+    expect(x).toBeCloseTo(seatTransform(4).position.x, 5);
+    expect(z).toBeCloseTo(seatTransform(4).position.z, 5);
+  });
+
+  it('fallbackAnchor lands inside the room, so a null resolution never renders nothing', () => {
+    const [x, y, z] = fallbackAnchor(5);
+    const { width, depth, centerZ } = roomDims(5);
+    expect(Math.abs(x)).toBeLessThan(width / 2);
+    expect(z).toBeGreaterThan(centerZ - depth / 2);
+    expect(z).toBeLessThan(centerZ + depth / 2);
+    expect(y).toBeGreaterThan(2.3);
   });
 });

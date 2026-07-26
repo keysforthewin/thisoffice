@@ -25,6 +25,8 @@ export interface QuizAsker {
   id: string;
   name: string;
   variant: string;
+  /** 0 for the boss, the employee's seat, null for Kat Person (furniture) */
+  seat: number | null;
   /** idle askers are preferred, but a busy office still plays */
   idle: boolean;
 }
@@ -79,6 +81,9 @@ export class Quiz {
       answers,
       // a bubble that predates a restart is dropped: the round resumes with a fresh question
       question: null,
+      // the photo handshake is ephemeral, and safely so: `win()` credits the
+      // tally and resets the round before either of these is set, so a restart
+      // inside the photo window costs the photo and nothing else
       awaitingPhoto: false,
       winner: null,
       ...(persisted?.photo ? { photo: persisted.photo } : {}),
@@ -123,6 +128,8 @@ export class Quiz {
     this.state.enabled = on;
     if (!on) {
       this.state.question = null;
+      // abandoning a photo handshake costs the photo only — the win was credited
+      // and the round closed in `win()`
       this.state.awaitingPhoto = false;
       this.state.winner = null;
       this.clearTimers();
@@ -197,6 +204,7 @@ export class Quiz {
       guess: parsed.guess,
       asker: asker.id,
       askerName: asker.name,
+      askerSeat: asker.seat,
       at: new Date(this.now()).toISOString(),
     };
     this.state.question = question;
@@ -233,29 +241,53 @@ export class Quiz {
     return 'ok';
   }
 
+  /**
+   * The win is the fact; the photo is decoration. Both durable consequences —
+   * crediting the tally and closing the round — happen here, synchronously, so
+   * that nothing about them lives in a `setTimeout` or in the unpersisted
+   * `winner`/`awaitingPhoto` fields. A restart, a disable, or a capture that
+   * never arrives can therefore only cost the photo, never the win, and can
+   * never resume a round that still holds the guessed word in `answers`.
+   *
+   * `recordWin` is called exactly once per win, from here and nowhere else.
+   */
   private win(q: QuizQuestion): void {
     const asker = this.deps.askers().find((a) => a.id === q.asker);
     const winner: QuizWinner = {
       name: q.askerName,
       variant: asker?.variant ?? '',
+      asker: q.asker,
+      seat: q.askerSeat,
       at: new Date(this.now()).toISOString(),
     };
+    this.deps.recordWin(winner.name);
+    this.deps.status(`🏆 ${winner.name} is Employee of the Month`);
+    // the round is over the moment the guess lands: reset it now (and persist),
+    // leaving only the ephemeral photo handshake and the celebration pause
+    this.resetRound();
     this.state.winner = winner;
     this.state.awaitingPhoto = true;
     this.publish();
     this.deps.requestCapture(winner);
-    // nobody watching, or a capture that failed: the win still counts
+    // nobody watching, or a capture that failed: only the photo is lost
     this.photoTimer = setTimeout(() => this.finishWin(false), PHOTO_TIMEOUT_MS);
     this.photoTimer.unref?.();
   }
 
-  /** A client delivered the photo. Returns false when we were not expecting one. */
-  attachPhoto(): boolean {
+  /**
+   * A client delivered the photo. Returns false when we were not expecting one.
+   * `commit` (if given) is what moves the staged upload into place: it runs
+   * inside the awaiting-photo guard and before the new metadata is published, so
+   * a late upload can never overwrite the hanging photo it is too late to claim.
+   */
+  attachPhoto(commit?: () => void): boolean {
     if (!this.state.awaitingPhoto || !this.state.winner) return false;
+    commit?.();
     this.finishWin(true);
     return true;
   }
 
+  /** Closes the photo handshake only. The win itself was already credited in `win`. */
   private finishWin(withPhoto: boolean): void {
     const winner = this.state.winner;
     if (!winner || !this.state.awaitingPhoto) return;
@@ -263,23 +295,33 @@ export class Quiz {
     this.photoTimer = null;
     this.state.awaitingPhoto = false;
     if (withPhoto) this.state.photo = { v: this.now(), name: winner.name };
-    this.deps.recordWin(winner.name);
-    this.deps.status(`🏆 ${winner.name} is Employee of the Month`);
     this.publish();
-    this.roundTimer = setTimeout(() => this.newRound(), CELEBRATION_MS);
+    // the timer is now responsible for one thing only: not asking the next
+    // question while the room admires the photo
+    this.roundTimer = setTimeout(() => this.openNextRound(), CELEBRATION_MS);
     this.roundTimer.unref?.();
   }
 
-  /** Fresh round: the photo deliberately survives until the next winner replaces it. */
-  private newRound(): void {
-    this.clearTimers();
+  /** The durable half of a round change; the photo deliberately survives it. */
+  private resetRound(): void {
     this.state.roundId = nextId('r');
     this.state.askedCount = 0;
     this.state.answers = [];
     this.state.question = null;
+  }
+
+  /** Celebration over: clear the winner and open the next round. */
+  private openNextRound(): void {
+    this.clearTimers();
     this.state.winner = null;
     this.state.awaitingPhoto = false;
     this.publish();
     void this.askNext();
+  }
+
+  /** Fresh round with no winner — the Q20 concession path. */
+  private newRound(): void {
+    this.resetRound();
+    this.openNextRound();
   }
 }

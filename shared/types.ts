@@ -112,12 +112,24 @@ export interface QuizQuestion {
   /** 'boss' | 'catPerson' | an employee id */
   asker: string;
   askerName: string;
+  /**
+   * The asker's seat, captured when the question was asked: 0 for the boss, the
+   * employee's seat number, `null` for Kat Person (furniture, not staff). The
+   * game is player-paced, so a bubble can outlive its asker's eviction from the
+   * roster (`Office.fireIfIdle`, 60 s by default) — carrying the seat here keeps
+   * the bubble placeable and therefore answerable regardless of the live roster.
+   */
+  askerSeat: number | null;
   at: string;
 }
 
 export interface QuizWinner {
   name: string;
   variant: string;
+  /** 'boss' | 'catPerson' | an employee id — durable, unlike a name lookup */
+  asker: string;
+  /** the winner's seat at win time; see `QuizQuestion.askerSeat` */
+  seat: number | null;
   at: string;
 }
 
@@ -130,7 +142,11 @@ export interface EotmPhoto {
 
 export interface QuizState {
   enabled: boolean;
-  /** bumped every round; clients use it to drop bubbles from a finished round */
+  /**
+   * Bumped every round. Informational only: round ids carry no ordering, so
+   * clients cannot use one to decide whether a bubble is stale — the question
+   * `id` echoed back on an answer is the only staleness guard.
+   */
   roundId: string;
   askedCount: number;
   answers: QuizAnswer[];

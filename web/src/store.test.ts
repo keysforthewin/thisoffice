@@ -471,7 +471,15 @@ const quizState = (over: Partial<QuizState> = {}): QuizState => ({
   roundId: 'r1',
   askedCount: 1,
   answers: [],
-  question: { id: 'q1', text: 'Is it alive?', guess: false, asker: 'e1', askerName: 'Dana', at: '2026-07-26T00:00:00.000Z' },
+  question: {
+    id: 'q1',
+    text: 'Is it alive?',
+    guess: false,
+    asker: 'e1',
+    askerName: 'Dana',
+    askerSeat: 1,
+    at: '2026-07-26T00:00:00.000Z',
+  },
   awaitingPhoto: false,
   winner: null,
   ...over,
@@ -491,7 +499,7 @@ describe('quiz messages', () => {
     useStore.getState().applyServerMsg({ type: 'quiz', quiz: quizState({ awaitingPhoto: true }) });
     expect(useStore.getState().pendingCapture).toBeNull();
 
-    const winner = { name: 'Dana', variant: 'Mage', at: '2026-07-26T00:00:00.000Z' };
+    const winner = { name: 'Dana', variant: 'Mage', asker: 'e1', seat: 1, at: '2026-07-26T00:00:00.000Z' };
     useStore.getState().applyServerMsg({ type: 'quiz', quiz: quizState({ awaitingPhoto: true, winner }), capture: winner });
     expect(useStore.getState().pendingCapture).toEqual(winner);
 
@@ -500,14 +508,14 @@ describe('quiz messages', () => {
   });
 
   it('drops a pending capture when the server stops waiting for a photo', () => {
-    const winner = { name: 'Dana', variant: 'Mage', at: '2026-07-26T00:00:00.000Z' };
+    const winner = { name: 'Dana', variant: 'Mage', asker: 'e1', seat: 1, at: '2026-07-26T00:00:00.000Z' };
     useStore.getState().applyServerMsg({ type: 'quiz', quiz: quizState({ awaitingPhoto: true, winner }), capture: winner });
     useStore.getState().applyServerMsg({ type: 'quiz', quiz: quizState({ awaitingPhoto: false }) });
     expect(useStore.getState().pendingCapture).toBeNull();
   });
 
   it('keeps a pending capture across a later broadcast that carries no capture field, while still awaiting a photo', () => {
-    const winner = { name: 'Dana', variant: 'Mage', at: '2026-07-26T00:00:00.000Z' };
+    const winner = { name: 'Dana', variant: 'Mage', asker: 'e1', seat: 1, at: '2026-07-26T00:00:00.000Z' };
     useStore.getState().applyServerMsg({ type: 'quiz', quiz: quizState({ awaitingPhoto: true, winner }), capture: winner });
     expect(useStore.getState().pendingCapture).toEqual(winner);
 

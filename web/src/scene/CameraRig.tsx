@@ -278,7 +278,7 @@ function FocusControls({ target }: { target: string }) {
 /**
  * Runs only when the server asked THIS client for the winner's photo: fly to the
  * group shot, hold a beat, shoot, upload, fly back. Failure is silent by design —
- * the server's photo timeout credits the win regardless.
+ * the win is credited server-side the moment the guess lands, photo or not.
  *
  * Office state is read once via `useStore.getState()` rather than subscribed to:
  * a subscription would re-run this effect (and restart the fly-in) on every
@@ -289,10 +289,11 @@ function PhotoControls({ winner, maxSeat }: { winner: QuizWinner; maxSeat: numbe
 
   useEffect(() => {
     const office = useStore.getState().office;
-    const employee = office?.employees.find((e) => e.name === winner.name);
-    const askerId = office?.boss.name === winner.name ? 'boss' : employee ? employee.id : 'catPerson';
-    const seat = employee ? employee.seat : null;
-    const anchor = office ? askerAnchor(askerId, seat, { layout: office.layout }, maxSeat) : null;
+    // identity rides the protocol (`winner.asker` / `winner.seat`), never a name
+    // lookup in the live roster: a winner idle-evicted between the guess and the
+    // capture would otherwise fall through to Kat Person and be photographed
+    // under someone else's name.
+    const anchor = office ? askerAnchor(winner.asker, winner.seat, { layout: office.layout }, maxSeat) : null;
     if (!anchor) {
       useStore.getState().clearPendingCapture();
       return;

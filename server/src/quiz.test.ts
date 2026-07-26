@@ -11,9 +11,9 @@ function harness(over: Partial<QuizDeps> = {}) {
   const wins: string[] = [];
   const captures: string[] = [];
   const askers: QuizAsker[] = [
-    { id: 'boss', name: 'Boss', variant: 'Knight', idle: true },
-    { id: 'e1', name: 'Dana', variant: 'Mage', idle: true },
-    { id: 'catPerson', name: 'Kat Person', variant: 'CatPerson', idle: true },
+    { id: 'boss', name: 'Boss', variant: 'Knight', seat: 0, idle: true },
+    { id: 'e1', name: 'Dana', variant: 'Mage', seat: 1, idle: true },
+    { id: 'catPerson', name: 'Kat Person', variant: 'CatPerson', seat: null, idle: true },
   ];
   let reply = '{"question":"Is it alive?","guess":false}';
   const deps: QuizDeps = {
@@ -127,7 +127,9 @@ describe('Quiz', () => {
     expect(st.awaitingPhoto).toBe(true);
     expect(st.question).toBeNull();
     expect(h.captures).toEqual([askerName]);
-    expect(h.wins).toEqual([]); // not credited until the photo resolves
+    // the win is the fact, the photo is decoration: credited the moment the
+    // guess lands, so nothing downstream of here can cost the player the win
+    expect(h.wins).toEqual([askerName]);
   });
 
   it('credits the win, hangs the photo, and starts a new round after the celebration', async () => {
@@ -135,9 +137,9 @@ describe('Quiz', () => {
     h.quiz.setEnabled(true);
     await settle();
     const askerName = h.quiz.getState().question!.askerName;
+    const roundId = h.quiz.getState().roundId;
     h.answerCurrent('yes');
     await settle();
-    const roundId = h.quiz.getState().roundId;
 
     expect(h.quiz.attachPhoto()).toBe(true);
     expect(h.wins).toEqual([askerName]);
@@ -237,15 +239,15 @@ describe('Quiz', () => {
 
   it('prefers idle employees but still plays when everyone is busy', async () => {
     const askers: QuizAsker[] = [
-      { id: 'e1', name: 'Busy', variant: 'Mage', idle: false },
-      { id: 'e2', name: 'Free', variant: 'Rogue', idle: true },
+      { id: 'e1', name: 'Busy', variant: 'Mage', seat: 1, idle: false },
+      { id: 'e2', name: 'Free', variant: 'Rogue', seat: 2, idle: true },
     ];
     const h = harness({ askers: () => askers });
     h.quiz.setEnabled(true);
     await settle();
     expect(h.quiz.getState().question!.asker).toBe('e2');
 
-    const busy: QuizAsker[] = [{ id: 'e1', name: 'Busy', variant: 'Mage', idle: false }];
+    const busy: QuizAsker[] = [{ id: 'e1', name: 'Busy', variant: 'Mage', seat: 1, idle: false }];
     const h2 = harness({ askers: () => busy });
     h2.quiz.setEnabled(true);
     await settle();
@@ -310,7 +312,7 @@ describe('Quiz', () => {
 
   it('round-trips through the data file, dropping awaitingPhoto', async () => {
     const dataFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'quiz-')), 'quiz.json');
-    const h = harness({ dataFile, ask: vi.fn(async () => '{"question":"Is it a cat?","guess":true}') });
+    const h = harness({ dataFile });
     h.quiz.setEnabled(true);
     await settle();
     h.answerCurrent('yes');
@@ -332,6 +334,98 @@ describe('Quiz', () => {
     const h = harness({ dataFile });
     expect(h.quiz.getState().enabled).toBe(false);
     expect(h.quiz.getState().answers).toHaveLength(0);
+  });
+
+  it('records exactly one win per victory, whichever way the photo resolves', async () => {
+    const h = harness({ ask: vi.fn(async () => '{"question":"Is it a cat?","guess":true}') });
+    h.quiz.setEnabled(true);
+    await settle();
+    h.answerCurrent('yes');
+    await settle();
+    expect(h.wins).toHaveLength(1);
+    expect(h.quiz.attachPhoto()).toBe(true); // the photo arrives
+    expect(h.quiz.attachPhoto()).toBe(false); // a second, late upload
+    await vi.advanceTimersByTimeAsync(20_000); // and the timeout fires anyway
+    await settle();
+    expect(h.wins).toHaveLength(1);
+
+    // the other order: timeout first, photo afterwards
+    const h2 = harness({ ask: vi.fn(async () => '{"question":"Is it a dog?","guess":true}') });
+    h2.quiz.setEnabled(true);
+    await settle();
+    h2.answerCurrent('yes');
+    await settle();
+    await vi.advanceTimersByTimeAsync(20_000);
+    await settle();
+    expect(h2.quiz.attachPhoto()).toBe(false);
+    expect(h2.wins).toHaveLength(1);
+  });
+
+  it('keeps the win when the server restarts inside the photo window', async () => {
+    const dataFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'quiz-')), 'quiz.json');
+    const h = harness({ dataFile, ask: vi.fn(async () => '{"question":"Is it a cat?","guess":true}') });
+    h.quiz.setEnabled(true);
+    await settle();
+    const askerName = h.quiz.getState().question!.askerName;
+    h.answerCurrent('yes');
+    await settle();
+    expect(h.wins).toEqual([askerName]); // credited before the photo, and persisted-safe
+    h.quiz.stop(); // process exits mid-window: no finishWin, no newRound
+
+    // the resumed round must not re-interrogate the already-guessed word
+    const h2 = harness({ dataFile });
+    await settle();
+    const st = h2.quiz.getState();
+    expect(st.answers).toHaveLength(0);
+    expect(st.awaitingPhoto).toBe(false);
+    expect(st.winner).toBeNull();
+    expect(h2.wins).toEqual([]); // and the win is not double-counted on resume
+  });
+
+  it('keeps the win when the game is disabled inside the photo window', async () => {
+    const h = harness({ ask: vi.fn(async () => '{"question":"Is it a cat?","guess":true}') });
+    h.quiz.setEnabled(true);
+    await settle();
+    const askerName = h.quiz.getState().question!.askerName;
+    h.answerCurrent('yes');
+    await settle();
+    h.quiz.setEnabled(false);
+    expect(h.wins).toEqual([askerName]);
+    expect(h.quiz.getState().answers).toHaveLength(0); // round already closed
+  });
+
+  it('keeps the celebration durable: a restart during it resumes a clean round', async () => {
+    const dataFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'quiz-')), 'quiz.json');
+    const h = harness({ dataFile, ask: vi.fn(async () => '{"question":"Is it a cat?","guess":true}') });
+    h.quiz.setEnabled(true);
+    await settle();
+    h.answerCurrent('yes');
+    await settle();
+    h.quiz.attachPhoto();
+    h.quiz.stop(); // restart during the 15 s celebration
+
+    const h2 = harness({ dataFile });
+    await settle();
+    expect(h2.quiz.getState().answers).toHaveLength(0);
+    expect(h2.quiz.getState().question).not.toBeNull();
+  });
+
+  it('carries the asker seat on the question and the winner, for the roster-independent bubble', async () => {
+    const askers: QuizAsker[] = [{ id: 'e9', name: 'Rey', variant: 'Mage', seat: 5, idle: true }];
+    const h = harness({ askers: () => askers, ask: vi.fn(async () => '{"question":"Is it a cat?","guess":true}') });
+    h.quiz.setEnabled(true);
+    await settle();
+    const q = h.quiz.getState().question!;
+    expect(q.askerSeat).toBe(5);
+
+    // the asker is evicted mid-question: the bubble must stay answerable, and
+    // the winner must still identify the right person
+    askers.length = 0;
+    expect(h.quiz.answer(q.id, 'yes')).toBe('ok');
+    const winner = h.quiz.getState().winner!;
+    expect(winner.asker).toBe('e9');
+    expect(winner.seat).toBe(5);
+    expect(winner.name).toBe('Rey');
   });
 
   it('never puts a capture flag on the broadcast state', async () => {

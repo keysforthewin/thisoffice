@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import type { OfficeState } from '../../../shared/types.ts';
 import { useStore } from '../store.ts';
-import { selectAskerSeat } from './SpeechBubble.tsx';
+import { askerAnchor } from './askerAnchor.ts';
+import { seatTransform } from '../scene/layout.ts';
 
 function makeOffice(overrides: Partial<OfficeState> = {}): OfficeState {
   return {
@@ -19,11 +20,14 @@ function makeOffice(overrides: Partial<OfficeState> = {}): OfficeState {
 }
 
 describe('SpeechBubble store subscriptions', () => {
-  it('selectAskerSeat is Object.is-stable across a broadcast that only changes an unrelated field', () => {
-    // Simulate two server broadcasts the way ws.ts really delivers them: each
-    // one JSON.parses to a brand-new `employees` array, even though the
-    // roster itself (and this asker's seat) hasn't changed. Only `status`
-    // differs between the two, mimicking a status-board push.
+  it('anchors the bubble from the question, not the live roster', () => {
+    // The asker is idle-evicted while their question is still up — the only
+    // recoverable state at that point is what rode the protocol. Resolving the
+    // anchor from `question.askerSeat` (as SpeechBubble does) must therefore
+    // still place the bubble, because the server keeps holding this question
+    // until this bubble answers it. It also keeps the store subscription cheap:
+    // nothing here reads `office.employees`, which ws.ts JSON.parses into a
+    // fresh array on every single broadcast.
     const apply = useStore.getState().applyServerMsg;
     apply({
       type: 'quiz',
@@ -32,27 +36,28 @@ describe('SpeechBubble store subscriptions', () => {
         roundId: 'r1',
         askedCount: 1,
         answers: [],
-        question: { id: 'q1', text: 'Is it alive?', guess: false, asker: 'e1', askerName: 'Dana', at: 'now' },
+        question: {
+          id: 'q1',
+          text: 'Is it alive?',
+          guess: false,
+          asker: 'gone-9',
+          askerName: 'Dana',
+          askerSeat: 5,
+          at: 'now',
+        },
         awaitingPhoto: false,
         winner: null,
       },
     } as never);
-    apply({ type: 'state', state: makeOffice({ status: [] }) });
-    const seatBefore = selectAskerSeat(useStore.getState());
+    // roster with no trace of the asker, exactly as after an eviction
+    apply({ type: 'state', state: makeOffice() });
 
-    apply({
-      type: 'state',
-      state: JSON.parse(
-        JSON.stringify(makeOffice({ status: [{ id: 's1', kind: 'boss', text: 'unrelated status push', at: 'now' }] })),
-      ),
-    });
-    const seatAfter = selectAskerSeat(useStore.getState());
-
-    // The selector reruns (zustand always reruns selectors), but its *output*
-    // is Object.is-equal — this is what actually prevents SpeechBubble from
-    // re-rendering, regardless of `office.employees` being a fresh array both times.
-    expect(Object.is(seatBefore, seatAfter)).toBe(true);
-    expect(seatBefore).toBe(1);
+    const st = useStore.getState();
+    const q = st.quiz!.question!;
+    const anchor = askerAnchor(q.asker, q.askerSeat, { layout: st.office?.layout }, 5);
+    expect(anchor).not.toBeNull();
+    expect(anchor![0]).toBeCloseTo(seatTransform(5).position.x, 5);
+    expect(anchor![2]).toBeCloseTo(seatTransform(5).position.z, 5);
   });
 
   it('office.layout stays reference-stable across the same kind of unrelated broadcast', () => {

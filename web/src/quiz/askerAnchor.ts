@@ -1,5 +1,6 @@
 import type { OfficeState } from '../../../shared/types.ts';
 import { resolveFurniture, resolveSeat } from '../scene/buildLayout.ts';
+import { roomDims } from '../scene/layout.ts';
 
 /**
  * World scale is ~1.35x human: characters are ~2.3 units tall, so the bubble
@@ -12,15 +13,15 @@ const BUBBLE_Y = 3.0;
  * not staff, so her anchor comes from the layout rather than a seat.
  *
  * `office` is narrowed to just `layout` (not the whole `OfficeState`) and the
- * employee's seat is passed in separately, already resolved by the caller.
- * That split exists for the store subscriber, not this function: `layout` is
- * the one field of `office` the store keeps reference-stable across
- * unrelated broadcasts (`stableLayout` in store.ts), while `office.employees`
- * is a fresh array on every message (ws.ts JSON.parses each one). Deriving
- * `seat` inside a selector — rather than handing this function the whole
- * employees array — turns that per-message noise into a plain number the
- * store can compare with `Object.is`, so the bubble only re-renders when the
- * asker's actual seat changes.
+ * seat is passed in separately. `seat` comes off the protocol — `askerSeat` on
+ * the question, `seat` on the winner — never from a lookup in the live roster:
+ * the game is player-paced, so an idle asker can be evicted (`fireIfIdle`,
+ * 60 s by default) while their bubble is still up, and a roster lookup would
+ * then resolve to nothing and strand an unanswerable question. Taking `layout`
+ * alone also keeps the store subscription cheap: `layout` is the one field of
+ * `office` the store keeps reference-stable across unrelated broadcasts
+ * (`stableLayout` in store.ts), while `office.employees` is a fresh array on
+ * every message (ws.ts JSON.parses each one).
  */
 export function askerAnchor(
   asker: string,
@@ -39,4 +40,13 @@ export function askerAnchor(
   if (resolvedSeat === null) return null;
   const { position } = resolveSeat(office.layout, resolvedSeat, maxSeat);
   return [position.x, BUBBLE_Y, position.z];
+}
+
+/**
+ * Last resort when nothing about the asker can be resolved: the middle of the
+ * room. A misplaced bubble is a cosmetic problem; a missing one is a stuck game,
+ * because the server keeps holding the question and only the bubble can answer it.
+ */
+export function fallbackAnchor(maxSeat: number): [number, number, number] {
+  return [0, BUBBLE_Y, roomDims(maxSeat).centerZ];
 }

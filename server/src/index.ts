@@ -33,9 +33,15 @@ const stats = new StatsAggregator(STATS_FILE);
 const quizAskers = (): QuizAsker[] => {
   const st = office.getState();
   return [
-    { id: 'boss', name: st.boss.name, variant: st.boss.variant, idle: st.bossStatus === 'idle' },
-    ...st.employees.map((e) => ({ id: e.id, name: e.name, variant: e.variant, idle: e.status === 'idle' })),
-    { id: 'catPerson', name: 'Kat Person', variant: 'CatPerson', idle: true },
+    { id: 'boss', name: st.boss.name, variant: st.boss.variant, seat: 0, idle: st.bossStatus === 'idle' },
+    ...st.employees.map((e) => ({
+      id: e.id,
+      name: e.name,
+      variant: e.variant,
+      seat: e.seat,
+      idle: e.status === 'idle',
+    })),
+    { id: 'catPerson', name: 'Kat Person', variant: 'CatPerson', seat: null, idle: true },
   ];
 };
 
