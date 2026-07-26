@@ -39,7 +39,7 @@ export interface StatusItem {
   at: string;
   /** one readable line, capped server-side */
   text: string;
-  kind: 'boss' | 'done' | 'hire' | 'plan' | 'away' | 'session';
+  kind: 'boss' | 'done' | 'hire' | 'plan' | 'away' | 'session' | 'quiz';
 }
 
 export interface TodoItem {
@@ -89,6 +89,64 @@ export interface WallArtConfig {
 
 export const WALL_ART_ZOOM_MIN = 1;
 export const WALL_ART_ZOOM_MAX = 6;
+
+/** One resolved question in the current round. */
+export interface QuizAnswer {
+  question: string;
+  answer: 'yes' | 'no';
+  /** true when the asker was making an outright guess rather than narrowing down */
+  guess: boolean;
+  askerName: string;
+  at: string;
+}
+
+/**
+ * The live speech bubble. Null while the office is thinking of its next
+ * question, and while the game is disabled.
+ */
+export interface QuizQuestion {
+  /** answers must echo this back; guards against two tabs answering one bubble */
+  id: string;
+  text: string;
+  guess: boolean;
+  /** 'boss' | 'catPerson' | an employee id */
+  asker: string;
+  askerName: string;
+  at: string;
+}
+
+export interface QuizWinner {
+  name: string;
+  variant: string;
+  at: string;
+}
+
+/** Photo hanging in the Employee of the Month frame. Absent = empty frame. */
+export interface EotmPhoto {
+  /** capture timestamp; doubles as the cache-buster on /api/decor/eotm */
+  v: number;
+  name: string;
+}
+
+export interface QuizState {
+  enabled: boolean;
+  /** bumped every round; clients use it to drop bubbles from a finished round */
+  roundId: string;
+  askedCount: number;
+  answers: QuizAnswer[];
+  question: QuizQuestion | null;
+  /** true while the server is waiting on a client to deliver the win photo (never persisted) */
+  awaitingPhoto: boolean;
+  winner: QuizWinner | null;
+  photo?: EotmPhoto;
+}
+
+/** From this question number on, the asker must make an outright guess. */
+export const QUIZ_GUESS_FROM = 15;
+/** At this many questions the office concedes and a fresh round starts. */
+export const QUIZ_MAX_QUESTIONS = 20;
+/** Questions stay one short line; anything longer is truncated. */
+export const QUIZ_QUESTION_MAX_CHARS = 120;
 
 export interface OfficeState {
   /** HUD title; user-editable, defaults to "This Office" */
@@ -148,6 +206,8 @@ export interface UsageStats {
    * into the viewer's zone, which rolls the weekday when the hour wraps.
    */
   tokensByDowHour: Record<string, number>;
+  /** 20 Questions wins, keyed by employee name (a rehired name inherits its wins) */
+  gameWins: Record<string, number>;
 }
 
 /**
@@ -171,7 +231,16 @@ export type ServerMsg =
       clear?: boolean;
     }
   | { type: 'catalog'; catalog: CharacterCatalog }
-  | { type: 'stats'; stats: UsageStats };
+  | { type: 'stats'; stats: UsageStats }
+  | {
+      type: 'quiz';
+      quiz: QuizState;
+      /**
+       * Set only on the message sent to the single client asked to take the
+       * winner's photo. Never present on the state sent to a new connection.
+       */
+      capture?: QuizWinner;
+    };
 
 export interface CharacterEntry {
   /** GLB basename, doubles as the `variant` string persisted in office.json */

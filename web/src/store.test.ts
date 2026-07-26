@@ -306,6 +306,7 @@ describe('lastActivity stamping', () => {
       byDay: {},
       hourCounts: {},
       tokensByDowHour: {},
+      gameWins: {},
     };
     useStore.getState().applyServerMsg({ type: 'stats', stats });
     expect(useStore.getState().stats).toEqual(stats);

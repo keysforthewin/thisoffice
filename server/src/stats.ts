@@ -106,6 +106,7 @@ function emptyStats(): UsageStats {
     byDay: {},
     hourCounts: {},
     tokensByDowHour: {},
+    gameWins: {},
   };
 }
 
@@ -317,6 +318,14 @@ export class StatsAggregator {
     if (!changed) return;
     this.stats.headcount = n;
     this.stats.peakHeadcount = Math.max(this.stats.peakHeadcount, n);
+    this.markDirty();
+  }
+
+  /** A 20 Questions round was won. Keyed by name so a rehired employee keeps her wins. */
+  recordGameWin(name: string): void {
+    const key = name.trim();
+    if (!key) return;
+    this.stats.gameWins[key] = (this.stats.gameWins[key] ?? 0) + 1;
     this.markDirty();
   }
 
