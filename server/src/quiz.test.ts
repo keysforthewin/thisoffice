@@ -115,6 +115,72 @@ describe('Quiz', () => {
     expect(h.quiz.getState().question).not.toBeNull();
   });
 
+  describe('restart', () => {
+    it('drops the round in progress and opens a fresh one', async () => {
+      const h = harness();
+      h.quiz.setEnabled(true);
+      await settle();
+      h.answerCurrent('yes');
+      await settle();
+      const stale = h.quiz.getState();
+      expect(stale.answers).toHaveLength(1);
+      expect(stale.askedCount).toBe(2);
+
+      h.quiz.restart();
+      await settle();
+      const st = h.quiz.getState();
+      expect(st.answers).toEqual([]);
+      // the counter reset, then the fresh round's opening question landed
+      expect(st.askedCount).toBe(1);
+      expect(st.roundId).not.toBe(stale.roundId);
+      // a new question is up, so the office carries on playing
+      expect(st.question).not.toBeNull();
+      expect(st.question!.id).not.toBe(stale.question?.id);
+      expect(h.statuses).toContain('20 questions: starting a new round');
+    });
+
+    it('frees a winner still waiting on a photo', async () => {
+      const h = harness({ ask: vi.fn(async () => '{"question":"Is it a cat?","guess":true}') });
+      h.quiz.setEnabled(true);
+      await settle();
+      h.answerCurrent('yes');
+      await settle();
+      expect(h.quiz.getState().awaitingPhoto).toBe(true);
+
+      h.quiz.restart();
+      await settle();
+      const st = h.quiz.getState();
+      expect(st.awaitingPhoto).toBe(false);
+      expect(st.winner).toBeNull();
+      // the win was already banked when the guess landed — restarting is not a
+      // way to take it back
+      expect(h.wins).toHaveLength(1);
+    });
+
+    it('keeps the wall photo, which outlives every round', async () => {
+      const h = harness({ ask: vi.fn(async () => '{"question":"Is it a cat?","guess":true}') });
+      h.quiz.setEnabled(true);
+      await settle();
+      h.answerCurrent('yes');
+      await settle();
+      h.quiz.attachPhoto(() => true);
+      const photo = h.quiz.getState().photo;
+      expect(photo).toBeTruthy();
+
+      h.quiz.restart();
+      await settle();
+      expect(h.quiz.getState().photo).toEqual(photo);
+    });
+
+    it('asks nothing while the game is switched off', async () => {
+      const h = harness();
+      h.quiz.restart();
+      await settle();
+      expect(h.deps.ask).not.toHaveBeenCalled();
+      expect(h.quiz.getState().question).toBeNull();
+    });
+  });
+
   it('crowns a winner when a guess is answered YES, and asks for a photo', async () => {
     const h = harness({ ask: vi.fn(async () => '{"question":"Is it a cat?","guess":true}') });
     h.quiz.setEnabled(true);

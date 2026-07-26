@@ -20,6 +20,8 @@ import {
   pickShot,
   pointInFrame,
   BEACON_KEY,
+  QUIZ_KEY,
+  quizSubject,
   SINGLE_POOL,
   GROUP_POOL,
   IDLE_POOL,
@@ -226,7 +228,9 @@ describe('subjectFor', () => {
       const { width, centerZ } = roomDims(ms);
       const s = subjectFor('tv', makeOffice({ employees: Array.from({ length: ms }, (_, i) => makeEmployee({ id: `e${i}`, seat: i + 1 })) }))!;
       expect(s.center.z).toBeCloseTo(centerZ - 5.0, 6);
-      expect(s.center.x).toBeCloseTo(-width / 2 + 0.07, 6);
+      // the mount point on the wall plane; the few cm the TV body stands off it
+      // don't move the framing, and keeping it here would duplicate a render constant
+      expect(s.center.x).toBeCloseTo(-width / 2, 6);
     }
   });
 
@@ -405,6 +409,51 @@ describe('shots', () => {
 
   it('an idle office still gets the far/wide idle coverage', () => {
     expect(runCuts({}, 8).every((s) => IDLE_POOL.includes(s.archetype))).toBe(true);
+  });
+
+  describe('the 20 questions bubble as a subject', () => {
+    const anchor: [number, number, number] = [0, 3, -4.6]; // the boss asking, at their desk
+
+    it('is cut to when the office is otherwise silent, instead of pure B-roll', () => {
+      const shots = runCuts({}, 8, { quizAnchor: anchor });
+      expect(shots.some((s) => s.primaryKey === QUIZ_KEY)).toBe(true);
+    });
+
+    it('shares the quiet office with the ambient boards rather than owning every cut', () => {
+      const now = 100_000;
+      const shots = runCuts({ statusboard: now - 1, tv: now - 1 }, 12, { quizAnchor: anchor });
+      const primaries = new Set(shots.map((s) => s.primaryKey));
+      expect(primaries.has(QUIZ_KEY)).toBe(true);
+      expect([...primaries].some((k) => k === 'statusboard' || k === 'tv')).toBe(true);
+    });
+
+    it('yields entirely to a live monitor — real work outranks the game', () => {
+      const now = 100_000;
+      const shots = runCuts({ e1: now - 1, e2: now - 1 }, 10, { quizAnchor: anchor });
+      expect(shots.some((s) => s.primaryKey === QUIZ_KEY)).toBe(false);
+    });
+
+    it('yields to the todo board too, which is live rather than ambient', () => {
+      const now = 100_000;
+      const shots = runCuts({ whiteboard: now - 1 }, 8, { quizAnchor: anchor });
+      expect(shots.some((s) => s.primaryKey === QUIZ_KEY)).toBe(false);
+    });
+
+    it('is absent when no question is up', () => {
+      expect(runCuts({}, 8, { quizAnchor: null }).some((s) => s.primaryKey === QUIZ_KEY)).toBe(false);
+    });
+
+    it('frames the asker under the bubble, from open floor', () => {
+      const office = makeOffice();
+      // Kat Person's back-left corner: the normal must point into the room, or
+      // every candidate camera position lands inside a wall
+      const corner = quizSubject([-6.5, 3, -7.4], office);
+      expect(corner.center.y).toBeLessThan(3);
+      expect(corner.normal.y).toBe(0);
+      expect(corner.normal.x).toBeGreaterThan(0);
+      expect(corner.normal.z).toBeGreaterThan(0);
+      expect(corner.normal.length()).toBeCloseTo(1, 6);
+    });
   });
 
   it('pickShot returns a sane idle shot with no activity and even no office', () => {

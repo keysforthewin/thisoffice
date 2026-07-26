@@ -10,10 +10,10 @@ import type { OfficeState } from '../../../shared/types.ts';
 const W = 640;
 const H = 400;
 
-interface Props {
-  position: [number, number, number];
-  rotationY?: number;
-}
+/** How far a board's frame stands off the wall plane (its old world x offset). */
+const BOARD_STANDOFF = 0.06;
+
+interface Props {}
 
 interface BoardMeshProps<T> extends Props {
   /** projection from office state to board content; redrawn only when its JSON changes */
@@ -22,7 +22,7 @@ interface BoardMeshProps<T> extends Props {
 }
 
 /** Shared wall-board shell: frame, marker tray, and a canvas texture redrawn on content change. */
-function BoardMesh<T>({ position, rotationY = 0, content, draw }: BoardMeshProps<T>) {
+function BoardMesh<T>({ content, draw }: BoardMeshProps<T>) {
   const { ctx, texture } = useMemo(() => {
     const canvas = document.createElement('canvas');
     canvas.width = W;
@@ -56,7 +56,7 @@ function BoardMesh<T>({ position, rotationY = 0, content, draw }: BoardMeshProps
   });
 
   return (
-    <group position={position} rotation={[0, rotationY, 0]}>
+    <group position={[0, 0, BOARD_STANDOFF]}>
       {/* frame */}
       <mesh castShadow>
         <boxGeometry args={[3.4, 2.15, 0.06]} />

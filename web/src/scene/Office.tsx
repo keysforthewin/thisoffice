@@ -9,14 +9,18 @@ import { Desk, FurnitureModel } from './Desk.tsx';
 import { Person } from './Person.tsx';
 import { Whiteboard, StatusBoard } from './Whiteboard.tsx';
 import { WallTV } from './WallTV.tsx';
-import { roomDims, whiteboardTransform, statusBoardTransform, BACK_Z } from './layout.ts';
+import { WALL_SIDES, type WallPlacement, type WallSide } from '../../../shared/types.ts';
+import { roomDims } from './layout.ts';
 import { resolveFurniture, WALL_ITEMS } from './buildLayout.ts';
-import { BuildHandle, WallHandle, displayPose, useWallOffset } from './build.tsx';
+import { wallFrame, wallToWorld } from './walls.ts';
+import { BuildHandle, WallHandle, displayPose, useWallItems } from './build.tsx';
 import { EotmFrame } from './EotmFrame.tsx';
 import { wallStrips } from './wallOpenings.ts';
 import { WindowVista } from './WindowVista.tsx';
 import { SpeechBubble } from '../quiz/SpeechBubble.tsx';
 
+/** How far the painting stands off the wall plane (its old +z offset). */
+const ART_STANDOFF = 0.05;
 const ART_W = 1.84;
 const ART_H = 1.38;
 
@@ -25,7 +29,7 @@ const ART_H = 1.38;
  * wheel reframes it (ctrl = pan). Both are no-ops in build mode, where the
  * click drags the frame along the wall instead (see WallHandle below).
  */
-function WallArt({ position }: { position: [number, number, number] }) {
+function WallArt() {
   const art = useStore((s) => s.office?.wallArt);
   // one primitive per dependency: `office.wallArt` is a fresh object on every
   // state broadcast, so depending on the object itself would redo this constantly
@@ -75,7 +79,7 @@ function WallArt({ position }: { position: [number, number, number] }) {
   };
 
   return (
-    <group position={position}>
+    <group position={[0, 0, ART_STANDOFF]}>
       <mesh castShadow>
         <boxGeometry args={[2.0, 1.55, 0.06]} />
         <meshStandardMaterial color="#3a3340" roughness={0.5} />
@@ -94,16 +98,60 @@ function WallArt({ position }: { position: [number, number, number] }) {
   );
 }
 
-/** A wall plane built from solid strips around a window opening, plus glass + mullions. */
-function WallWithWindow({ w, h, ox, oy, ow, oh }: { w: number; h: number; ox: number; oy: number; ow: number; oh: number }) {
+/**
+ * Places a wall item at its resolved placement, and carries its drag handle.
+ *
+ * Children render in the wall's local frame: origin at the item's centre, +z
+ * pointing into the room. That is the whole reason an item can change walls —
+ * nothing it draws knows which wall it is on.
+ */
+function WallMounted({
+  id,
+  placement,
+  maxSeat,
+  handle,
+  w,
+  h,
+  children,
+}: {
+  id: string;
+  placement: WallPlacement;
+  maxSeat: number;
+  /** show the build-mode drag collider */
+  handle: boolean;
+  /** handle size (the grabbable patch, a little larger than the art) */
+  w: number;
+  h: number;
+  children?: React.ReactNode;
+}) {
+  const frame = wallFrame(placement.wall, maxSeat);
+  const pos = wallToWorld(placement.wall, placement.ox, placement.oy, maxSeat);
+  return (
+    <group position={[pos.x, pos.y, pos.z]} rotation={[0, frame.rotationY, 0]}>
+      {children}
+      {handle && <WallHandle id={id} placement={placement} w={w} h={h} />}
+    </group>
+  );
+}
+
+/** Window opening size — the hole in the wall, not the item's collision box. */
+const WINDOW_W = 3.6;
+const WINDOW_H = 1.9;
+/** Per-wall colour, as each was authored before they were built from one component. */
+const WALL_COLOR = '#5c5a68';
+const WALL_COLORS: Record<WallSide, string> = {
+  back: WALL_COLOR,
+  left: WALL_COLOR,
+  right: '#665f6e',
+  front: '#5f5a68',
+};
+
+/** Glass, mullions and frame for one opening, in the wall's local frame. */
+function WindowFurniture({ ox, oy }: { ox: number; oy: number }) {
+  const ow = WINDOW_W;
+  const oh = WINDOW_H;
   return (
     <group>
-      {wallStrips(w, h, ox, oy, ow, oh).map((r, i) => (
-        <mesh key={i} receiveShadow position={[r.x, r.y, 0]}>
-          <planeGeometry args={[r.w, r.h]} />
-          <meshStandardMaterial color="#5c5a68" roughness={1} />
-        </mesh>
-      ))}
       {/* glass: barely-there tint so the vista reads through */}
       <mesh position={[ox, oy, 0.01]}>
         <planeGeometry args={[ow, oh]} />
@@ -130,6 +178,56 @@ function WallWithWindow({ w, h, ox, oy, ow, oh }: { w: number; h: number; ox: nu
           <meshStandardMaterial color="#4a4450" />
         </mesh>
       ))}
+    </group>
+  );
+}
+
+/**
+ * One wall of the room, with whichever windows currently hang on it.
+ *
+ * Every wall is built the same way now that windows move between them: the
+ * plane is the solid remainder around its openings, and each opening carries
+ * its own glass, frame, parallax vista and light spill. A wall with no windows
+ * falls out of the same code as a single full-height strip.
+ *
+ * `color` differs for the right wall only, which was authored a shade darker.
+ */
+function Wall({
+  side,
+  windows,
+  maxSeat,
+  color = WALL_COLOR,
+  children,
+}: {
+  side: WallSide;
+  windows: Array<{ id: string; ox: number; oy: number }>;
+  maxSeat: number;
+  color?: string;
+  children?: React.ReactNode;
+}) {
+  const frame = wallFrame(side, maxSeat);
+  const { height } = roomDims(maxSeat);
+  // the wall group is centred at mid-height, so world oy becomes local oy - height/2
+  const openings = windows.map((win) => ({ x: win.ox, y: win.oy - height / 2, w: WINDOW_W, h: WINDOW_H }));
+  return (
+    <group position={[frame.origin.x, height / 2, frame.origin.z]} rotation={[0, frame.rotationY, 0]}>
+      {wallStrips(frame.span, height, openings).map((r, i) => (
+        <mesh key={i} receiveShadow position={[r.x, r.y, 0]}>
+          <planeGeometry args={[r.w, r.h]} />
+          <meshStandardMaterial color={color} roughness={1} />
+        </mesh>
+      ))}
+      {windows.map((win) => (
+        <group key={win.id}>
+          <WindowFurniture ox={win.ox} oy={win.oy - height / 2} />
+          <group position={[win.ox, win.oy - height / 2, 0]}>
+            <WindowVista id={win.id === 'windowLeft' ? 'left' : 'back'} />
+          </group>
+          {/* warm spill through the glass, just inside the room */}
+          <pointLight color="#ffd9a0" intensity={14} distance={12} decay={2} position={[win.ox, win.oy - height / 2, 1]} />
+        </group>
+      ))}
+      {children}
     </group>
   );
 }
@@ -193,7 +291,6 @@ export function Office() {
     [office]
   );
   const { width, depth, centerZ, height } = roomDims(maxSeat);
-  const backZ = BACK_Z;
   const layout = office?.layout;
   const buildMode = useStore((s) => s.buildMode);
   const buildHold = useStore((s) => s.buildHold);
@@ -201,13 +298,15 @@ export function Office() {
   // in store.ts), so this recomputes only when the layout or desk count changes
   const katPerson = office?.katPerson !== false;
   const furniture = useMemo(() => resolveFurniture(layout, maxSeat, katPerson), [layout, maxSeat, katPerson]);
-  const backOx = useWallOffset('windowBack', maxSeat);
-  const leftOx = useWallOffset('windowLeft', maxSeat);
-  const artOx = useWallOffset('wallArt', maxSeat);
-  const eotmOx = useWallOffset('eotm', maxSeat);
   const quizEnabled = useStore((s) => s.quiz?.enabled ?? false);
-  const tvOx = useWallOffset('tv', maxSeat);
-  const wallItem = (id: string) => WALL_ITEMS.find((w) => w.id === id)!;
+  // every wall item's live placement, ghost-aware so a drag previews in place
+  const placements = useWallItems(maxSeat);
+  const windowsOn = (side: WallSide) =>
+    WALL_ITEMS.filter((item) => item.window && placements[item.id].wall === side).map((item) => ({
+      id: item.id,
+      ox: placements[item.id].ox,
+      oy: placements[item.id].oy,
+    }));
 
   return (
     <group>
@@ -216,42 +315,18 @@ export function Office() {
         <planeGeometry args={[width, depth]} />
         <meshStandardMaterial color="#8a6f52" roughness={0.85} />
       </mesh>
-      {/* back wall (behind the boss), with a window onto its own layered city vista */}
-      <group position={[0, height / 2, backZ]}>
-        <WallWithWindow w={width} h={height} ox={backOx} oy={2.1 - height / 2} ow={3.6} oh={1.9} />
-        <group position={[backOx, 2.1 - height / 2, 0]}>
-          <WindowVista id="back" />
-        </group>
-        {buildMode && (
-          <WallHandle id="windowBack" wall="back" ox={backOx} oy={2.1 - height / 2} w={3.8} h={2.1} />
-        )}
-      </group>
-      {/* warm spill through the back window (kept from the old fake window) */}
-      <pointLight color="#ffd9a0" intensity={14} distance={12} decay={2} position={[backOx, 2.1, backZ + 1]} />
-
-      {/* left wall, with a window onto its own layered city vista (windows face outward like before) */}
-      <group position={[-width / 2, height / 2, centerZ]} rotation={[0, Math.PI / 2, 0]}>
-        <WallWithWindow w={depth} h={height} ox={leftOx} oy={2.1 - height / 2} ow={3.6} oh={1.9} />
-        <group position={[leftOx, 2.1 - height / 2, 0]}>
-          <WindowVista id="left" />
-        </group>
-        {buildMode && (
-          <WallHandle id="windowLeft" wall="left" ox={leftOx} oy={2.1 - height / 2} w={3.8} h={2.1} />
-        )}
-        {buildMode && <WallHandle id="tv" wall="left" ox={tvOx} oy={2.2 - height / 2} w={3.0} h={1.8} />}
-      </group>
-      <WallTV position={[-width / 2 + 0.07, 2.2, centerZ - tvOx]} rotationY={Math.PI / 2} />
-      {/* right wall (whiteboard wall) */}
-      <mesh receiveShadow position={[width / 2, height / 2, centerZ]} rotation={[0, -Math.PI / 2, 0]}>
-        <planeGeometry args={[depth, height]} />
-        <meshStandardMaterial color="#665f6e" roughness={1} />
-      </mesh>
-      {/* front wall (the one the boss faces); front-side only, so the intro
-          camera outside the room still sees in before clampToRoom pulls it inside */}
-      <mesh receiveShadow position={[0, height / 2, centerZ + depth / 2]} rotation={[0, Math.PI, 0]}>
-        <planeGeometry args={[width, height]} />
-        <meshStandardMaterial color="#5f5a68" roughness={1} />
-      </mesh>
+      {/* The four walls, each carrying whichever windows currently hang on it.
+          The front wall is front-side only, so the intro camera outside the room
+          still sees in before clampToRoom pulls it inside. */}
+      {WALL_SIDES.map((side) => (
+        <Wall
+          key={side}
+          side={side}
+          maxSeat={maxSeat}
+          color={WALL_COLORS[side]}
+          windows={windowsOn(side)}
+        />
+      ))}
 
       {/* ceiling: unlit material so the downward fixtures can't splash light onto it */}
       <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, height, centerZ]}>
@@ -296,27 +371,52 @@ export function Office() {
           </group>
         );
       })}
-      <WallArt position={[artOx, 2.15, backZ + 0.05]} />
-      <EotmFrame position={[eotmOx, 2.15, backZ + 0.05]} />
+      {/* Wall hangings. Each renders in its wall's local frame — the standoff is
+          the little +z push off the wall plane each one always had. */}
+      <WallMounted id="wallArt" placement={placements.wallArt} maxSeat={maxSeat} handle={buildMode} w={2.0} h={1.7}>
+        <WallArt />
+      </WallMounted>
+      <WallMounted
+        id="eotm"
+        placement={placements.eotm}
+        maxSeat={maxSeat}
+        /* no handle for a frame that isn't hung — the game owns it */
+        handle={buildMode && quizEnabled}
+        w={1.6}
+        h={1.3}
+      >
+        <EotmFrame />
+      </WallMounted>
+      <WallMounted id="tv" placement={placements.tv} maxSeat={maxSeat} handle={buildMode} w={3.0} h={1.8}>
+        <WallTV />
+      </WallMounted>
+      <WallMounted id="todoBoard" placement={placements.todoBoard} maxSeat={maxSeat} handle={buildMode} w={3.4} h={2.15}>
+        <Whiteboard />
+      </WallMounted>
+      <WallMounted
+        id="statusBoard"
+        placement={placements.statusBoard}
+        maxSeat={maxSeat}
+        handle={buildMode}
+        w={3.4}
+        h={2.15}
+      >
+        <StatusBoard />
+      </WallMounted>
+      {/* the windows draw with their wall; these carry only their drag handles */}
+      {buildMode &&
+        WALL_ITEMS.filter((item) => item.window).map((item) => (
+          <WallMounted
+            key={item.id}
+            id={item.id}
+            placement={placements[item.id]}
+            maxSeat={maxSeat}
+            handle
+            w={3.8}
+            h={2.1}
+          />
+        ))}
       <SpeechBubble maxSeat={maxSeat} />
-      {buildMode && (
-        <group position={[0, 0, backZ]}>
-          <WallHandle id="wallArt" wall="back" ox={artOx} oy={2.15} w={wallItem('wallArt').halfW * 2} h={1.7} />
-          {/* no handle for a frame that isn't hung — the game owns it */}
-          {quizEnabled && (
-            <WallHandle id="eotm" wall="back" ox={eotmOx} oy={2.15} w={wallItem('eotm').halfW * 2} h={1.3} />
-          )}
-        </group>
-      )}
-
-      <Whiteboard
-        position={whiteboardTransform(maxSeat).position.toArray() as [number, number, number]}
-        rotationY={whiteboardTransform(maxSeat).rotationY}
-      />
-      <StatusBoard
-        position={statusBoardTransform(maxSeat).position.toArray() as [number, number, number]}
-        rotationY={statusBoardTransform(maxSeat).rotationY}
-      />
 
       {/* boss */}
       {office && (

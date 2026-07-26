@@ -238,6 +238,10 @@ const server = http.createServer((req, res) => {
       quiz.setEnabled(body.enabled);
       return send(200, { ok: true, quiz: quiz.getState() });
     }
+    if (url.pathname === '/api/quiz/restart' && req.method === 'POST') {
+      quiz.restart();
+      return send(200, { ok: true, quiz: quiz.getState() });
+    }
     if (url.pathname === '/api/quiz/answer' && req.method === 'POST') {
       const body = await readBody();
       if (typeof body.id !== 'string' || (body.answer !== 'yes' && body.answer !== 'no')) {

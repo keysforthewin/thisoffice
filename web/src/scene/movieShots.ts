@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import type { OfficeState } from '../../../shared/types.ts';
-import { roomDims, whiteboardTransform, statusBoardTransform } from './layout.ts';
-import { resolveSeat, resolveWallOffset } from './buildLayout.ts';
+import { roomDims } from './layout.ts';
+import { resolveSeat, resolveWallItem } from './buildLayout.ts';
+import { wallFrame, wallToWorld } from './walls.ts';
 import { TV_SCREEN_W, TV_SCREEN_H } from './WallTV.tsx';
 
 export const ACTIVE_WINDOW_MS = 22_000;
@@ -36,6 +37,19 @@ const MONITOR_H = 0.85;
 const BEACON_OFFSET = new THREE.Vector3(0.7, 1.07, 0.25);
 const BEACON_SIZE = 0.9;
 export const BEACON_KEY = 'beacon';
+/**
+ * The 20 Questions bubble as a shot subject. Not a screen and not driven by
+ * `lastActivity`: the question is either up or it isn't, and while it is up it
+ * is the only thing in the room asking the player for anything. It joins the
+ * subject list only when no live screen is active (see pickShot), so it never
+ * competes with real work — it fills the silence the ambient wall boards would
+ * otherwise own alone.
+ */
+export const QUIZ_KEY = 'quiz';
+/** Wide enough to hold the asker under their bubble, not just the bubble. */
+const QUIZ_SIZE = 2.4;
+/** The bubble hangs at y 3.0 (askerAnchor); frame from between it and the head. */
+const QUIZ_CENTER_DROP = 0.5;
 const WHITEBOARD_W = 3.2;
 const WHITEBOARD_H = 1.95;
 const UP = new THREE.Vector3(0, 1, 0);
@@ -201,40 +215,53 @@ interface WallBoardDef {
   height: number;
 }
 
-/** World-space center of the TV, mirroring Office.tsx's placement (which owns the
- *  authoritative render): left wall, layout-draggable along z via resolveWallOffset. */
-function tvCenter(office: OfficeState | null): THREE.Vector3 {
-  const ms = maxSeat(office);
-  const { width, centerZ } = roomDims(ms);
-  const ox = resolveWallOffset(office?.layout, 'tv', ms);
-  return new THREE.Vector3(-width / 2 + 0.07, 2.2, centerZ - ox);
-}
-
-/** Wall-mounted board subjects: whiteboard/statusboard on the right wall (readable
- *  from −x), the stats tv on the left wall (readable from +x). */
-const WALL_BOARDS: Record<string, WallBoardDef> = {
-  whiteboard: {
-    center: (office) => whiteboardTransform(maxSeat(office)).position.clone(),
-    normal: new THREE.Vector3(-1, 0, 0),
-    width: WHITEBOARD_W,
-    height: WHITEBOARD_H,
-  },
-  statusboard: {
-    center: (office) => statusBoardTransform(maxSeat(office)).position.clone(),
-    normal: new THREE.Vector3(-1, 0, 0),
-    width: WHITEBOARD_W,
-    height: WHITEBOARD_H,
-  },
-  tv: {
-    center: tvCenter,
-    normal: new THREE.Vector3(1, 0, 0),
-    width: TV_SCREEN_W,
-    height: TV_SCREEN_H,
-  },
+/**
+ * Subject keys for the wall surfaces map onto wall-item ids. Both live where the
+ * layout says they live — any wall, any height — so centre and normal are read
+ * off the resolved placement rather than baked in. A board dragged to the back
+ * wall gets shot from the front of it, not from inside the wall it used to be on.
+ */
+const WALL_BOARD_ITEMS: Record<string, { id: string; width: number; height: number }> = {
+  whiteboard: { id: 'todoBoard', width: WHITEBOARD_W, height: WHITEBOARD_H },
+  statusboard: { id: 'statusBoard', width: WHITEBOARD_W, height: WHITEBOARD_H },
+  tv: { id: 'tv', width: TV_SCREEN_W, height: TV_SCREEN_H },
 };
 
+/** The live subject for a wall surface, from wherever the layout hangs it. */
+function wallBoardSubject(key: string, office: OfficeState | null): Subject | null {
+  const def = WALL_BOARD_ITEMS[key];
+  if (!def) return null;
+  const ms = maxSeat(office);
+  const placement = resolveWallItem(office?.layout, def.id, ms);
+  const frame = wallFrame(placement.wall, ms);
+  return {
+    key,
+    center: wallToWorld(placement.wall, placement.ox, placement.oy, ms),
+    normal: frame.normal.clone(),
+    width: def.width,
+    height: def.height,
+  };
+}
+
 export function isWallBoard(key: string): boolean {
-  return key in WALL_BOARDS;
+  return key in WALL_BOARD_ITEMS;
+}
+
+/**
+ * The bubble is a drei `<Html>`, so it always faces the camera and is legible
+ * from anywhere — which makes "readable from" the wrong question. What matters
+ * is that the camera stands in open floor rather than inside a wall behind the
+ * asker, so the normal points from the anchor toward the middle of the room.
+ * That works for a seated employee, the boss against the back wall and Kat
+ * Person in her corner alike, without knowing which of the three it is.
+ */
+export function quizSubject(anchor: [number, number, number], office: OfficeState | null): Subject {
+  const { centerZ } = roomDims(maxSeat(office));
+  const center = new THREE.Vector3(anchor[0], anchor[1] - QUIZ_CENTER_DROP, anchor[2]);
+  const toCenter = new THREE.Vector3(0, 0, centerZ).sub(center);
+  toCenter.y = 0;
+  const normal = toCenter.lengthSq() < 1e-6 ? new THREE.Vector3(0, 0, 1) : toCenter.normalize();
+  return { key: QUIZ_KEY, center, normal, width: QUIZ_SIZE, height: QUIZ_SIZE };
 }
 
 export function subjectFor(key: string, office: OfficeState | null): Subject | null {
@@ -250,10 +277,8 @@ export function subjectFor(key: string, office: OfficeState | null): Subject | n
       height: BEACON_SIZE,
     };
   }
-  const board = WALL_BOARDS[key];
-  if (board) {
-    return { key, center: board.center(office), normal: board.normal.clone(), width: board.width, height: board.height };
-  }
+  const board = wallBoardSubject(key, office);
+  if (board) return board;
   let seat: number | null = null;
   if (key === 'boss') seat = 0;
   else {
@@ -823,6 +848,8 @@ export interface ShotContext {
   waiting?: boolean;
   /** subject key to try first regardless of weighting — a new inbox message forces 'boss' */
   forcePrimary?: string;
+  /** world anchor of the open 20 Questions bubble, if one is up (quiz/askerAnchor.ts) */
+  quizAnchor?: [number, number, number] | null;
 }
 
 /**
@@ -864,7 +891,7 @@ function weightedShuffle<T>(items: T[], weight: (t: T) => number, rng: () => num
 /** Boss screen and wall boards fire rarely; give them extra draw weight so their
  *  brief activity windows actually land as shots among streaming employee monitors. */
 function subjectWeight(s: Subject): number {
-  return s.key === 'boss' || isWallBoard(s.key) ? 2 : 1;
+  return s.key === 'boss' || s.key === QUIZ_KEY || isWallBoard(s.key) ? 2 : 1;
 }
 
 /**
@@ -886,9 +913,15 @@ export function pickShot(ctx: ShotContext): PickedShot {
   const { office, fovY, aspect, rng } = ctx;
   const prev = ctx.prevPosition ?? null;
   const recent = ctx.recentArchetypes ?? [];
-  const subjects = activeKeys(ctx.lastActivity, ctx.now)
+  const active = activeKeys(ctx.lastActivity, ctx.now)
     .map((k) => subjectFor(k, office))
     .filter((s): s is Subject => s !== null);
+  // An open question joins the cast only while no live screen is streaming: with
+  // work on the monitors the bubble waits its turn, and with the office quiet it
+  // becomes one of the things the camera cuts to instead of pure B-roll.
+  const quiz =
+    ctx.quizAnchor && active.every((s) => AMBIENT_KEYS.has(s.key)) ? quizSubject(ctx.quizAnchor, office) : null;
+  const subjects = quiz ? [...active, quiz] : active;
 
   const weightedOrder = (names: ArchetypeName[]): ArchetypeName[] =>
     weightedShuffle(names, (n) => ARCHETYPES[n].weight, rng);
@@ -982,7 +1015,10 @@ export function pickShot(ctx: ShotContext): PickedShot {
   //
   // Live monitors and the todo board outrank the ambient wall boards, whose activity
   // windows run for minutes: never cut to set dressing while real work is on screen.
-  const live = subjects.filter((s) => !AMBIENT_KEYS.has(s.key));
+  // The quiz bubble sits in the same tier as the ambient boards rather than above
+  // them: with the office quiet the camera rotates between the question, the status
+  // board and the TV, instead of parking on the bubble for every cut.
+  const live = subjects.filter((s) => !AMBIENT_KEYS.has(s.key) && s.key !== QUIZ_KEY);
   const tier = live.length > 0 ? live : subjects;
   let ordered = orderPrimaries(tier, ctx.recentPrimaries ?? [], rng);
   if (ctx.forcePrimary) {

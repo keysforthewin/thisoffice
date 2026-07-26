@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { MONITOR_IMAGE_MARKER, type CharacterCatalog, type ItemPose, type OfficeLayout, type OfficeState, type QuizState, type QuizWinner, type ServerMsg, type UsageStats, type WallArtConfig } from '../../shared/types.ts';
+import { MONITOR_IMAGE_MARKER, type CharacterCatalog, type ItemPose, type OfficeLayout, type OfficeState, type QuizState, type QuizWinner, type ServerMsg, type UsageStats, type WallArtConfig, type WallPlacement } from '../../shared/types.ts';
 import { boardContent } from './scene/whiteboardContent.ts';
 import { activityTtl } from './scene/movieShots.ts';
 import { appendHistory } from './scene/monitorScrollback.ts';
@@ -129,8 +129,8 @@ export interface BuildHold {
   key: number | string;
   /** floor items: the ghost pose following the cursor */
   ghost: ItemPose | null;
-  /** wall items: the ghost along-wall offset */
-  ghostOffset: number | null;
+  /** wall items: the ghost placement (wall, along-wall offset, height) */
+  wallGhost: WallPlacement | null;
   valid: boolean;
 }
 

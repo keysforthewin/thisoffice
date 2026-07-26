@@ -1,8 +1,12 @@
 import { useEffect, useMemo } from 'react';
 import * as THREE from 'three';
+import { useLoader } from '@react-three/fiber';
 import { useTexture } from '@react-three/drei';
 import { VISTA_LAYERS } from './vistaLayers.ts';
-import { vistaGeometry } from './vistaGeometry.ts';
+import { vistaGeometry, type SkirtData } from './vistaGeometry.ts';
+
+/** `/vista/back-mid.png` → `/vista/back-mid.skirt.json` (baked by `npm run vista`). */
+const skirtUrl = (imageUrl: string) => imageUrl.replace(/\.png$/, '.skirt.json');
 
 const srgb = (t: THREE.Texture | THREE.Texture[]) => {
   for (const tex of Array.isArray(t) ? t : [t]) {
@@ -18,28 +22,32 @@ const srgb = (t: THREE.Texture | THREE.Texture[]) => {
 export function WindowVista({ id }: { id: 'back' | 'left' }) {
   const layers = VISTA_LAYERS[id];
   const layerTex = useTexture(layers.map((l) => l.url), srgb);
+  // suspends alongside the textures, so a layer never renders with a stale or
+  // missing skirt — a bad JSON degrades to the old full-width skirt, not a crash
+  const skirtJson = useLoader(THREE.FileLoader, layers.map((l) => skirtUrl(l.url))) as unknown as string[];
+  const skirts = useMemo(
+    () =>
+      skirtJson.map((raw, i) => {
+        try {
+          return JSON.parse(raw) as SkirtData;
+        } catch {
+          console.warn(`vista: unreadable skirt data for ${layers[i].url} — run \`npm run vista\``);
+          return undefined;
+        }
+      }),
+    [skirtJson, layers],
+  );
 
   /**
    * Grow each plane downward by `extend` without moving or stretching the
-   * artwork.
-   *
-   * The mesh is two quads (see vistaGeometry.ts): the upper one holds the
-   * artwork exactly where `w`/`h`/`x`/`y` place it, and the lower one repeats
-   * the UV row of the artwork's lowest *opaque* pixel (`trimBottom`) straight
-   * down — so each building's window columns continue and the transparent gaps
-   * between buildings stay transparent, instead of the whole skyline ending on
-   * a hard horizontal line.
-   *
-   * This used to be done with `repeat.y`/`offset.y` and ClampToEdgeWrapping
-   * pinning v < 0 to the image's bottom pixel row. That silently did nothing
-   * for the `mid` layers, whose images carry ~15% transparent padding below the
-   * artwork: the clamp faithfully repeated the padding. Encoding the trim in the
-   * geometry's UVs makes the clamp line the artwork's edge instead of the
-   * image's.
+   * artwork: the artwork quad sits exactly where `w`/`h`/`x`/`y` put it, and
+   * below it hangs one skirt quad per run of columns, each repeating its own
+   * building's lowest pixels down to a common floor. See vistaGeometry.ts for
+   * why the skirt has to be per-column and not one held row.
    */
   const geos = useMemo(
-    () => layers.map((l) => vistaGeometry(l.w, l.h, l.extend ?? 0, l.trimBottom ?? 0)),
-    [layers],
+    () => layers.map((l, i) => vistaGeometry(l.w, l.h, l.extend ?? 0, skirts[i])),
+    [layers, skirts],
   );
   useEffect(() => () => geos.forEach((g) => g.dispose()), [geos]);
 

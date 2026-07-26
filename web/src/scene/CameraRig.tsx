@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { enterFocusMode, useStore, type CameraPose } from '../store.ts';
-import { whiteboardTransform, statusBoardTransform } from './layout.ts';
 import { resolveSeat } from './buildLayout.ts';
 import type { OfficeLayout, OfficeState, QuizWinner } from '../../../shared/types.ts';
 import { MovieCamera } from './MovieCamera.tsx';
@@ -51,14 +50,17 @@ export function buildPovList(office: OfficeState | null): Pov[] {
   const maxSeat = Math.max(3, ...(office?.employees.map((e) => e.seat) ?? []));
   const povs: Pov[] = [seatPov(0, office?.boss.name ?? 'Boss', office?.layout, maxSeat)];
   for (const e of office?.employees ?? []) povs.push(seatPov(e.seat, e.name, office?.layout, maxSeat));
-  const wb = whiteboardTransform(maxSeat);
-  povs.push({ label: 'Whiteboard', position: wb.camera, lookAt: wb.lookAt });
-  const sb = statusBoardTransform(maxSeat);
-  povs.push({ label: 'Status Board', position: sb.camera, lookAt: sb.lookAt });
-  // tv is a draggable wall item, so its spot comes from the same layout-aware
-  // subject the movie camera uses rather than a fixed transform.
-  const tv = subjectFor('tv', office);
-  if (tv) povs.push({ label: 'Stats TV', position: tv.center.clone().addScaledVector(tv.normal, 3.4), lookAt: tv.center.clone() });
+  // Every wall surface is draggable — to any wall, at any height — so all three
+  // spots come from the same layout-aware subject the movie camera uses. A fixed
+  // transform would keep aiming at the wall a board used to hang on.
+  for (const [key, label, back] of [
+    ['whiteboard', 'Whiteboard', 4.2],
+    ['statusboard', 'Status Board', 4.2],
+    ['tv', 'Stats TV', 3.4],
+  ] as const) {
+    const s = subjectFor(key, office);
+    if (s) povs.push({ label, position: s.center.clone().addScaledVector(s.normal, back), lookAt: s.center.clone() });
+  }
   return povs;
 }
 

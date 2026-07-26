@@ -1,18 +1,20 @@
-import { useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useThree, type ThreeEvent } from '@react-three/fiber';
-import type { ItemPose, OfficeLayout } from '../../../shared/types.ts';
+import type { ItemPose, OfficeLayout, WallPlacement, WallSide } from '../../../shared/types.ts';
 import { useStore, type BuildHold } from '../store.ts';
-import { BACK_Z, roomDims } from './layout.ts';
+import { carryAroundCorner, wallPlaneHit } from './walls.ts';
 import {
   GRID,
   isPlacementValid,
   isWallPlacementValid,
-  resolveWallOffset,
+  resolveWallItem,
+  WALL_ITEMS,
   snapPose,
+  wallItem,
+  wallItemHeightRange,
   wallOffsetRange,
   type Footprint,
-  type WallId,
 } from './buildLayout.ts';
 
 /** Pointer capture keeps the drag alive when the cursor outruns the collider; a
@@ -112,7 +114,7 @@ export function BuildHandle({
       rotAccum: 0,
       startPose: pose,
     };
-    useStore.getState().setBuildHold({ kind, key: itemKey, ghost: pose, ghostOffset: null, valid: true });
+    useStore.getState().setBuildHold({ kind, key: itemKey, ghost: pose, wallGhost: null, valid: true });
   };
 
   const onPointerMove = (e: ThreeEvent<PointerEvent>) => {
@@ -128,7 +130,7 @@ export function BuildHandle({
       maxSeatOf(),
       st.office?.katPerson !== false,
     );
-    st.setBuildHold({ kind, key: itemKey, ghost, ghostOffset: null, valid: ok });
+    st.setBuildHold({ kind, key: itemKey, ghost, wallGhost: null, valid: ok });
   };
 
   const endDrag = (e: ThreeEvent<PointerEvent>, commit: boolean) => {
@@ -174,71 +176,91 @@ export function BuildHandle({
   );
 }
 
-/** Where the pointer ray crosses a wall plane, as that wall's local `ox`. */
-function rayOnWall(e: ThreeEvent<PointerEvent>, wall: WallId, maxSeat: number): number | null {
-  const { origin, direction } = e.ray;
-  const { width, centerZ } = roomDims(maxSeat);
-  if (wall === 'back') {
-    if (Math.abs(direction.z) < 1e-6) return null;
-    const t = (BACK_Z - origin.z) / direction.z;
-    return t < 0 ? null : origin.x + direction.x * t;
-  }
-  // left wall: plane x = -width/2, local +x runs toward -z (rotY π/2)
-  if (Math.abs(direction.x) < 1e-6) return null;
-  const t = (-width / 2 - origin.x) / direction.x;
-  return t < 0 ? null : centerZ - (origin.z + direction.z * t);
-}
-
 /**
- * Drag collider for a wall-mounted item (window, art, picture frame). Slides
- * along its wall only; no rotation. Rendered in the wall's local frame at the
- * item's (ghost-aware) `ox`.
+ * Drag collider for a wall-mounted item (window, art, board, TV). Slides along
+ * its wall, rises and falls with the cursor, and carries around the corner onto
+ * the next wall when it runs past an end. Rendered in the wall's local frame at
+ * the item's (ghost-aware) placement.
+ *
+ * Hold Shift to lock to whichever axis the drag has travelled furthest in: with
+ * a 0.2 grid it is easy to knock an item up a rung while only meaning to slide
+ * it sideways.
  */
-export function WallHandle({
-  id,
-  wall,
-  ox,
-  oy,
-  w,
-  h,
-}: {
-  id: string;
-  wall: WallId;
-  ox: number;
-  oy: number;
-  w: number;
-  h: number;
-}) {
+export function WallHandle({ id, placement, w, h }: { id: string; placement: WallPlacement; w: number; h: number }) {
   const gl = useThree((s) => s.gl);
   const holding = useStore(
     (s) => s.buildHold !== null && s.buildHold.kind === 'wall' && s.buildHold.key === id,
   );
   const valid = useStore((s) => (holding ? s.buildHold!.valid : true));
-  const drag = useRef<{ pointerId: number; grabOffset: number; startOx: number } | null>(null);
+  const drag = useRef<{
+    pointerId: number;
+    /** grab offset in the CURRENT wall's frame; re-anchored on every transfer */
+    grab: { ox: number; oy: number };
+    wall: WallSide;
+    start: WallPlacement;
+    travel: { ox: number; oy: number };
+  } | null>(null);
+
+  const halfW = wallItem(id)?.halfW ?? 0;
 
   const onPointerDown = (e: ThreeEvent<PointerEvent>) => {
     if (e.button !== 0) return; // right-drag is the camera's, even over an item
     if (!useStore.getState().buildMode || drag.current) return;
     e.stopPropagation();
     capture(e, true);
-    const hit = rayOnWall(e, wall, maxSeatOf());
-    drag.current = { pointerId: e.pointerId, grabOffset: hit === null ? 0 : ox - hit, startOx: ox };
-    useStore.getState().setBuildHold({ kind: 'wall', key: id, ghost: null, ghostOffset: ox, valid: true });
+    const hit = wallPlaneHit(e.ray, placement.wall, maxSeatOf());
+    drag.current = {
+      pointerId: e.pointerId,
+      grab: hit ? { ox: placement.ox - hit.ox, oy: placement.oy - hit.oy } : { ox: 0, oy: 0 },
+      wall: placement.wall,
+      start: placement,
+      travel: { ox: 0, oy: 0 },
+    };
+    useStore.getState().setBuildHold({ kind: 'wall', key: id, ghost: null, wallGhost: placement, valid: true });
   };
 
   const onPointerMove = (e: ThreeEvent<PointerEvent>) => {
-    if (!drag.current || e.pointerId !== drag.current.pointerId) return;
+    const d = drag.current;
+    if (!d || e.pointerId !== d.pointerId) return;
     e.stopPropagation();
     const maxSeat = maxSeatOf();
-    const hit = rayOnWall(e, wall, maxSeat);
-    if (hit === null) return;
-    const [min, max] = wallOffsetRange(id, maxSeat);
-    const raw = THREE.MathUtils.clamp(hit + drag.current.grabOffset, min, max);
-    const snapped = Math.round(raw / GRID) * GRID;
-    const next = THREE.MathUtils.clamp(snapped, min, max);
+    const hit = wallPlaneHit(e.ray, d.wall, maxSeat);
+    if (!hit) return;
+
+    const rawOx = hit.ox + d.grab.ox;
+    const rawOy = hit.oy + d.grab.oy;
+    d.travel = {
+      ox: Math.max(d.travel.ox, Math.abs(rawOx - d.start.ox)),
+      oy: Math.max(d.travel.oy, Math.abs(rawOy - d.start.oy)),
+    };
+    // Shift locks to the dominant axis so far — measured over the whole drag, not
+    // this event, so the lock doesn't flip on a single jittery move
+    const lockOy = e.shiftKey && d.travel.ox >= d.travel.oy;
+    const lockOx = e.shiftKey && d.travel.oy > d.travel.ox;
+
+    // past the end of this wall the offset carries around the corner; re-anchoring
+    // the grab against the new wall keeps the item under the cursor across the seam
+    const carried = carryAroundCorner(d.wall, lockOx ? d.start.ox : rawOx, maxSeat, halfW);
+    if (carried.wall !== d.wall) {
+      d.wall = carried.wall;
+      const reHit = wallPlaneHit(e.ray, carried.wall, maxSeat);
+      d.grab = reHit
+        ? { ox: carried.ox - reHit.ox, oy: (lockOy ? d.start.oy : rawOy) - reHit.oy }
+        : d.grab;
+    }
+
+    const [minX, maxX] = wallOffsetRange(id, carried.wall, maxSeat);
+    const [minY, maxY] = wallItemHeightRange(id);
+    const snap = (v: number, lo: number, hi: number) =>
+      THREE.MathUtils.clamp(Math.round(THREE.MathUtils.clamp(v, lo, hi) / GRID) * GRID, lo, hi);
+    const next: WallPlacement = {
+      wall: carried.wall,
+      ox: snap(carried.ox, minX, maxX),
+      oy: lockOy ? d.start.oy : snap(rawOy, minY, maxY),
+    };
     const st = useStore.getState();
     const ok = isWallPlacementValid(st.office?.layout, id, next, maxSeat);
-    st.setBuildHold({ kind: 'wall', key: id, ghost: null, ghostOffset: next, valid: ok });
+    st.setBuildHold({ kind: 'wall', key: id, ghost: null, wallGhost: next, valid: ok });
   };
 
   const endDrag = (e: ThreeEvent<PointerEvent>, commit: boolean) => {
@@ -249,14 +271,16 @@ export function WallHandle({
     drag.current = null;
     const hold = useStore.getState().buildHold;
     useStore.getState().setBuildHold(null);
-    if (!commit || hold?.ghostOffset == null || !hold.valid) return;
-    if (hold.ghostOffset === d.startOx) return;
-    commitLayout({ wallItems: { [id]: hold.ghostOffset } });
+    if (!commit || !hold?.wallGhost || !hold.valid) return;
+    const { wall, ox, oy } = hold.wallGhost;
+    if (wall === d.start.wall && ox === d.start.ox && oy === d.start.oy) return;
+    commitLayout({ wallItems: { [id]: { wall, ox, oy } } });
   };
 
+  // rendered inside the item's own WallMounted group, so local origin IS the item
   return (
     <mesh
-      position={[ox, oy, 0.08]}
+      position={[0, 0, 0.08]}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={(e) => endDrag(e, true)}
@@ -284,14 +308,32 @@ export function displayPose(hold: BuildHold | null, kind: 'seat' | 'furniture', 
   return hold && hold.kind === kind && hold.key === key && hold.ghost ? hold.ghost : pose;
 }
 
-/** The ghost-aware along-wall offset for a wall item. */
-export function displayWallOffset(hold: BuildHold | null, id: string, ox: number): number {
-  return hold && hold.kind === 'wall' && hold.key === id && hold.ghostOffset != null ? hold.ghostOffset : ox;
+/** The ghost-aware placement for a wall item. */
+export function displayWallItem(hold: BuildHold | null, id: string, placement: WallPlacement): WallPlacement {
+  return hold && hold.kind === 'wall' && hold.key === id && hold.wallGhost ? hold.wallGhost : placement;
 }
 
-/** Resolved-then-ghost-aware wall offset straight from the store (render helper). */
-export function useWallOffset(id: string, maxSeat: number): number {
+/** Resolved-then-ghost-aware wall placement straight from the store (render helper). */
+export function useWallItem(id: string, maxSeat: number): WallPlacement {
   const layout = useStore((s) => s.office?.layout);
   const hold = useStore((s) => s.buildHold);
-  return displayWallOffset(hold, id, resolveWallOffset(layout, id, maxSeat));
+  return displayWallItem(hold, id, resolveWallItem(layout, id, maxSeat));
+}
+
+/**
+ * Every wall item's placement at once, from a single pair of store
+ * subscriptions — the renderer needs all of them together (to know which
+ * windows are on which wall), and one hook per item would make the hook count
+ * depend on WALL_ITEMS.
+ */
+export function useWallItems(maxSeat: number): Record<string, WallPlacement> {
+  const layout = useStore((s) => s.office?.layout);
+  const hold = useStore((s) => s.buildHold);
+  return useMemo(() => {
+    const out: Record<string, WallPlacement> = {};
+    for (const item of WALL_ITEMS) {
+      out[item.id] = displayWallItem(hold, item.id, resolveWallItem(layout, item.id, maxSeat));
+    }
+    return out;
+  }, [layout, hold, maxSeat]);
 }

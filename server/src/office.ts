@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { CharacterCatalog, Employee, OfficeState, InboxItem, ItemPose, OfficeLayout, PendingAsk, StatusItem, TodoItem, ServerMsg, WallArtConfig, WallArtExt, WorkerStatus, StaffingSettings } from '../../shared/types.ts';
-import { CHARACTER_VARIANTS, MONITOR_IMAGE_MARKER, WALL_ART_EXTS, WALL_ART_ZOOM_MAX, WALL_ART_ZOOM_MIN } from '../../shared/types.ts';
+import type { CharacterCatalog, Employee, OfficeState, InboxItem, ItemPose, OfficeLayout, PendingAsk, StatusItem, TodoItem, ServerMsg, WallArtConfig, WallArtExt, WallPlacement, WorkerStatus, StaffingSettings } from '../../shared/types.ts';
+import { CHARACTER_VARIANTS, MONITOR_IMAGE_MARKER, WALL_ART_EXTS, WALL_SIDES, WALL_ART_ZOOM_MAX, WALL_ART_ZOOM_MIN } from '../../shared/types.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.resolve(__dirname, '../../data');
@@ -92,6 +92,17 @@ function isPose(p: unknown): p is ItemPose {
   return !!o && Number.isFinite(o.x) && Number.isFinite(o.z) && Number.isFinite(o.rotY);
 }
 
+function isWallPlacement(v: unknown): v is WallPlacement {
+  const o = v as WallPlacement;
+  return (
+    !!o &&
+    typeof o === 'object' &&
+    (WALL_SIDES as readonly string[]).includes(o.wall) &&
+    Number.isFinite(o.ox) &&
+    Number.isFinite(o.oy)
+  );
+}
+
 /** Merge a (possibly hostile) layout patch into `base`, keeping only well-formed entries. */
 export function mergeLayout(base: OfficeLayout | undefined, patch: OfficeLayout): OfficeLayout {
   const out: OfficeLayout = { ...base };
@@ -114,9 +125,12 @@ export function mergeLayout(base: OfficeLayout | undefined, patch: OfficeLayout)
     out.furniture = cap(merged);
   }
   if (patch.wallItems && typeof patch.wallItems === 'object') {
-    const merged: Record<string, number> = { ...out.wallItems };
+    const merged: Record<string, WallPlacement | number> = { ...out.wallItems };
     for (const [k, v] of Object.entries(patch.wallItems)) {
-      if (Number.isFinite(v)) merged[k] = v;
+      // a bare number is the legacy along-wall-offset-only shape; still accepted
+      // so an office saved before walls were movable keeps its arrangement
+      if (Number.isFinite(v)) merged[k] = v as number;
+      else if (isWallPlacement(v)) merged[k] = { wall: v.wall, ox: v.ox, oy: v.oy };
     }
     out.wallItems = cap(merged);
   }

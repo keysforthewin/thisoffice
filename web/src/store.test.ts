@@ -373,7 +373,7 @@ describe('build mode', () => {
 
   it('leaving build mode drops any in-flight hold', () => {
     useStore.setState({ buildMode: true });
-    useStore.getState().setBuildHold({ kind: 'furniture', key: 'couch', ghost: { x: 0, z: 0, rotY: 0 }, ghostOffset: null, valid: true });
+    useStore.getState().setBuildHold({ kind: 'furniture', key: 'couch', ghost: { x: 0, z: 0, rotY: 0 }, wallGhost: null, valid: true });
     useStore.getState().setBuildMode(false);
     expect(useStore.getState().buildMode).toBe(false);
     expect(useStore.getState().buildHold).toBeNull();

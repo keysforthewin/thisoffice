@@ -27,13 +27,11 @@ const TV_HALF_DEPTH = 0.0642 * TV_SCALE;
 export const TV_SCREEN_W = 2.6;
 export const TV_SCREEN_H = 1.46;
 
-interface Props {
-  position: [number, number, number];
-  rotationY?: number;
-}
+/** How far the TV body stands off the wall plane (its old world x offset). */
+const TV_STANDOFF = 0.07;
 
 /** Wall-mounted TV: Kenney furniture body + a canvas screen cycling stat pages every TV_PAGE_MS. */
-export function WallTV({ position, rotationY = 0 }: Props) {
+export function WallTV() {
   const { ctx, texture } = useMemo(() => {
     const canvas = document.createElement('canvas');
     canvas.width = W;
@@ -100,7 +98,7 @@ export function WallTV({ position, rotationY = 0 }: Props) {
   };
 
   return (
-    <group position={position} rotation={[0, rotationY, 0]}>
+    <group position={[0, 0, TV_STANDOFF]}>
       <FurnitureModel
         url="/models/furniture/televisionModern.glb"
         scale={[TV_SCALE, TV_SCALE, TV_SCALE]}

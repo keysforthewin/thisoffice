@@ -64,9 +64,34 @@ export interface OfficeLayout {
   seats?: Record<number, ItemPose>;
   /** floor furniture keyed by stable id: couch, couch2, lampBack, lampCouch, lampCouch2, cactusSmall, catPerson */
   furniture?: Record<string, ItemPose>;
-  /** wall-mounted items keyed by id: windowBack, windowLeft, wallArt, tv → along-wall offset (the wall's local `ox` frame) */
-  wallItems?: Record<string, number>;
+  /**
+   * Wall-mounted items keyed by id: windowBack, windowLeft, wallArt, eotm, tv,
+   * todoBoard, statusBoard.
+   *
+   * A bare `number` is the legacy shape — the along-wall offset only, on
+   * whichever wall the item was hardcoded to before walls became movable. It is
+   * still accepted and read as `{ wall: <default>, ox: value, oy: <default> }`,
+   * so an office saved before this existed keeps its arrangement.
+   */
+  wallItems?: Record<string, WallPlacement | number>;
 }
+
+/** Where a wall-mounted item hangs: which wall, how far along it, how high. */
+export interface WallPlacement {
+  wall: WallSide;
+  /** along-wall offset in the wall's local frame, measured from the wall's centre */
+  ox: number;
+  /** height above the floor, in world units (not the wall group's local frame) */
+  oy: number;
+}
+
+/**
+ * The four walls, in perimeter order: each one's `ox` picks up where the
+ * previous one's leaves off, so dragging an item past a wall's end carries it
+ * around the corner onto the next (see web/src/scene/walls.ts).
+ */
+export const WALL_SIDES = ['left', 'back', 'right', 'front'] as const;
+export type WallSide = (typeof WALL_SIDES)[number];
 
 /** Image formats accepted for the wall painting, and the extension each is stored under. */
 export const WALL_ART_EXTS = ['png', 'jpg', 'webp'] as const;

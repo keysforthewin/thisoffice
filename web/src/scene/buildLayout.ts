@@ -1,7 +1,8 @@
 import * as THREE from 'three';
-import type { ItemPose, OfficeLayout } from '../../../shared/types.ts';
-import { BACK_Z, roomDims, seatTransform, type SeatTransform } from './layout.ts';
+import { WALL_SIDES, type ItemPose, type OfficeLayout, type WallPlacement, type WallSide } from '../../../shared/types.ts';
+import { BACK_Z, defaultBoardOx, roomDims, seatTransform, type BoardId, type SeatTransform } from './layout.ts';
 import { VISTA_LAYERS } from './vistaLayers.ts';
+import { wallFrame, wallHeightRange } from './walls.ts';
 
 /**
  * Build-mode layout resolution: room-relative defaults (identical to the old
@@ -261,26 +262,39 @@ export function resolveSeat(layout: OfficeLayout | undefined, seat: number, maxS
 }
 
 // ---------------------------------------------------------------------------
-// Wall items (1D placement along a wall's local `ox` axis)
-
-export type WallId = 'back' | 'left';
+// Wall items: which wall, how far along it (`ox`), how high (`oy`)
 
 export interface WallItemDef {
   id: string;
-  wall: WallId;
+  /** the wall it hangs on out of the box; build mode can move it to any of them */
+  wall: WallSide;
   /** half-width along the wall, including frames */
   halfW: number;
+  /** half-height, including frames — items only collide where they overlap in BOTH axes */
+  halfH: number;
+  /** default height above the floor, in world units */
+  oy: number;
+  /**
+   * Windows are openings cut into the wall, not things hung on it: the wall
+   * mesh is built around them and they carry a parallax vista and a light
+   * spill. They move like anything else, but the wall they land on has to
+   * render differently, so the renderer needs to tell them apart.
+   */
+  window?: boolean;
 }
 
 export const WALL_ITEMS: WallItemDef[] = [
-  { id: 'windowBack', wall: 'back', halfW: 1.9 },
-  { id: 'windowLeft', wall: 'left', halfW: 1.9 },
-  { id: 'wallArt', wall: 'back', halfW: 1.0 },
-  { id: 'tv', wall: 'left', halfW: 1.5 },
-  { id: 'eotm', wall: 'back', halfW: 0.8 },
+  { id: 'windowBack', wall: 'back', halfW: 1.9, halfH: 1.05, oy: 2.1, window: true },
+  { id: 'windowLeft', wall: 'left', halfW: 1.9, halfH: 1.05, oy: 2.1, window: true },
+  { id: 'wallArt', wall: 'back', halfW: 1.0, halfH: 0.85, oy: 2.15 },
+  { id: 'tv', wall: 'left', halfW: 1.5, halfH: 0.9, oy: 2.2 },
+  { id: 'eotm', wall: 'back', halfW: 0.8, halfH: 0.65, oy: 2.15 },
+  // the two right-wall boards: the frame is 3.4 wide, so they touch at 3.4 apart
+  { id: 'todoBoard', wall: 'right', halfW: 1.7, halfH: 1.075, oy: 2.0 },
+  { id: 'statusBoard', wall: 'right', halfW: 1.7, halfH: 1.075, oy: 2.0 },
 ];
 
-function wallItem(id: string): WallItemDef | undefined {
+export function wallItem(id: string): WallItemDef | undefined {
   return WALL_ITEMS.find((w) => w.id === id);
 }
 
@@ -307,62 +321,135 @@ export function defaultWallOffset(id: string, maxSeat: number): number {
       // below 4.9 overlaps the window. Unlike the old room-relative offset this is
       // constant, so the TV slides toward the employees as the room grows.
       return 5.0;
+    case 'todoBoard':
+    case 'statusBoard':
+      // right wall: ox is measured forward from centerZ, so these convert the
+      // boards' historical fixed world z (layout.ts owns the anchor)
+      return defaultBoardOx(id, maxSeat);
     default:
       return 0;
   }
 }
 
+/** The margin the vista invariant keeps between a layer edge and the wall's end. */
+const VISTA_MARGIN = 0.1;
+
 /**
- * Vista invariant (vistaLayers.ts): no back-window parallax layer may cross the
- * left wall plane (world -width/2), with the same 0.1 margin BACK_LOCAL_WALL_X
- * bakes in. Layers ride the opening, so the opening's minimum world x follows
- * from the leftmost layer edge.
+ * Vista invariant (vistaLayers.ts): no parallax layer of the *back* window may
+ * cross the wall's end, where it would be visible edge-on through another
+ * window. Derived from that set's leftmost layer edge.
  */
 export const MIN_BACK_WINDOW_OX: number = (() => {
   const { width } = roomDims(3); // width is constant across room growth
-  const minLayerLeftEdge = Math.min(...VISTA_LAYERS.back.map((l) => l.x - l.w / 2));
-  return -width / 2 + 0.1 - minLayerLeftEdge;
+  const leftmost = Math.min(...VISTA_LAYERS.back.map((l) => l.x - l.w / 2));
+  return -width / 2 + VISTA_MARGIN - leftmost;
 })();
 
-/** Legal [min,max] along-wall offsets for a wall item in the current room. */
-export function wallOffsetRange(id: string, maxSeat: number): [number, number] {
+/**
+ * How much of a wall's end a window must keep clear, beyond its own half-width.
+ *
+ * A window's parallax layers are far wider than its opening — the `back` set
+ * spans ~24 units against a 15.2-unit wall — so "no layer may cross the wall's
+ * end" is satisfiable on one side at best. These are the two rules the fixed
+ * windows always had, now applied on whichever wall the window hangs on:
+ * `windowBack`'s layers are pushed to one side, so it holds that side
+ * explicitly; `windowLeft`'s are centred, so it just stays well off both ends.
+ *
+ * The cost is the leak the design accepts: two windows on adjacent walls at
+ * extreme offsets can catch a glimpse of each other's city. Closing it properly
+ * means authoring a vista set per wall, which is art, not code.
+ */
+function vistaInset(id: string): { min?: number; ends?: number } {
+  if (id === 'windowBack') {
+    const leftmost = Math.min(...VISTA_LAYERS.back.map((l) => l.x - l.w / 2));
+    return { min: VISTA_MARGIN - leftmost };
+  }
+  if (id === 'windowLeft') return { ends: 2.5 };
+  return {};
+}
+
+/** Legal [min,max] along-wall offsets for an item on a given wall in the current room. */
+export function wallOffsetRange(id: string, wall: WallSide, maxSeat: number): [number, number] {
   const def = wallItem(id);
-  const { width, depth } = roomDims(maxSeat);
-  const span = (def?.wall === 'left' ? depth : width) / 2;
-  let min = -span + (def?.halfW ?? 0) + WALL_END_MARGIN;
-  const max = span - (def?.halfW ?? 0) - WALL_END_MARGIN;
-  if (id === 'windowBack') min = Math.max(min, MIN_BACK_WINDOW_OX);
-  if (id === 'windowLeft') {
-    // conservative: the left vista's layers are centered, keep them well off both wall ends
-    return [-span + 2.5, span - 2.5];
-  }
-  return [min, max];
+  const span = wallFrame(wall, maxSeat).span / 2;
+  const halfW = def?.halfW ?? 0;
+  const inset = vistaInset(id);
+  if (inset.ends !== undefined) return [-span + inset.ends, span - inset.ends];
+  let min = -span + halfW + WALL_END_MARGIN;
+  const max = span - halfW - WALL_END_MARGIN;
+  if (inset.min !== undefined) min = Math.max(min, -span + inset.min);
+  return min <= max ? [min, max] : [min, min];
 }
 
+/** Legal [min,max] heights for an item, clear of the floor and ceiling. */
+export function wallItemHeightRange(id: string): [number, number] {
+  return wallHeightRange(wallItem(id)?.halfH ?? 0);
+}
+
+/** The placement an item takes with nothing saved for it. */
+export function defaultWallPlacement(id: string, maxSeat: number): WallPlacement {
+  const def = wallItem(id);
+  const wall = def?.wall ?? 'back';
+  return { wall, ox: defaultWallOffset(id, maxSeat), oy: def?.oy ?? 2.1 };
+}
+
+/**
+ * The saved placement of a wall item, clamped into the current room.
+ *
+ * A bare number is the legacy shape — an along-wall offset on the item's
+ * original wall, from before walls became movable — so an office saved then
+ * still hangs everything where it was.
+ */
+export function resolveWallItem(layout: OfficeLayout | undefined, id: string, maxSeat: number): WallPlacement {
+  const saved = layout?.wallItems?.[id];
+  const def = defaultWallPlacement(id, maxSeat);
+  let wall = def.wall;
+  let ox = def.ox;
+  let oy = def.oy;
+  if (typeof saved === 'number') {
+    if (Number.isFinite(saved)) ox = saved;
+  } else if (saved && typeof saved === 'object') {
+    if (WALL_SIDES.includes(saved.wall)) wall = saved.wall;
+    if (Number.isFinite(saved.ox)) ox = saved.ox;
+    if (Number.isFinite(saved.oy)) oy = saved.oy;
+  }
+  const [minX, maxX] = wallOffsetRange(id, wall, maxSeat);
+  const [minY, maxY] = wallItemHeightRange(id);
+  return { wall, ox: THREE.MathUtils.clamp(ox, minX, maxX), oy: THREE.MathUtils.clamp(oy, minY, maxY) };
+}
+
+/** Back-compat shim for callers that only care where along its wall an item sits. */
 export function resolveWallOffset(layout: OfficeLayout | undefined, id: string, maxSeat: number): number {
-  const o = layout?.wallItems?.[id];
-  const [min, max] = wallOffsetRange(id, maxSeat);
-  if (typeof o !== 'number' || !Number.isFinite(o)) {
-    return defaultWallOffset(id, maxSeat);
-  }
-  return THREE.MathUtils.clamp(o, min, max);
+  return resolveWallItem(layout, id, maxSeat).ox;
 }
 
-/** Range check + 1D interval overlap against the other items on the same wall. */
+/**
+ * Range check plus 2D overlap against the other items on the same wall.
+ *
+ * Two items clash only when they overlap along the wall AND in height, so a
+ * board can hang above another rather than the wall filling up in one
+ * dimension. Items on *adjacent* walls are not checked against each other: they
+ * meet at a right angle at the corner, and a hanging is a few centimetres deep.
+ */
 export function isWallPlacementValid(
   layout: OfficeLayout | undefined,
   id: string,
-  offset: number,
+  placement: WallPlacement,
   maxSeat: number,
 ): boolean {
   const def = wallItem(id);
   if (!def) return false;
-  const [min, max] = wallOffsetRange(id, maxSeat);
-  if (offset < min - 1e-9 || offset > max + 1e-9) return false;
+  const [minX, maxX] = wallOffsetRange(id, placement.wall, maxSeat);
+  if (placement.ox < minX - 1e-9 || placement.ox > maxX + 1e-9) return false;
+  const [minY, maxY] = wallItemHeightRange(id);
+  if (placement.oy < minY - 1e-9 || placement.oy > maxY + 1e-9) return false;
   for (const other of WALL_ITEMS) {
-    if (other.id === id || other.wall !== def.wall) continue;
-    const otherOx = resolveWallOffset(layout, other.id, maxSeat);
-    if (Math.abs(offset - otherOx) < def.halfW + other.halfW) return false;
+    if (other.id === id) continue;
+    const o = resolveWallItem(layout, other.id, maxSeat);
+    if (o.wall !== placement.wall) continue;
+    const apart = Math.abs(placement.ox - o.ox) >= def.halfW + other.halfW;
+    const clear = Math.abs(placement.oy - o.oy) >= def.halfH + other.halfH;
+    if (!apart && !clear) return false;
   }
   return true;
 }

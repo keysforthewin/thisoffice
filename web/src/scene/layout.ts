@@ -32,32 +32,28 @@ export function seatTransform(seat: number): SeatTransform {
 
 export const BACK_Z = BOSS_Z - 3.8;
 
-/** Whiteboard hangs on the right wall near the boss end of the room. */
-export function whiteboardTransform(maxSeat: number) {
-  const { width } = roomDims(maxSeat);
-  return {
-    position: new THREE.Vector3(width / 2 - 0.06, 2.0, -1.2),
-    rotationY: -Math.PI / 2,
-    // camera spot: back a few units along -x, at board height
-    camera: new THREE.Vector3(width / 2 - 4.2, 2.0, -1.2),
-    lookAt: new THREE.Vector3(width / 2, 2.0, -1.2),
-  };
+/**
+ * Where the two right-wall boards hang by default, in world z. Build mode moves
+ * them along the wall, and a wall item's saved offset is measured from the
+ * room's centre (`ox`, see buildLayout.ts) — the room grows forward, so an
+ * offset that stayed put in world space would drift as seats are added. These
+ * absolute z values are the anchor `defaultBoardOx` converts from.
+ */
+export const BOARD_DEFAULT_Z = { todoBoard: -1.2, statusBoard: -5.6 } as const;
+export type BoardId = keyof typeof BOARD_DEFAULT_Z;
+
+/** Default along-wall offset (world z = centerZ + ox) for a right-wall board. */
+export function defaultBoardOx(id: BoardId, maxSeat: number): number {
+  return BOARD_DEFAULT_Z[id] - roomDims(maxSeat).centerZ;
 }
 
-/**
- * Status board: same right wall, boss end. The todo board's frame spans
- * z −2.9..0.5; this one spans −7.3..−3.9 (1.0 gap) with the back wall at −8.4,
- * so both fit at every room size.
+/*
+ * There is deliberately no boardTransform/whiteboardTransform here any more.
+ * Both boards are wall items now and can hang on any wall at any height, so
+ * anything that needs one asks `resolveWallItem` + `wallToWorld` (walls.ts).
+ * A transform that baked in the right wall would silently keep aiming at where
+ * a board used to be.
  */
-export function statusBoardTransform(maxSeat: number) {
-  const { width } = roomDims(maxSeat);
-  return {
-    position: new THREE.Vector3(width / 2 - 0.06, 2.0, -5.6),
-    rotationY: -Math.PI / 2,
-    camera: new THREE.Vector3(width / 2 - 4.2, 2.0, -5.6),
-    lookAt: new THREE.Vector3(width / 2, 2.0, -5.6),
-  };
-}
 
 export function roomDims(maxSeat: number) {
   const rows = Math.max(1, Math.ceil(Math.max(0, maxSeat) / COLS));

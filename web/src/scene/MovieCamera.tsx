@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { useStore } from '../store.ts';
 import { activeSetKey, ARCHETYPES, pickShot, type PickedShot } from './movieShots.ts';
+import { askerAnchor, fallbackAnchor } from '../quiz/askerAnchor.ts';
 
 /**
  * This is a visualizer, not a trailer — shots dwell so you can actually read a
@@ -96,8 +97,20 @@ export function MovieCamera() {
   useFrame((_, delta) => {
     if (suppressed) return;
     const now = Date.now();
-    const { office, lastActivity, inboxAlert } = useStore.getState();
-    const key = activeSetKey(lastActivity, now, office);
+    const { office, lastActivity, inboxAlert, quiz } = useStore.getState();
+    // Resolved exactly the way SpeechBubble resolves it, so the camera frames
+    // where the bubble actually is — including the clamp that keeps an evicted
+    // asker's bubble inside the room.
+    const question = quiz?.question ?? null;
+    const maxSeat = Math.max(3, ...(office?.employees.map((e) => e.seat) ?? []));
+    const quizAnchor =
+      question && office
+        ? askerAnchor(question.asker, question.askerSeat, { layout: office.layout, katPerson: office.katPerson }, maxSeat) ??
+          fallbackAnchor(maxSeat)
+        : null;
+    // a new question is a new subject in a new place: fold it into the recut
+    // fingerprint so the camera turns to whoever just spoke up
+    const key = `${activeSetKey(lastActivity, now, office)}#${question?.id ?? ''}`;
     shotAge.current += delta;
 
     if (key !== setKey.current) {
@@ -140,6 +153,7 @@ export function MovieCamera() {
         recentMotion: recentMotion.current,
         waiting,
         forcePrimary: forcePrimary.current,
+        quizAnchor,
       });
       forcePrimary.current = undefined;
       shot.current = picked;

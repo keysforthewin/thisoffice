@@ -139,6 +139,27 @@ export class Quiz {
     void this.askNext();
   }
 
+  /**
+   * Abandon the round in progress and open a fresh one.
+   *
+   * The escape hatch for a round that has gone wrong in a way the state machine
+   * cannot notice on its own: a question nobody wants to answer, an answer given
+   * by mistake that has sent the guessing down a dead branch, or a photo
+   * handshake whose client went away. Deliberately keeps the two things that are
+   * *history* rather than round state — the wall photo and the win tally — since
+   * those survive every normal round change too. Safe to call while switched
+   * off, in which case no question is asked until the game is switched back on.
+   */
+  restart(): void {
+    this.clearTimers();
+    this.resetRound();
+    this.state.winner = null;
+    this.state.awaitingPhoto = false;
+    this.deps.status('20 questions: starting a new round');
+    this.publish();
+    if (this.state.enabled) void this.askNext();
+  }
+
   /** Stop every pending timer — used on shutdown and when the game is switched off. */
   stop(): void {
     this.clearTimers();

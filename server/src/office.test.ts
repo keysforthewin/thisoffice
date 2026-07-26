@@ -799,6 +799,32 @@ describe('layout persistence', () => {
     expect(layout.wallItems!.tv).toBe(1.5);
   });
 
+  it('accepts a full wall placement, and keeps the legacy bare offset alongside it', () => {
+    const office = new Office(() => ['Knight'], tempFile());
+    office.setLayout({ wallItems: { wallArt: 2.4 } }); // saved before walls were movable
+    office.setLayout({ wallItems: { tv: { wall: 'front', ox: 1.5, oy: 3.2 } } });
+    const layout = office.getState().layout!;
+    expect(layout.wallItems!.wallArt).toBe(2.4);
+    expect(layout.wallItems!.tv).toEqual({ wall: 'front', ox: 1.5, oy: 3.2 });
+  });
+
+  it('drops a placement naming a wall that does not exist, or with a bad offset', () => {
+    const office = new Office(() => ['Knight'], tempFile());
+    office.setLayout({
+      wallItems: {
+        ceilingArt: { wall: 'ceiling', ox: 0, oy: 2 },
+        nanOx: { wall: 'back', ox: NaN, oy: 2 },
+        noOy: { wall: 'back', ox: 1 },
+        good: { wall: 'right', ox: 1, oy: 2 },
+      } as any,
+    });
+    const items = office.getState().layout!.wallItems!;
+    expect(items.ceilingArt).toBeUndefined();
+    expect(items.nanOx).toBeUndefined();
+    expect(items.noOy).toBeUndefined();
+    expect(items.good).toEqual({ wall: 'right', ox: 1, oy: 2 });
+  });
+
   it('caps each map at 200 keys', () => {
     const office = new Office(() => ['Knight'], tempFile());
     for (let i = 0; i < 250; i++) office.setLayout({ seats: { [i]: { x: i, z: 0, rotY: 0 } } });

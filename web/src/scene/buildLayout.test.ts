@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { OfficeLayout } from '../../../shared/types.ts';
-import { BACK_Z, roomDims, seatTransform } from './layout.ts';
+import { BACK_Z, ROOM_HEIGHT, roomDims, seatTransform } from './layout.ts';
 import { VISTA_LAYERS } from './vistaLayers.ts';
 import {
   GRID,
@@ -9,14 +9,17 @@ import {
   clampPoseToRoom,
   deskFootprint,
   defaultWallOffset,
+  defaultWallPlacement,
   isPlacementValid,
   isWallPlacementValid,
   obbFromPose,
   obbIntersects,
   resolveFurniture,
   resolveSeat,
+  resolveWallItem,
   resolveWallOffset,
   snapPose,
+  wallItemHeightRange,
   wallOffsetRange,
   WALL_ITEMS,
 } from './buildLayout.ts';
@@ -188,14 +191,16 @@ describe('wall items', () => {
 
   it('the tv and windowLeft defaults are both valid placements at small and large room sizes', () => {
     for (const maxSeat of [3, 12]) {
-      expect(isWallPlacementValid(undefined, 'tv', defaultWallOffset('tv', maxSeat), maxSeat)).toBe(true);
-      expect(isWallPlacementValid(undefined, 'windowLeft', defaultWallOffset('windowLeft', maxSeat), maxSeat)).toBe(true);
+      for (const id of ['tv', 'windowLeft']) {
+        expect(isWallPlacementValid(undefined, id, defaultWallPlacement(id, maxSeat), maxSeat)).toBe(true);
+      }
     }
   });
 
   it('rejects moving windowLeft onto the tv span', () => {
     // within windowLeft's own legal range, but overlapping the tv's default span
-    expect(isWallPlacementValid(undefined, 'windowLeft', 4.5, 3)).toBe(false);
+    const at = { ...defaultWallPlacement('windowLeft', 3), ox: 4.5 };
+    expect(isWallPlacementValid(undefined, 'windowLeft', at, 3)).toBe(false);
   });
 
   it('resolveWallOffset returns the override when in range', () => {
@@ -205,11 +210,30 @@ describe('wall items', () => {
 
   it('clamps overrides to the wall range', () => {
     const layout: OfficeLayout = { wallItems: { wallArt: 100, windowLeft: -100 } };
-    const [artMin, artMax] = wallOffsetRange('wallArt', 3);
+    const [artMin, artMax] = wallOffsetRange('wallArt', 'back', 3);
     expect(resolveWallOffset(layout, 'wallArt', 3)).toBeCloseTo(artMax, 6);
-    const [leftMin] = wallOffsetRange('windowLeft', 3);
+    const [leftMin] = wallOffsetRange('windowLeft', 'left', 3);
     expect(resolveWallOffset(layout, 'windowLeft', 3)).toBeCloseTo(leftMin, 6);
     expect(artMin).toBeLessThan(artMax);
+  });
+
+  it('reads a legacy bare-number offset as the item on its original wall', () => {
+    // saved before walls were movable: just an along-wall offset
+    const legacy: OfficeLayout = { wallItems: { tv: 3.0, wallArt: 1.0 } };
+    expect(resolveWallItem(legacy, 'tv', 3)).toEqual({ wall: 'left', ox: 3.0, oy: 2.2 });
+    expect(resolveWallItem(legacy, 'wallArt', 3)).toEqual({ wall: 'back', ox: 1.0, oy: 2.15 });
+  });
+
+  it('reads a full placement, and ignores a corrupt one field at a time', () => {
+    const ok: OfficeLayout = { wallItems: { wallArt: { wall: 'front', ox: 1.5, oy: 3.0 } } };
+    expect(resolveWallItem(ok, 'wallArt', 3)).toEqual({ wall: 'front', ox: 1.5, oy: 3.0 });
+    // a bad wall falls back to the default wall, but keeps the offsets it can use
+    const bad = { wallItems: { wallArt: { wall: 'ceiling', ox: 1.5, oy: 3.0 } } } as unknown as OfficeLayout;
+    expect(resolveWallItem(bad, 'wallArt', 3)).toMatchObject({ wall: 'back', ox: 1.5, oy: 3.0 });
+    // each field falls back on its own: the wall here is fine, the offsets are not
+    const nan = { wallItems: { wallArt: { wall: 'front', ox: 'x', oy: null } } } as unknown as OfficeLayout;
+    const d = defaultWallPlacement('wallArt', 3);
+    expect(resolveWallItem(nan, 'wallArt', 3)).toEqual({ wall: 'front', ox: d.ox, oy: d.oy });
   });
 
   it('the back window can never cross the vista invariant', () => {
@@ -224,24 +248,75 @@ describe('wall items', () => {
   });
 
   it('rejects same-wall overlap but allows cross-wall coexistence', () => {
-    // wall art dropped onto the back window (both on the back wall)
-    expect(isWallPlacementValid(undefined, 'wallArt', defaultWallOffset('windowBack', 3), 3)).toBe(false);
+    const onBack = (ox: number) => ({ wall: 'back' as const, ox, oy: 2.15 });
+    // wall art dropped onto the back window (both on the back wall, same height)
+    expect(isWallPlacementValid(undefined, 'wallArt', onBack(defaultWallOffset('windowBack', 3)), 3)).toBe(false);
     // defaults are valid placements
-    expect(isWallPlacementValid(undefined, 'wallArt', defaultWallOffset('wallArt', 3), 3)).toBe(true);
-    // the left window shares no wall with the back-wall items
-    expect(isWallPlacementValid(undefined, 'windowLeft', defaultWallOffset('windowBack', 3), 3)).toBe(true);
+    expect(isWallPlacementValid(undefined, 'wallArt', defaultWallPlacement('wallArt', 3), 3)).toBe(true);
+    // the same along-wall offset on a different wall shares nothing
+    expect(
+      isWallPlacementValid(undefined, 'wallArt', { wall: 'front', ox: defaultWallOffset('windowBack', 3), oy: 2.15 }, 3),
+    ).toBe(true);
+  });
+
+  it('lets one item hang above another instead of filling the wall sideways', () => {
+    const status = resolveWallItem(undefined, 'statusBoard', 3);
+    // directly on top of the status board: same spot, same height
+    expect(isWallPlacementValid(undefined, 'todoBoard', { ...status }, 3)).toBe(false);
+    // ...but stacked clear of it in height, at the same offset, it fits
+    const stacked = { ...status, oy: status.oy + 2.15 + 0.05 };
+    expect(stacked.oy).toBeLessThanOrEqual(wallItemHeightRange('todoBoard')[1]);
+    expect(isWallPlacementValid(undefined, 'todoBoard', stacked, 3)).toBe(true);
+  });
+
+  it('keeps items off the floor and out of the ceiling', () => {
+    const [min, max] = wallItemHeightRange('todoBoard');
+    expect(min).toBeGreaterThan(0);
+    expect(max).toBeLessThan(ROOM_HEIGHT);
+    const tooLow = { ...defaultWallPlacement('todoBoard', 3), oy: 0.1 };
+    expect(isWallPlacementValid(undefined, 'todoBoard', tooLow, 3)).toBe(false);
+    expect(resolveWallItem({ wallItems: { todoBoard: { wall: 'right', ox: 0, oy: 99 } } }, 'todoBoard', 3).oy).toBeCloseTo(max, 6);
   });
 
   it('places the employee-of-the-month frame on the back wall without overlapping', () => {
     for (const maxSeat of [3, 6, 12]) {
-      const ox = defaultWallOffset('eotm', maxSeat);
-      expect(isWallPlacementValid(undefined, 'eotm', ox, maxSeat)).toBe(true);
+      expect(isWallPlacementValid(undefined, 'eotm', defaultWallPlacement('eotm', maxSeat), maxSeat)).toBe(true);
     }
   });
 
-  it('keeps every default back-wall item mutually valid', () => {
-    for (const id of ['windowBack', 'wallArt', 'eotm']) {
-      expect(isWallPlacementValid(undefined, id, defaultWallOffset(id, 6), 6)).toBe(true);
+  it('makes both right-wall boards draggable without moving them from their old spots', () => {
+    for (const id of ['todoBoard', 'statusBoard'] as const) {
+      expect(WALL_ITEMS.find((w) => w.id === id)).toMatchObject({ wall: 'right', halfW: 1.7 });
+    }
+    // ox is measured from centerZ, so the defaults must still land on the exact
+    // world z the boards hung at before they became wall items — at every room size
+    for (const maxSeat of [3, 6, 12]) {
+      const { centerZ } = roomDims(maxSeat);
+      expect(centerZ + defaultWallOffset('todoBoard', maxSeat)).toBeCloseTo(-1.2, 6);
+      expect(centerZ + defaultWallOffset('statusBoard', maxSeat)).toBeCloseTo(-5.6, 6);
+    }
+  });
+
+  it('keeps the board defaults valid and rejects sliding one onto the other', () => {
+    for (const maxSeat of [3, 12]) {
+      for (const id of ['todoBoard', 'statusBoard']) {
+        expect(isWallPlacementValid(undefined, id, defaultWallPlacement(id, maxSeat), maxSeat)).toBe(true);
+      }
+      // 3.4 apart is exactly touching; anything closer overlaps
+      const status = defaultWallPlacement('statusBoard', maxSeat);
+      expect(isWallPlacementValid(undefined, 'todoBoard', { ...status, ox: status.ox + 3.2 }, maxSeat)).toBe(false);
+      expect(isWallPlacementValid(undefined, 'todoBoard', { ...status, ox: status.ox + 3.6 }, maxSeat)).toBe(true);
+    }
+  });
+
+  it('keeps every default item mutually valid, on every wall', () => {
+    for (const maxSeat of [3, 6, 12]) {
+      for (const item of WALL_ITEMS) {
+        expect(
+          isWallPlacementValid(undefined, item.id, defaultWallPlacement(item.id, maxSeat), maxSeat),
+          `${item.id} at maxSeat ${maxSeat}`,
+        ).toBe(true);
+      }
     }
   });
 });

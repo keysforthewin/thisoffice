@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '../store.ts';
 import { CharacterButton } from './picker/CharacterButton.tsx';
-import { setQuizEnabled } from '../quiz/quizApi.ts';
+import { restartQuiz, setQuizEnabled } from '../quiz/quizApi.ts';
 
 const api = (path: string, method: string, body?: unknown) =>
   fetch(`/api${path}`, {
@@ -111,6 +111,23 @@ export function SettingsPanel() {
             </span>
           </span>
         </label>
+        <button
+          style={styles.hire}
+          onClick={() => {
+            if (
+              confirm(
+                'Start a new round? The current question and every answer you have given are discarded, and the office begins guessing again from nothing. The Employee of the Month photo and the win tally are kept.',
+              )
+            )
+              restartQuiz();
+          }}
+        >
+          ↺ Reset game
+        </button>
+        <div style={{ fontSize: 12, color: '#9aa4b0', marginTop: 6 }}>
+          Use this if the round is stuck — a question you can't answer either way, an answer given by mistake, or a
+          winner still waiting on their photo. Works whether or not the game is switched on.
+        </div>
 
         <h3 style={styles.sectionTitle}>Layout</h3>
         <button

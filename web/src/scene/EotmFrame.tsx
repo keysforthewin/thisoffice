@@ -45,7 +45,10 @@ function useCaptionTexture(name: string): THREE.CanvasTexture {
  * The whole frame belongs to the game, so it disappears with it: an office
  * that never plays shows a plain wall rather than an empty award frame.
  */
-export function EotmFrame({ position }: { position: [number, number, number] }) {
+/** How far the frame stands off the wall plane (its old +z offset). */
+const EOTM_STANDOFF = 0.05;
+
+export function EotmFrame() {
   const enabled = useStore((s) => s.quiz?.enabled ?? false);
   const photo = useStore((s) => s.quiz?.photo);
   // primitives, not the object: the quiz state arrives as a fresh object on every broadcast
@@ -61,7 +64,7 @@ export function EotmFrame({ position }: { position: [number, number, number] }) 
   if (!v) {
     // no winner yet: an empty frame, so the wall doesn't have a hole in it
     return (
-      <group position={position}>
+      <group position={[0, 0, EOTM_STANDOFF]}>
         <mesh castShadow>
           <boxGeometry args={[EOTM_W + 0.16, EOTM_H + EOTM_CAPTION_H + 0.16, 0.06]} />
           <meshStandardMaterial color="#2b2418" roughness={0.5} />
@@ -73,19 +76,11 @@ export function EotmFrame({ position }: { position: [number, number, number] }) 
       </group>
     );
   }
-  return <EotmPhotoFrame position={position} v={v} caption={caption} />;
+  return <EotmPhotoFrame v={v} caption={caption} />;
 }
 
 /** Split out so `useTexture` (which suspends) never mounts without a photo to load. */
-function EotmPhotoFrame({
-  position,
-  v,
-  caption,
-}: {
-  position: [number, number, number];
-  v: number;
-  caption: THREE.CanvasTexture;
-}) {
+function EotmPhotoFrame({ v, caption }: { v: number; caption: THREE.CanvasTexture }) {
   const texture = useTexture(`/api/decor/eotm?v=${v}`);
 
   useEffect(() => {
@@ -106,7 +101,7 @@ function EotmPhotoFrame({
   );
 
   return (
-    <group position={position}>
+    <group position={[0, 0, EOTM_STANDOFF]}>
       <mesh castShadow>
         <boxGeometry args={[EOTM_W + 0.16, EOTM_H + EOTM_CAPTION_H + 0.16, 0.06]} />
         <meshStandardMaterial color="#2b2418" roughness={0.5} />

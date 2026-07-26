@@ -12,6 +12,7 @@
     "dev:web": "npm run dev -w web",
     "build": "npm run build -w web",
     "catalog": "node scripts/generate-catalog.mjs",
+    "vista": "node scripts/measure-vista.mjs",
     "test": "vitest run",
     "check-rig": "tsx scripts/check-rig.ts",
     "promote": "tsx scripts/promote-character.ts"
