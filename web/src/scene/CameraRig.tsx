@@ -4,7 +4,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { enterFocusMode, useStore, type CameraPose } from '../store.ts';
 import { whiteboardTransform, statusBoardTransform } from './layout.ts';
 import { resolveSeat } from './buildLayout.ts';
-import type { OfficeLayout, OfficeState } from '../../../shared/types.ts';
+import type { OfficeLayout, OfficeState, QuizWinner } from '../../../shared/types.ts';
 import { MovieCamera } from './MovieCamera.tsx';
 import { clampToRoom, fitDistance, subjectFor } from './movieShots.ts';
 import { clampOffset, wrapLines } from './monitorScrollback.ts';
@@ -13,6 +13,10 @@ import { bossScreenLines } from './bossScreen.ts';
 import { MONITOR_COLS, MONITOR_ROWS } from './MonitorScreen.tsx';
 import { pickWallArtImage, reframeWallArt } from '../wallArt.ts';
 import { clampPan, clampZoom } from './wallArtTexture.ts';
+import { askerAnchor } from '../quiz/askerAnchor.ts';
+import { photoShot } from '../quiz/photoShot.ts';
+import { captureCanvas, PHOTO_FLY_MS, PHOTO_HOLD_MS } from '../quiz/capture.ts';
+import { uploadEotmPhoto } from '../quiz/quizApi.ts';
 
 export interface Pov {
   label: string;
@@ -267,12 +271,108 @@ function FocusControls({ target }: { target: string }) {
   return null;
 }
 
+/**
+ * Runs only when the server asked THIS client for the winner's photo: fly to the
+ * group shot, hold a beat, shoot, upload, fly back. Failure is silent by design —
+ * the server's photo timeout credits the win regardless.
+ *
+ * Office state is read once via `useStore.getState()` rather than subscribed to:
+ * a subscription would re-run this effect (and restart the fly-in) on every
+ * unrelated broadcast that arrives during the ~1.6s capture window.
+ */
+function PhotoControls({ winner, maxSeat }: { winner: QuizWinner; maxSeat: number }) {
+  const { camera, gl, scene } = useThree();
+
+  useEffect(() => {
+    const office = useStore.getState().office;
+    const employee = office?.employees.find((e) => e.name === winner.name);
+    const askerId = office?.boss.name === winner.name ? 'boss' : employee ? employee.id : 'catPerson';
+    const seat = employee ? employee.seat : null;
+    const anchor = office ? askerAnchor(askerId, seat, { layout: office.layout }, maxSeat) : null;
+    if (!anchor) {
+      useStore.getState().clearPendingCapture();
+      return;
+    }
+    const subject = new THREE.Vector3(anchor[0], 0, anchor[2]);
+    const shot = photoShot(subject, maxSeat);
+    const from = camera.position.clone();
+    const fromQuat = camera.quaternion.clone();
+    const perspective = camera as THREE.PerspectiveCamera;
+    const baseFov = perspective.fov;
+
+    // target orientation, computed once by parking a scratch camera at the shot
+    const scratch = perspective.clone();
+    scratch.position.copy(shot.position);
+    scratch.lookAt(shot.lookAt);
+    const toQuat = scratch.quaternion.clone();
+
+    let raf = 0;
+    let holdTimer = 0;
+    const t0 = performance.now();
+    let shooting = false;
+    // guards the hold-timer callback: setTimeout isn't cancelled by unmount
+    // the way rAF is, so without this an unmount during the hold beat (the
+    // server's timeout or another tab finishing first) would still fire the
+    // capture/upload against whatever the camera looks at post-restore
+    let cancelled = false;
+
+    const restore = () => {
+      camera.position.copy(from);
+      camera.quaternion.copy(fromQuat);
+      perspective.fov = baseFov;
+      perspective.updateProjectionMatrix();
+    };
+
+    const step = () => {
+      const t = Math.min(1, (performance.now() - t0) / PHOTO_FLY_MS);
+      const e = t * t * (3 - 2 * t); // smoothstep
+      camera.position.lerpVectors(from, shot.position, e);
+      camera.quaternion.slerpQuaternions(fromQuat, toQuat, e);
+      perspective.fov = THREE.MathUtils.lerp(baseFov, shot.fov, e);
+      perspective.updateProjectionMatrix();
+      if (t < 1) {
+        raf = requestAnimationFrame(step);
+        return;
+      }
+      if (shooting) return;
+      shooting = true;
+      holdTimer = window.setTimeout(() => {
+        if (cancelled) return;
+        void captureCanvas(gl, scene, camera)
+          .then(uploadEotmPhoto)
+          .catch(() => {})
+          .finally(() => {
+            if (cancelled) return;
+            restore();
+            useStore.getState().clearPendingCapture();
+          });
+      }, PHOTO_HOLD_MS);
+    };
+    raf = requestAnimationFrame(step);
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      clearTimeout(holdTimer);
+      // covers unmount mid-flight or mid-hold (pendingCapture cleared
+      // externally) as well as the normal capture-then-clear path above —
+      // restoring twice there is harmless.
+      restore();
+    };
+    // one effect per capture request; `winner` identity is the trigger
+  }, [winner, maxSeat, camera, gl, scene]);
+
+  return null;
+}
+
 export function CameraRig() {
   const mode = useStore((s) => s.cameraMode);
   const buildMode = useStore((s) => s.buildMode);
   const wallArtHover = useStore((s) => s.wallArtHover);
+  const pendingCapture = useStore((s) => s.pendingCapture);
   const povs = usePovList();
   const office = useStore((s) => s.office);
+  const maxSeat = Math.max(3, ...(office?.employees.map((e) => e.seat) ?? []));
   const camera = useThree((s) => s.camera);
   const size = useThree((s) => s.size);
   const lookTarget = useRef(new THREE.Vector3(0, 1, 0));
@@ -361,6 +461,7 @@ export function CameraRig() {
   return (
     <>
       {wallArtHover && <WallArtControls />}
+      {pendingCapture && <PhotoControls winner={pendingCapture} maxSeat={maxSeat} />}
       {controls}
     </>
   );
