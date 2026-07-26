@@ -39,7 +39,24 @@ export function askerAnchor(
   const resolvedSeat = asker === 'boss' ? 0 : seat;
   if (resolvedSeat === null) return null;
   const { position } = resolveSeat(office.layout, resolvedSeat, maxSeat);
-  return [position.x, BUBBLE_Y, position.z];
+  // The room is sized to the current roster, so an evicted asker's seat can now
+  // lie beyond the front wall — the bubble would hang outside the room, in view
+  // of nobody. Clamped, it stays inside and therefore stays clickable.
+  return clampInside(position.x, position.z, maxSeat);
+}
+
+/** Room margin for a clamped anchor: enough that the bubble is not inside a wall. */
+const WALL_MARGIN = 0.8;
+
+function clampInside(x: number, z: number, maxSeat: number): [number, number, number] {
+  const { width, depth, centerZ } = roomDims(maxSeat);
+  const maxX = Math.max(0, width / 2 - WALL_MARGIN);
+  const halfD = Math.max(0, depth / 2 - WALL_MARGIN);
+  return [
+    Math.min(maxX, Math.max(-maxX, x)),
+    BUBBLE_Y,
+    Math.min(centerZ + halfD, Math.max(centerZ - halfD, z)),
+  ];
 }
 
 /**
