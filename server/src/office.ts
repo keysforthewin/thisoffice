@@ -44,6 +44,8 @@ interface PersistedState {
   boss: { name: string; variant: string; bio?: string };
   employees: Array<Pick<Employee, 'id' | 'name' | 'seat' | 'variant' | 'hiredAt'>>;
   staffing?: StaffingSettings;
+  /** office cat; absent in legacy files → she stays */
+  katPerson?: boolean;
   /** per-seat identity memory: an evicted seat's occupant returns with the same name/model/bio */
   roster?: Array<{ seat: number; name: string; variant: string; bio?: string }>;
   /** boss monitor messages; survive server restarts so the boss screen isn't wiped */
@@ -374,6 +376,7 @@ export class Office {
           : null,
       status,
       staffing: clampStaffing(persisted.staffing),
+      katPerson: persisted.katPerson !== false,
       // re-sanitize on load: office.json may have been hand-edited
       ...(persisted.layout ? { layout: mergeLayout(undefined, persisted.layout) } : {}),
       ...(() => {
@@ -389,6 +392,7 @@ export class Office {
       boss: { ...this.state.boss, ...(this.bossBio ? { bio: this.bossBio } : {}) },
       employees: this.state.employees.map(({ id, name, seat, variant, hiredAt }) => ({ id, name, seat, variant, hiredAt })),
       staffing: this.state.staffing,
+      katPerson: this.state.katPerson,
       roster: [...this.roster.entries()]
         .sort(([a], [b]) => a - b)
         .map(([seat, r]) => ({ seat, ...r })),
@@ -755,6 +759,12 @@ export class Office {
   clearWallArt() {
     if (!this.state.wallArt) return;
     delete this.state.wallArt;
+    this.save();
+    this.broadcastState();
+  }
+
+  setKatPerson(show: boolean) {
+    this.state.katPerson = show;
     this.save();
     this.broadcastState();
   }

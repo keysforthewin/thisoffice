@@ -117,7 +117,7 @@ export function CharacterPicker({ current, title, bioPath, onPick, onClose }: Pr
                 style={{ ...styles.tab, ...(tab === 'import' ? styles.tabActive : {}) }}
                 onClick={() => setTab('import')}
               >
-                Import from Mixamo
+                Import
               </button>
               {bioPath && (
                 <button

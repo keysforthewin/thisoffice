@@ -296,7 +296,9 @@ function PhotoControls({ winner, maxSeat }: { winner: QuizWinner; maxSeat: numbe
     // lookup in the live roster: a winner idle-evicted between the guess and the
     // capture would otherwise fall through to Kat Person and be photographed
     // under someone else's name.
-    const anchor = office ? askerAnchor(winner.asker, winner.seat, { layout: office.layout }, maxSeat) : null;
+    const anchor = office
+      ? askerAnchor(winner.asker, winner.seat, { layout: office.layout, katPerson: office.katPerson }, maxSeat)
+      : null;
     if (!anchor) {
       useStore.getState().clearPendingCapture();
       return;

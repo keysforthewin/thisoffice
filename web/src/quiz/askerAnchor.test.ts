@@ -39,6 +39,10 @@ describe('askerAnchor', () => {
     expect(z).toBeLessThan(centerZ + depth / 2);
   });
 
+  it('has nowhere to put her when she is switched off, so the caller falls back', () => {
+    expect(askerAnchor('catPerson', null, { layout: undefined, katPerson: false }, 5)).toBeNull();
+  });
+
   it('returns null for an unknown asker and for no office', () => {
     // an unknown asker resolves to a null seat (the caller couldn't find them)
     expect(askerAnchor('ghost', null, noLayout, 5)).toBeNull();

@@ -17,6 +17,7 @@ export function SpeechBubble({ maxSeat }: { maxSeat: number }) {
   // across unrelated broadcasts (`stableLayout` in store.ts); `office` itself
   // is not.
   const layout = useStore((s) => s.office?.layout);
+  const katPerson = useStore((s) => s.office?.katPerson !== false);
   const hasOffice = useStore((s) => s.office != null);
 
   // build mode is for rearranging the room; a click-through bubble is in the way
@@ -26,7 +27,8 @@ export function SpeechBubble({ maxSeat }: { maxSeat: number }) {
   // answerable. `fallbackAnchor` is the last resort — never render nothing,
   // because the server keeps holding this question until this bubble answers it.
   const anchor =
-    askerAnchor(question.asker, question.askerSeat, hasOffice ? { layout } : null, maxSeat) ?? fallbackAnchor(maxSeat);
+    askerAnchor(question.asker, question.askerSeat, hasOffice ? { layout, katPerson } : null, maxSeat) ??
+    fallbackAnchor(maxSeat);
 
   return (
     <Html position={anchor} center distanceFactor={9} zIndexRange={[10, 0]}>

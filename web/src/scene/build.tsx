@@ -120,7 +120,13 @@ export function BuildHandle({
     const ghost = ghostFrom(e);
     if (!ghost) return;
     const st = useStore.getState();
-    const ok = isPlacementValid(st.office?.layout, { kind, key: itemKey, pose: ghost }, occupiedSeats(), maxSeatOf());
+    const ok = isPlacementValid(
+      st.office?.layout,
+      { kind, key: itemKey, pose: ghost },
+      occupiedSeats(),
+      maxSeatOf(),
+      st.office?.katPerson !== false,
+    );
     st.setBuildHold({ kind, key: itemKey, ghost, ghostOffset: null, valid: ok });
   };
 

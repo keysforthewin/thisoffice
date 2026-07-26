@@ -12,7 +12,9 @@
     "dev:web": "npm run dev -w web",
     "build": "npm run build -w web",
     "catalog": "node scripts/generate-catalog.mjs",
-    "test": "vitest run"
+    "test": "vitest run",
+    "check-rig": "tsx scripts/check-rig.ts",
+    "promote": "tsx scripts/promote-character.ts"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",

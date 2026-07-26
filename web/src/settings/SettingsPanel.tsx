@@ -74,6 +74,23 @@ export function SettingsPanel() {
           />
         </div>
 
+        <h3 style={styles.sectionTitle}>Kat Person</h3>
+        <label style={{ ...styles.row, cursor: 'pointer', alignItems: 'flex-start' }}>
+          <input
+            type="checkbox"
+            checked={office.katPerson !== false}
+            onChange={(e) => api('/settings', 'PUT', { katPerson: e.target.checked })}
+            style={{ marginTop: 3 }}
+          />
+          <span style={{ fontSize: 13, lineHeight: 1.4 }}>
+            Show Kat Person
+            <span style={{ display: 'block', fontSize: 12, color: '#9aa4b0', marginTop: 4 }}>
+              The office cat, standing in the back corner. Switched off she leaves the room and stops asking
+              questions, but she stays available as a character for the boss or an employee.
+            </span>
+          </span>
+        </label>
+
         <h3 style={styles.sectionTitle}>20 Questions</h3>
         <label style={{ ...styles.row, cursor: 'pointer', alignItems: 'flex-start' }}>
           <input

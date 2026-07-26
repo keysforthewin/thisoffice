@@ -26,14 +26,16 @@ const BUBBLE_Y = 3.0;
 export function askerAnchor(
   asker: string,
   seat: number | null,
-  office: Pick<OfficeState, 'layout'> | null,
+  office: (Pick<OfficeState, 'layout'> & { katPerson?: boolean }) | null,
   maxSeat: number,
 ): [number, number, number] | null {
   if (!office) return null;
   if (asker === 'catPerson') {
     // Kat Person is furniture, not staff: her spot comes from the layout, and
-    // `resolveFurniture` nests it under `pose`
-    const item = resolveFurniture(office.layout, maxSeat).find((f) => f.id === 'catPerson');
+    // `resolveFurniture` nests it under `pose`. Switched off mid-question she is
+    // simply not there, and the caller falls back rather than pointing at a
+    // corner she has left.
+    const item = resolveFurniture(office.layout, maxSeat, office.katPerson !== false).find((f) => f.id === 'catPerson');
     return item ? [item.pose.x, BUBBLE_Y, item.pose.z] : null;
   }
   const resolvedSeat = asker === 'boss' ? 0 : seat;

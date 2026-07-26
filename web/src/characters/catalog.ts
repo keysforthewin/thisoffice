@@ -52,6 +52,14 @@ export function catalogEntry(catalog: CharacterCatalog | null, variant: string):
 }
 
 /**
+ * A character the user brought in themselves, from Mixamo or Blender — the ones
+ * with a stored GLB the seat sliders can tune. The server tags every one of them.
+ */
+export function isImported(entry?: CharacterEntry): boolean {
+  return !!entry?.tags.includes('imported');
+}
+
+/**
  * Find an action for a canonical clip name, trying catalog aliases first,
  * then the canonical name itself.
  */

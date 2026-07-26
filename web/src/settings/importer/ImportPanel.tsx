@@ -3,7 +3,8 @@ import { useImportStore, type ImportItem, type ImportStage } from '../../importe
 
 const STAGE_LABEL: Record<ImportStage, string> = {
   queued: 'Waiting…',
-  parsing: 'Reading FBX…',
+  parsing: 'Reading file…',
+  validating: 'Checking rig…',
   'needs-slot': 'Which animation is this?',
   'installing-anim': 'Installing animation…',
   converting: 'Converting to GLB…',
@@ -17,6 +18,7 @@ const STAGE_LABEL: Record<ImportStage, string> = {
 const STAGE_PROGRESS: Partial<Record<ImportStage, number>> = {
   queued: 0.05,
   parsing: 0.25,
+  validating: 0.3,
   'installing-anim': 0.7,
   converting: 0.55,
   uploading: 0.85,
@@ -25,6 +27,9 @@ const STAGE_PROGRESS: Partial<Record<ImportStage, number>> = {
 
 /** Mixamo's character browser, with the Characters type pre-selected */
 const MIXAMO_CHARACTERS_URL = 'https://www.mixamo.com/#/?page=1&type=Character';
+
+/** The canonical skeleton to build a Blender character on; see docs/blender-characters.md */
+const TEMPLATE_URL = '/models/characters/_lib/Rig_Medium_Template.glb';
 
 const mixamoSearch = (query: string) =>
   `https://www.mixamo.com/#/?page=1&type=Motion%2CMotionPack&query=${encodeURIComponent(query)}`;
@@ -56,13 +61,19 @@ export function ImportPanel() {
         }}
       >
         <div style={{ fontSize: 22 }}>⬇</div>
-        <div style={{ fontWeight: 600 }}>Drop Mixamo FBX files here</div>
+        <div style={{ fontWeight: 600 }}>Drop a Blender .glb or a Mixamo .fbx here</div>
+        <div style={styles.hint}>
+          Made in Blender? Export as glTF Binary on the office rig template — the rig is checked as it lands.{' '}
+          <a href={TEMPLATE_URL} download style={styles.hintLink}>
+            Download the rig template ↗
+          </a>
+        </div>
         <div style={styles.hint}>
           {animsReady ? (
-            <>Drop any character downloaded from Mixamo ("FBX Binary", with skin).</>
+            <>From Mixamo: any character downloaded as "FBX Binary", with skin.</>
           ) : (
             <>
-              First time: download{' '}
+              First Mixamo import: download{' '}
               <a href={mixamoSearch('Sitting Idle')} target="_blank" rel="noreferrer" style={styles.hintLink}>
                 Sitting Idle
               </a>{' '}
@@ -81,7 +92,7 @@ export function ImportPanel() {
           browse files
           <input
             type="file"
-            accept=".fbx"
+            accept=".fbx,.glb"
             multiple
             style={{ display: 'none' }}
             onChange={(e) => {
@@ -93,8 +104,8 @@ export function ImportPanel() {
       </div>
 
       <div style={styles.animRow}>
-        <AnimChip label="Sitting animation" ok={!!animStatus?.sit} />
-        <AnimChip label="Idle animation" ok={!!animStatus?.idle} />
+        <AnimChip label="Mixamo sitting animation" ok={!!animStatus?.sit} />
+        <AnimChip label="Mixamo idle animation" ok={!!animStatus?.idle} />
       </div>
 
       {items.length > 0 && (

@@ -103,6 +103,24 @@ describe('inbox persistence', () => {
     expect(reloaded.getState().inbox.map((i) => i.text)).toEqual(['first message', 'second message']);
   });
 
+  it('keeps Kat Person unless she is switched off, and remembers that', () => {
+    const file = tempFile();
+    const office = new Office(() => ['Knight', 'Mage', 'Rogue'], file);
+    expect(office.getState().katPerson).toBe(true);
+    office.setKatPerson(false);
+    expect(new Office(() => ['Knight', 'Mage', 'Rogue'], file).getState().katPerson).toBe(false);
+  });
+
+  it('restores an office.json written before the cat could be switched off', () => {
+    const file = tempFile();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ boss: { name: 'The Boss', variant: 'Knight' }, employees: [] }),
+    );
+    expect(new Office(() => ['Knight'], file).getState().katPerson).toBe(true);
+  });
+
   it('new items after a reload never reuse a restored id', () => {
     const file = tempFile();
     const office = new Office(() => ['Knight', 'Mage', 'Rogue'], file);

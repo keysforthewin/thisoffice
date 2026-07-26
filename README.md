@@ -38,4 +38,9 @@ starting:
 
     WEB_PORT=8080 SERVER_PORT=4700 docker compose up
 
+You can put your own characters in the office. Download a character from Mixamo
+and drop it on the Import tab in the settings, or model one in Blender on the
+skeleton the office provides — see docs/blender-characters.md, which walks
+through wiring Blender up to Claude so it builds the character for you.
+
 Characters and furniture are CC0 asset packs — see ATTRIBUTION.md.

@@ -4,7 +4,7 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { useAnimations } from '@react-three/drei';
 import type { CharacterEntry } from '../../../../shared/types.ts';
 import { useStore } from '../../store.ts';
-import { catalogEntry, resolveClip } from '../../characters/catalog.ts';
+import { catalogEntry, isImported, resolveClip } from '../../characters/catalog.ts';
 import { useCharacterModel } from '../../characters/useCharacterModel.ts';
 import { FurnitureModel, CHAIR_OFFSET_Z, PERSON_OFFSET_Z, PERSON_LIFT_Y } from '../../scene/Desk.tsx';
 
@@ -16,7 +16,7 @@ export function CharacterPreview({ entry }: { entry?: CharacterEntry }) {
     return () => clearTimeout(t);
   }, [entry]);
 
-  const seated = shown?.pack === 'Mixamo';
+  const seated = isImported(shown);
 
   return (
     <div style={styles.wrap}>
@@ -49,7 +49,11 @@ export function CharacterPreview({ entry }: { entry?: CharacterEntry }) {
           {entry?.pack}
           {entry && (
             <span style={{ color: '#7c8794' }}>
-              {entry.pack === 'Mixamo' ? ' · via Adobe Mixamo (your import)' : ' · by Kay Lousberg, CC0'}
+              {entry.pack === 'Mixamo'
+                ? ' · via Adobe Mixamo (your import)'
+                : entry.pack === 'Blender'
+                  ? ' · your Blender import'
+                  : ' · by Kay Lousberg, CC0'}
             </span>
           )}
         </div>
@@ -60,7 +64,7 @@ export function CharacterPreview({ entry }: { entry?: CharacterEntry }) {
             ))}
           </div>
         )}
-        {entry?.pack === 'Mixamo' && ADJUSTS.map((spec) => (
+        {entry && isImported(entry) && ADJUSTS.map((spec) => (
           <AdjustSlider key={`${entry.id}:${spec.field}`} id={entry.id} spec={spec} />
         ))}
       </div>

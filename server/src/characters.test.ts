@@ -119,3 +119,71 @@ describe('CharacterStore.adjust', () => {
     expect(store.adjust('nope', { seatOffset: 0.1 })).toBe(false);
   });
 });
+
+/** Minimal GLB: header + JSON chunk, which is all the rig sniffing reads. */
+function glbWithClips(clipNames: string[]): Buffer {
+  let json = JSON.stringify({ asset: { version: '2.0' }, animations: clipNames.map((name) => ({ name })) });
+  while (json.length % 4 !== 0) json += ' ';
+  const body = Buffer.from(json, 'utf8');
+  const header = Buffer.alloc(20);
+  header.write('glTF', 0, 'ascii');
+  header.writeUInt32LE(2, 4);
+  header.writeUInt32LE(20 + body.length, 8);
+  header.writeUInt32LE(body.length, 12);
+  header.writeUInt32LE(0x4e4f534a, 16);
+  return Buffer.concat([header, body]);
+}
+
+describe('imported character rig and pack', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join('/tmp', 'thisoffice-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const registerWith = (store: CharacterStore, id: string, clips: string[], pack?: 'Mixamo' | 'Blender') => {
+    fs.mkdirSync(path.dirname(store.modelPath(id)), { recursive: true });
+    fs.writeFileSync(store.modelPath(id), glbWithClips(clips));
+    store.register(id, id, pack);
+    return store.mergedCatalog().characters.find((c) => c.id === id)!;
+  };
+
+  it('reads the rig off the file: a Mixamo conversion bakes its own sitting clip', () => {
+    const entry = registerWith(new CharacterStore(tempDir), 'mixamo_char', ['Sit_Chair_Idle', 'Idle'], 'Mixamo');
+    expect(entry.rig).toBe('embedded');
+    expect(entry.pack).toBe('Mixamo');
+  });
+
+  it('a Blender export has no clips, so it borrows the shared library', () => {
+    const entry = registerWith(new CharacterStore(tempDir), 'blender_char', [], 'Blender');
+    expect(entry.rig).toBe('shared');
+    expect(entry.pack).toBe('Blender');
+    expect(entry.tags).toContain('imported');
+  });
+
+  it('treats meta written before Blender imports existed as a Mixamo conversion', () => {
+    const dir = path.join(tempDir, 'characters');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'legacy.glb'), glbWithClips([]));
+    fs.writeFileSync(
+      path.join(dir, 'imported.json'),
+      JSON.stringify([{ id: 'legacy', displayName: 'Legacy', importedAt: 1 }]),
+    );
+
+    const entry = new CharacterStore(tempDir).mergedCatalog().characters.find((c) => c.id === 'legacy')!;
+    expect(entry.rig).toBe('embedded');
+    expect(entry.pack).toBe('Mixamo');
+  });
+
+  it('hides an imported character once the same id ships with the repo', () => {
+    const store = new CharacterStore(tempDir);
+    registerWith(store, 'Ranger', []); // promoted into web/public but still in data/
+    const matches = store.mergedCatalog().characters.filter((c) => c.id === 'Ranger');
+    expect(matches).toHaveLength(1);
+    expect(matches[0].tags).not.toContain('imported');
+  });
+});

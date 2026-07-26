@@ -198,7 +198,8 @@ export function Office() {
   const buildHold = useStore((s) => s.buildHold);
   // layout keeps its reference across unrelated state messages (see stableLayout
   // in store.ts), so this recomputes only when the layout or desk count changes
-  const furniture = useMemo(() => resolveFurniture(layout, maxSeat), [layout, maxSeat]);
+  const katPerson = office?.katPerson !== false;
+  const furniture = useMemo(() => resolveFurniture(layout, maxSeat, katPerson), [layout, maxSeat, katPerson]);
   const backOx = useWallOffset('windowBack', maxSeat);
   const leftOx = useWallOffset('windowLeft', maxSeat);
   const artOx = useWallOffset('wallArt', maxSeat);

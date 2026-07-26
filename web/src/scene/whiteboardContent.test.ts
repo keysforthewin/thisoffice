@@ -12,6 +12,7 @@ function makeOffice(overrides: Partial<OfficeState>): OfficeState {
     todos: null,
     status: [],
     staffing: { minEmployees: 1, maxEmployees: 5, idleTimeoutSec: 60 },
+    katPerson: true,
     waitingForInput: false,
     ...overrides,
   };

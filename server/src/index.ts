@@ -5,7 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { Office } from './office.ts';
 import { startWatcher } from './watcher.ts';
 import { StatsAggregator } from './stats.ts';
-import { CharacterStore, sanitizeId, isAnimSlot, saveUpload, streamFile } from './characters.ts';
+import { CharacterStore, sanitizeId, isAnimSlot, isImportPack, saveUpload, streamFile } from './characters.ts';
 import { DecorStore, isWallArtExt, wallArtContentType } from './decor.ts';
 import { Quiz, type QuizAsker } from './quiz.ts';
 import { askHaiku } from './haiku.ts';
@@ -41,7 +41,8 @@ const quizAskers = (): QuizAsker[] => {
       seat: e.seat,
       idle: e.status === 'idle',
     })),
-    { id: 'catPerson', name: 'Kat Person', variant: 'CatPerson', seat: null, idle: true },
+    // she only plays while she is in the room to be asked
+    ...(st.katPerson ? [{ id: 'catPerson', name: 'Kat Person', variant: 'CatPerson', seat: null, idle: true }] : []),
   ];
 };
 
@@ -114,7 +115,12 @@ const server = http.createServer((req, res) => {
       }
       const result = await saveUpload(req, characters.modelPath(id), 'glb');
       if (!result.ok) return send(400, { error: result.error });
-      characters.register(id, url.searchParams.get('displayName') || id.replace(/_/g, ' '));
+      const pack = url.searchParams.get('pack');
+      characters.register(
+        id,
+        url.searchParams.get('displayName') || id.replace(/_/g, ' '),
+        isImportPack(pack) ? pack : 'Mixamo',
+      );
       publishCatalog();
       return send(200, { ok: true, id });
     }
@@ -179,6 +185,7 @@ const server = http.createServer((req, res) => {
       const body = await readBody();
       office.setBoss({ name: body.name, variant: body.variant });
       if (body.staffing) office.setStaffing(body.staffing);
+      if (typeof body.katPerson === 'boolean') office.setKatPerson(body.katPerson);
       return send(200, { ok: true });
     }
     if (url.pathname === '/api/layout' && req.method === 'PUT') {

@@ -16,7 +16,8 @@ everyone. If you use them too, consider supporting the project.
 - **KayKit Character Pack: Adventurers 2.0 (Free)** — https://kaylousberg.itch.io/kaykit-adventurers
   (`web/public/models/characters/` — Ranger plus Barbarian_V2, Knight_V2, Mage_V2, Rogue_V2, Rogue_Hooded_V2; new-style rigs with no embedded clips — animated via the shared library below)
 - **KayKit Character Animations 1.1 (Free)** — https://kaylousberg.itch.io/kaykit-character-animations
-  (`web/public/models/characters/_lib/` — Rig_Medium General + Simulation sets; provides Idle_A and Sit_Chair_Idle for new-style characters)
+  (`web/public/models/characters/_lib/` — Rig_Medium General + Simulation sets; provides Idle_A and Sit_Chair_Idle for new-style characters.
+  `_lib/Rig_Medium_Template.glb` is the General file with its animations stripped, handed to users as the skeleton to build custom characters on — see docs/blender-characters.md)
 
 ## Bundled furniture — Kenney
 

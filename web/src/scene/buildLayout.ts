@@ -230,12 +230,23 @@ export function defaultFurniture(maxSeat: number): ResolvedFurniture[] {
   ];
 }
 
-export function resolveFurniture(layout: OfficeLayout | undefined, maxSeat: number): ResolvedFurniture[] {
-  return defaultFurniture(maxSeat).map((f) => {
-    const o = layout?.furniture?.[f.id];
-    if (!o || !Number.isFinite(o.x) || !Number.isFinite(o.z) || !Number.isFinite(o.rotY)) return f;
-    return { ...f, pose: clampPoseToRoom({ x: o.x, z: o.z, rotY: o.rotY }, f.footprint, maxSeat) };
-  });
+/**
+ * `katPerson: false` takes the office cat out of the room — of the render, of
+ * collision, and of the quiz bubble's anchor lookup — while her saved position
+ * stays in the layout, so switching her back on returns her to the same corner.
+ */
+export function resolveFurniture(
+  layout: OfficeLayout | undefined,
+  maxSeat: number,
+  katPerson = true,
+): ResolvedFurniture[] {
+  return defaultFurniture(maxSeat)
+    .filter((f) => katPerson || f.id !== 'catPerson')
+    .map((f) => {
+      const o = layout?.furniture?.[f.id];
+      if (!o || !Number.isFinite(o.x) || !Number.isFinite(o.z) || !Number.isFinite(o.rotY)) return f;
+      return { ...f, pose: clampPoseToRoom({ x: o.x, z: o.z, rotY: o.rotY }, f.footprint, maxSeat) };
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -376,6 +387,7 @@ export function isPlacementValid(
   moving: MovingItem,
   occupiedSeats: number[],
   maxSeat: number,
+  katPerson = true,
 ): boolean {
   const movingFp =
     moving.kind === 'seat'
@@ -393,7 +405,7 @@ export function isPlacementValid(
     const obb = obbFromPose({ x: position.x, z: position.z, rotY: rotationY }, deskFootprint(seat === 0));
     if (obbIntersects(movingObb, obb)) return false;
   }
-  for (const f of resolveFurniture(layout, maxSeat)) {
+  for (const f of resolveFurniture(layout, maxSeat, katPerson)) {
     if (!f.collides) continue;
     if (moving.kind === 'furniture' && moving.key === f.id) continue;
     if (obbIntersects(movingObb, obbFromPose(f.pose, f.footprint))) return false;

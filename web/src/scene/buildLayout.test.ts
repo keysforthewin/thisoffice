@@ -143,6 +143,13 @@ describe('resolveFurniture', () => {
     }
   });
 
+  it('drops the office cat when she is switched off, keeping her saved spot', () => {
+    const layout: OfficeLayout = { furniture: { catPerson: { x: 1, z: 1, rotY: 0 } } };
+    expect(resolveFurniture(layout, 3, false).some((f) => f.id === 'catPerson')).toBe(false);
+    // the override survives, so switching her back on returns her to the same corner
+    expect(resolveFurniture(layout, 3, true).find((f) => f.id === 'catPerson')!.pose).toMatchObject({ x: 1, z: 1 });
+  });
+
   it('ignores overrides for unknown ids', () => {
     const layout: OfficeLayout = { furniture: { jacuzzi: { x: 0, z: 0, rotY: 0 } } };
     expect(resolveFurniture(layout, 3).map((f) => f.id)).toEqual(

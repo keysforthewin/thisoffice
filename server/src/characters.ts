@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import type { CharacterCatalog, CharacterEntry } from '../../shared/types.ts';
 import { CHARACTER_VARIANTS } from '../../shared/types.ts';
 import { sanitizeCharacterId } from '../../shared/characterId.ts';
+import { parseGlbJson } from '../../shared/rigCheck.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DATA_DIR = path.resolve(__dirname, '../../data');
@@ -52,10 +53,24 @@ interface ImportedMeta {
   id: string;
   displayName: string;
   importedAt: number;
+  /** absent = imported before Blender GLBs existed, i.e. a Mixamo conversion */
+  rig?: 'embedded' | 'shared';
+  pack?: string;
   scale?: number;
   seatOffset?: number;
   chairHeight?: number;
   chairForward?: number;
+}
+
+/**
+ * Packs an upload may claim. The label rides a query string into a catalog every
+ * client renders, so it is an allowlist rather than free text.
+ */
+export const IMPORT_PACKS = ['Mixamo', 'Blender'] as const;
+export type ImportPack = (typeof IMPORT_PACKS)[number];
+
+export function isImportPack(pack: string | null): pack is ImportPack {
+  return (IMPORT_PACKS as readonly string[]).includes(pack ?? '');
 }
 
 export const sanitizeId = sanitizeCharacterId;
@@ -139,32 +154,55 @@ export class CharacterStore {
 
   mergedCatalog(): CharacterCatalog {
     const builtin = this.builtinCatalog();
-    const importedEntries: CharacterEntry[] = this.imported.map((m) => ({
-      id: m.id,
-      displayName: m.displayName,
-      pack: 'Mixamo',
-      tags: ['imported'],
-      rig: 'embedded',
-      url: `/api/characters/${m.id}/model.glb?v=${m.importedAt}`,
-      rev: m.importedAt,
-      scale: m.scale,
-      seatOffset: m.seatOffset,
-      chairHeight: m.chairHeight,
-      chairForward: m.chairForward,
-    }));
+    const builtinIds = new Set(builtin.characters.map((c) => c.id));
+    const importedEntries: CharacterEntry[] = this.imported
+      // a promoted character lives in both places until the server restarts;
+      // the committed copy wins, so the picker never shows the id twice
+      .filter((m) => !builtinIds.has(m.id))
+      .map((m) => ({
+        id: m.id,
+        displayName: m.displayName,
+        pack: m.pack ?? 'Mixamo',
+        tags: ['imported'],
+        rig: m.rig ?? 'embedded',
+        url: `/api/characters/${m.id}/model.glb?v=${m.importedAt}`,
+        rev: m.importedAt,
+        scale: m.scale,
+        seatOffset: m.seatOffset,
+        chairHeight: m.chairHeight,
+        chairForward: m.chairForward,
+      }));
     return { ...builtin, characters: [...builtin.characters, ...importedEntries] };
   }
 
-  register(id: string, displayName: string): void {
+  register(id: string, displayName: string, pack?: ImportPack): void {
     const importedAt = Date.now();
+    // read the rig off the file rather than trusting the uploader: a Mixamo
+    // conversion always bakes Sit_Chair_Idle, a Blender export never does
+    const rig = this.readRig(id);
     const existing = this.imported.find((m) => m.id === id);
     if (existing) {
       existing.displayName = displayName;
       existing.importedAt = importedAt;
+      existing.rig = rig;
+      if (pack) existing.pack = pack;
     } else {
-      this.imported.push({ id, displayName, importedAt });
+      this.imported.push({ id, displayName, importedAt, rig, pack: pack ?? 'Mixamo' });
     }
     this.saveMeta();
+  }
+
+  /** Same rule scripts/generate-catalog.mjs applies to committed characters. */
+  private readRig(id: string): 'embedded' | 'shared' {
+    try {
+      const gltf: any = parseGlbJson(fs.readFileSync(this.modelPath(id)));
+      const clipNames: string[] = (gltf.animations ?? []).map((a: any) => a.name);
+      return clipNames.includes('Sit_Chair_Idle') ? 'embedded' : 'shared';
+    } catch {
+      // unreadable here means unplayable in the browser too; 'shared' at least
+      // gives it the library clips rather than none
+      return 'shared';
+    }
   }
 
   adjust(id: string, adj: CharacterAdjust): boolean {

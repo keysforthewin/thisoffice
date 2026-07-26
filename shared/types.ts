@@ -178,6 +178,8 @@ export interface OfficeState {
   /** rolling status feed shown on the status whiteboard (newest last) */
   status: StatusItem[];
   staffing: StaffingSettings;
+  /** show the office cat in the back corner; she is still pickable as a character when off */
+  katPerson: boolean;
   /** true while any tailed session has ended its turn and is waiting on the user (ephemeral) */
   waitingForInput: boolean;
   /** build-mode overrides; absent = default layout */
