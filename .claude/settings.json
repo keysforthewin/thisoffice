@@ -1,0 +1,5 @@
+{
+  "enabledPlugins": {
+    "blender-web-pipeline@claude-design-skillstack": true
+  }
+}
