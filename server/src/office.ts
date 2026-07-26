@@ -35,7 +35,12 @@ export function clampStaffing(cfg: Partial<StaffingSettings> | undefined, base: 
   return s;
 }
 
+const DEFAULT_OFFICE_NAME = 'This Office';
+const OFFICE_NAME_MAX = 60;
+
 interface PersistedState {
+  /** HUD title; absent in legacy files → default */
+  officeName?: string;
   boss: { name: string; variant: string; bio?: string };
   employees: Array<Pick<Employee, 'id' | 'name' | 'seat' | 'variant' | 'hiredAt'>>;
   staffing?: StaffingSettings;
@@ -299,6 +304,10 @@ export class Office {
       .slice(-STATUS_MAX);
     this.statusSeq = status.reduce((max, s) => Math.max(max, parseInt(s.id.replace('status-', ''), 10) || 0), 0);
     return {
+      officeName:
+        typeof persisted.officeName === 'string' && persisted.officeName.trim()
+          ? persisted.officeName.trim().slice(0, OFFICE_NAME_MAX)
+          : DEFAULT_OFFICE_NAME,
       // bio deliberately stripped: it lives in bossBio, never in the broadcast state
       boss: { name: persisted.boss.name, variant: persisted.boss.variant },
       bossStatus: 'idle',
@@ -320,6 +329,7 @@ export class Office {
 
   save() {
     const persisted: PersistedState = {
+      officeName: this.state.officeName,
       boss: { ...this.state.boss, ...(this.bossBio ? { bio: this.bossBio } : {}) },
       employees: this.state.employees.map(({ id, name, seat, variant, hiredAt }) => ({ id, name, seat, variant, hiredAt })),
       staffing: this.state.staffing,
@@ -631,6 +641,13 @@ export class Office {
     this.save();
     this.broadcastState();
     return true;
+  }
+
+  /** HUD title. Empty/whitespace resets to the default; capped at 60 chars. */
+  setOfficeName(name: string) {
+    this.state.officeName = name.trim().slice(0, OFFICE_NAME_MAX) || DEFAULT_OFFICE_NAME;
+    this.save();
+    this.broadcastState();
   }
 
   setBoss(cfg: Partial<{ name: string; variant: string }>): void {

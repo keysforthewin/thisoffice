@@ -789,3 +789,48 @@ describe('layout persistence', () => {
     expect(reloaded.getState().layout).toBeUndefined();
   });
 });
+
+describe('officeName', () => {
+  function tempFile() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'office-test-'));
+    return path.join(dir, 'office.json');
+  }
+
+  it('defaults to This Office on fresh state', () => {
+    const office = new Office(() => ['Knight'], tempFile());
+    expect(office.getState().officeName).toBe('This Office');
+  });
+
+  it('setOfficeName trims, persists, and survives reload', () => {
+    const file = tempFile();
+    const office = new Office(() => ['Knight'], file);
+    office.setOfficeName('  Fable Corp  ');
+    expect(office.getState().officeName).toBe('Fable Corp');
+    const reloaded = new Office(() => ['Knight'], file);
+    expect(reloaded.getState().officeName).toBe('Fable Corp');
+  });
+
+  it('empty or whitespace name resets to the default', () => {
+    const office = new Office(() => ['Knight'], tempFile());
+    office.setOfficeName('Fable Corp');
+    office.setOfficeName('   ');
+    expect(office.getState().officeName).toBe('This Office');
+  });
+
+  it('caps the name at 60 chars', () => {
+    const office = new Office(() => ['Knight'], tempFile());
+    office.setOfficeName('x'.repeat(80));
+    expect(office.getState().officeName).toBe('x'.repeat(60));
+  });
+
+  it('a legacy office.json without officeName loads with the default', () => {
+    const file = tempFile();
+    const office = new Office(() => ['Knight'], file);
+    office.save();
+    const raw = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    delete raw.officeName;
+    fs.writeFileSync(file, JSON.stringify(raw));
+    const reloaded = new Office(() => ['Knight'], file);
+    expect(reloaded.getState().officeName).toBe('This Office');
+  });
+});

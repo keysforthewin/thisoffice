@@ -69,6 +69,8 @@ export interface OfficeLayout {
 }
 
 export interface OfficeState {
+  /** HUD title; user-editable, defaults to "This Office" */
+  officeName: string;
   boss: BossConfig;
   bossStatus: WorkerStatus;
   employees: Employee[];
