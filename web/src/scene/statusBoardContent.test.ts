@@ -21,6 +21,7 @@ function makeStatus(i: number, overrides: Partial<StatusItem> = {}): StatusItem 
 
 function makeOffice(overrides: Partial<OfficeState>): OfficeState {
   return {
+    officeName: 'This Office',
     boss: { name: 'Boss', variant: 'Knight' },
     bossStatus: 'idle',
     employees: [],

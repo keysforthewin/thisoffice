@@ -130,6 +130,19 @@ function Hud({ connected, mode, onSettings }: { connected: boolean; mode: Return
   const povs = usePovList();
   const office = useStore((s) => s.office);
   const buildMode = useStore((s) => s.buildMode);
+  const officeName = office?.officeName ?? 'This Office';
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+  const commitName = () => {
+    setEditingName(false);
+    if (nameDraft.trim() === officeName) return;
+    // empty draft is sent too: the server maps it back to the default name
+    fetch('/api/office', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: nameDraft }),
+    }).catch(() => {});
+  };
   const focusName =
     mode.kind === 'focus'
       ? mode.target === 'boss'
@@ -152,7 +165,32 @@ function Hud({ connected, mode, onSettings }: { connected: boolean; mode: Return
     <>
       <div style={hudStyles.topLeft}>
         <span style={{ ...hudStyles.dot, background: connected ? '#4cc38a' : '#e5484d' }} />
-        This Office
+        {editingName ? (
+          <input
+            autoFocus
+            value={nameDraft}
+            maxLength={60}
+            onChange={(e) => setNameDraft(e.target.value)}
+            onFocus={(e) => e.target.select()}
+            onBlur={commitName}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitName();
+              else if (e.key === 'Escape') setEditingName(false);
+            }}
+            style={hudStyles.nameInput}
+          />
+        ) : (
+          <span
+            style={{ cursor: 'text' }}
+            title="Click to rename"
+            onClick={() => {
+              setNameDraft(officeName);
+              setEditingName(true);
+            }}
+          >
+            {officeName}
+          </span>
+        )}
       </div>
       <div style={hudStyles.bottom}>{label}</div>
       <button style={hudStyles.gear} onClick={onSettings} title="Settings">⚙</button>
@@ -164,9 +202,14 @@ const hudStyles: Record<string, React.CSSProperties> = {
   topLeft: {
     position: 'absolute', top: 14, left: 16, color: '#e6e8eb',
     fontFamily: 'system-ui, sans-serif', fontSize: 15, fontWeight: 600,
-    display: 'flex', alignItems: 'center', gap: 8, pointerEvents: 'none',
+    display: 'flex', alignItems: 'center', gap: 8, pointerEvents: 'auto',
   },
   dot: { width: 9, height: 9, borderRadius: '50%', display: 'inline-block' },
+  nameInput: {
+    background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.25)',
+    borderRadius: 4, color: '#e6e8eb', fontFamily: 'system-ui, sans-serif',
+    fontSize: 15, fontWeight: 600, padding: '1px 6px', outline: 'none', width: 180,
+  },
   bottom: {
     position: 'absolute', bottom: 14, left: '50%', transform: 'translateX(-50%)',
     color: '#9aa4b0', fontFamily: 'system-ui, sans-serif', fontSize: 13,

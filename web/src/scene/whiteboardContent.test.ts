@@ -4,6 +4,7 @@ import { boardContent, TODO_STALE_MS } from './whiteboardContent.ts';
 
 function makeOffice(overrides: Partial<OfficeState>): OfficeState {
   return {
+    officeName: 'This Office',
     boss: { name: 'Boss', variant: 'Knight' },
     bossStatus: 'idle',
     employees: [],
