@@ -251,9 +251,18 @@ const server = http.createServer((req, res) => {
       if (req.method === 'POST') {
         // only accepted during the handshake window, so a stray POST can't hang a photo
         if (!quiz.isAwaitingPhoto()) return send(409, { error: 'not waiting for a photo' });
-        const result = await saveUpload(req, decor.eotmPath(), 'image');
-        if (!result.ok) return send(400, { error: result.error });
-        return quiz.attachPhoto() ? send(200, { ok: true }) : send(409, { error: 'not waiting for a photo' });
+        // stage first: the window can close while the body is still streaming in,
+        // and a rejected upload must leave the hanging photo untouched
+        const result = await saveUpload(req, decor.eotmStagingPath(), 'image');
+        if (!result.ok) {
+          decor.discardEotmStaging();
+          return send(400, { error: result.error });
+        }
+        if (!quiz.attachPhoto(() => decor.commitEotm())) {
+          decor.discardEotmStaging();
+          return send(409, { error: 'not waiting for a photo' });
+        }
+        return send(200, { ok: true });
       }
     }
     if (url.pathname === '/api/employees' && req.method === 'POST') {

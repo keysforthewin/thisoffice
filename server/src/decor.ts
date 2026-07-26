@@ -49,7 +49,29 @@ export class DecorStore {
     return path.join(this.dir, 'eotm.png');
   }
 
+  /**
+   * Where an incoming photo lands before it is allowed to replace the hanging
+   * one. An upload that arrives after the capture window has closed must not
+   * touch `eotm.png`: the quiz state still names the previous winner (with the
+   * previous `v`, served `immutable`), so overwriting the file would hang the
+   * new winner's picture under the old winner's plaque until the next win.
+   */
+  eotmStagingPath(): string {
+    return path.join(this.dir, 'eotm.incoming.png');
+  }
+
+  /** Promote a staged upload to the hanging photo. */
+  commitEotm(): void {
+    fs.renameSync(this.eotmStagingPath(), this.eotmPath());
+  }
+
+  /** Discard a staged upload that was not accepted. */
+  discardEotmStaging(): void {
+    fs.rmSync(this.eotmStagingPath(), { force: true });
+  }
+
   clearEotm(): void {
     fs.rmSync(this.eotmPath(), { force: true });
+    this.discardEotmStaging();
   }
 }
