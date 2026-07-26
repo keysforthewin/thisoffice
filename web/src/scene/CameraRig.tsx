@@ -280,6 +280,9 @@ function FocusControls({ target }: { target: string }) {
  * group shot, hold a beat, shoot, upload, fly back. Failure is silent by design —
  * the win is credited server-side the moment the guess lands, photo or not.
  *
+ * In a hidden tab the fly-in is skipped entirely (see below): rAF does not run
+ * there, so an animated capture would never fire inside the server's window.
+ *
  * Office state is read once via `useStore.getState()` rather than subscribed to:
  * a subscription would re-run this effect (and restart the fly-in) on every
  * unrelated broadcast that arrives during the ~1.6s capture window.
@@ -328,6 +331,35 @@ function PhotoControls({ winner, maxSeat }: { winner: QuizWinner; maxSeat: numbe
       perspective.updateProjectionMatrix();
     };
 
+    /** render → toDataURL → POST, then put the camera back. */
+    const shoot = () => {
+      if (cancelled) return;
+      void captureCanvas(gl, scene, camera)
+        .then(uploadEotmPhoto)
+        .catch(() => {})
+        .finally(() => {
+          if (cancelled) return;
+          restore();
+          useStore.getState().clearPendingCapture();
+        });
+    };
+
+    // Browsers pause rAF in a hidden tab, so the fly-in below would never reach
+    // t === 1: the shutter would not fire at all, and would then fire on focus —
+    // long after the server's 20 s window closed. Nobody is watching a fly-in
+    // they cannot see, so jump the camera to the shot and take it now.
+    if (document.hidden) {
+      camera.position.copy(shot.position);
+      camera.quaternion.copy(toQuat);
+      perspective.fov = shot.fov;
+      perspective.updateProjectionMatrix();
+      shoot();
+      return () => {
+        cancelled = true;
+        restore();
+      };
+    }
+
     const step = () => {
       const t = Math.min(1, (performance.now() - t0) / PHOTO_FLY_MS);
       const e = t * t * (3 - 2 * t); // smoothstep
@@ -341,17 +373,7 @@ function PhotoControls({ winner, maxSeat }: { winner: QuizWinner; maxSeat: numbe
       }
       if (shooting) return;
       shooting = true;
-      holdTimer = window.setTimeout(() => {
-        if (cancelled) return;
-        void captureCanvas(gl, scene, camera)
-          .then(uploadEotmPhoto)
-          .catch(() => {})
-          .finally(() => {
-            if (cancelled) return;
-            restore();
-            useStore.getState().clearPendingCapture();
-          });
-      }, PHOTO_HOLD_MS);
+      holdTimer = window.setTimeout(shoot, PHOTO_HOLD_MS);
     };
     raf = requestAnimationFrame(step);
 
