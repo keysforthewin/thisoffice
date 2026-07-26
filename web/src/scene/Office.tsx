@@ -14,6 +14,7 @@ import { resolveFurniture, WALL_ITEMS } from './buildLayout.ts';
 import { BuildHandle, WallHandle, displayPose, useWallOffset } from './build.tsx';
 import { wallStrips } from './wallOpenings.ts';
 import { WindowVista } from './WindowVista.tsx';
+import { SpeechBubble } from '../quiz/SpeechBubble.tsx';
 
 const ART_W = 1.84;
 const ART_H = 1.38;
@@ -283,6 +284,7 @@ export function Office() {
         );
       })}
       <WallArt position={[artOx, 2.15, backZ + 0.05]} />
+      <SpeechBubble maxSeat={maxSeat} />
       {buildMode && (
         <group position={[0, 0, backZ]}>
           <WallHandle id="wallArt" wall="back" ox={artOx} oy={2.15} w={wallItem('wallArt').halfW * 2} h={1.7} />
