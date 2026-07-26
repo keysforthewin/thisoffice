@@ -478,6 +478,10 @@ const quizState = (over: Partial<QuizState> = {}): QuizState => ({
 });
 
 describe('quiz messages', () => {
+  beforeEach(() => {
+    useStore.setState({ quiz: null, pendingCapture: null });
+  });
+
   it('stores quiz state', () => {
     useStore.getState().applyServerMsg({ type: 'quiz', quiz: quizState() });
     expect(useStore.getState().quiz!.question!.text).toBe('Is it alive?');
@@ -500,5 +504,14 @@ describe('quiz messages', () => {
     useStore.getState().applyServerMsg({ type: 'quiz', quiz: quizState({ awaitingPhoto: true, winner }), capture: winner });
     useStore.getState().applyServerMsg({ type: 'quiz', quiz: quizState({ awaitingPhoto: false }) });
     expect(useStore.getState().pendingCapture).toBeNull();
+  });
+
+  it('keeps a pending capture across a later broadcast that carries no capture field, while still awaiting a photo', () => {
+    const winner = { name: 'Dana', variant: 'Mage', at: '2026-07-26T00:00:00.000Z' };
+    useStore.getState().applyServerMsg({ type: 'quiz', quiz: quizState({ awaitingPhoto: true, winner }), capture: winner });
+    expect(useStore.getState().pendingCapture).toEqual(winner);
+
+    useStore.getState().applyServerMsg({ type: 'quiz', quiz: quizState({ awaitingPhoto: true, winner }) });
+    expect(useStore.getState().pendingCapture).toEqual(winner);
   });
 });
