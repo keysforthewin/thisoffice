@@ -15,8 +15,11 @@ import {
   groupShot,
   hasLineOfSight,
   isWallBoard,
+  MEDIUM_MAX_MUL,
   MIN_SHOT_DIST,
   pickShot,
+  pointInFrame,
+  BEACON_KEY,
   SINGLE_POOL,
   GROUP_POOL,
   IDLE_POOL,
@@ -76,6 +79,30 @@ function inFrustum(point: THREE.Vector3, shot: { position: THREE.Vector3; lookAt
   const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
   const up = new THREE.Vector3().crossVectors(right, forward).normalize();
   return Math.abs(v.dot(up)) / z <= Math.tan(FOV / 2) && Math.abs(v.dot(right)) / z <= Math.tan(FOV / 2) * ASPECT;
+}
+
+/** run `cuts` cuts against a fixed active set, threading state like the live camera */
+function runCuts(lastActivity: Record<string, number>, cuts: number, overrides: Partial<ShotContext> = {}) {
+  const office = overrides.office ?? makeOffice();
+  const now = 100_000;
+  const shots: PickedShot[] = [];
+  let recentPrimaries: string[] = [];
+  let prev: THREE.Vector3 | null = null;
+  // one continuous rng across cuts, like the live camera (fresh tiny seeds
+  // bias the first draw low, which would starve the last weighted-pool slot)
+  const r = rng(9001);
+  for (let i = 0; i < cuts; i++) {
+    const shot = pickShot({
+      office, lastActivity, now,
+      fovY: FOV, aspect: ASPECT, rng: r, cutIndex: i,
+      prevPosition: prev, recentPrimaries,
+      ...overrides,
+    });
+    shots.push(shot);
+    if (shot.primaryKey) recentPrimaries = [shot.primaryKey, ...recentPrimaries].slice(0, 4);
+    prev = (shot.positionEnd ?? shot.position).clone();
+  }
+  return shots;
 }
 
 describe('activeKeys / activeSetKey', () => {
@@ -214,6 +241,83 @@ describe('subjectFor', () => {
   });
 });
 
+describe('pointInFrame', () => {
+  const cam = new THREE.Vector3(0, 1.5, 0);
+  const look = new THREE.Vector3(0, 1.5, -5);
+  it('accepts a point on the look axis and rejects one behind the camera', () => {
+    expect(pointInFrame(cam, look, new THREE.Vector3(0, 1.5, -3), FOV, ASPECT)).toBe(true);
+    expect(pointInFrame(cam, look, new THREE.Vector3(0, 1.5, 3), FOV, ASPECT)).toBe(false);
+  });
+  it('rejects a point ~90° off-axis even though nothing occludes it', () => {
+    expect(pointInFrame(cam, look, new THREE.Vector3(4, 1.5, 0), FOV, ASPECT)).toBe(false);
+  });
+  it('a narrower fov ejects a point near the edge of the wide frame', () => {
+    // 3 units ahead, offset just inside the 50° half-height (3*tan25° = 1.40) × margin
+    const edge = new THREE.Vector3(0, 1.5 + 1.1, -3);
+    expect(pointInFrame(cam, look, edge, FOV, ASPECT)).toBe(true);
+    expect(pointInFrame(cam, look, edge, deg(34), ASPECT)).toBe(false);
+  });
+  it('the margin keeps an exactly-on-the-edge point out of frame', () => {
+    const onEdge = new THREE.Vector3(0, 1.5 + 3 * Math.tan(FOV / 2), -3);
+    expect(pointInFrame(cam, look, onEdge, FOV, ASPECT)).toBe(false);
+  });
+});
+
+describe('the waiting beacon', () => {
+  const now = 100_000;
+
+  it('resolves on the boss desk and tracks a build-mode override of seat 0', () => {
+    const b = subjectFor(BEACON_KEY, makeOffice())!;
+    // boss desk sits at z=BOSS_Z with rotationY 0, beacon local [0.7, 1.07, 0.25]
+    expect(b.center.x).toBeCloseTo(0.7);
+    expect(b.center.y).toBeCloseTo(1.07);
+    expect(b.center.z).toBeCloseTo(seatTransform(0).position.z + 0.25);
+    // readable from the room side (+z at rotation 0), tilted up off the desk top
+    expect(b.normal.z).toBeGreaterThan(0);
+    expect(b.normal.y).toBeGreaterThan(0);
+
+    const moved = subjectFor(BEACON_KEY, makeOffice({ layout: { seats: { 0: { x: 2, z: 1, rotY: 0 } } } }))!;
+    expect(moved.center.x).toBeCloseTo(2.7);
+    expect(moved.center.z).toBeCloseTo(1.25);
+  });
+
+  it('every shot frames the beacon while it blinks — active office, idle office, and boards', () => {
+    const office = makeOffice();
+    const beacon = subjectFor(BEACON_KEY, office)!;
+    const cases: Record<string, number>[] = [{}, { e1: now }, { e1: now, e2: now, boss: now }, { statusboard: now }, { whiteboard: now }];
+    for (const active of cases) {
+      const shots = runCuts(active, 12, { office, waiting: true });
+      for (const shot of shots) {
+        for (const e of [0, 0.5, 1]) {
+          const pos = shot.position.clone().lerp(shot.positionEnd ?? shot.position, e);
+          const look = shot.lookAt.clone().lerp(shot.lookAtEnd ?? shot.lookAt, e);
+          expect(hasLineOfSight(pos, beacon, office)).toBe(true);
+          expect(pointInFrame(pos, look, beacon.center, FOV, ASPECT, 1)).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('the constraint is conditional: without waiting, shots are free to ignore the beacon', () => {
+    const office = makeOffice();
+    const beacon = subjectFor(BEACON_KEY, office)!;
+    const shots = runCuts({ e1: now, e2: now }, 12, { office });
+    expect(shots.some((s) => !pointInFrame(s.position, s.lookAt, beacon.center, FOV, ASPECT))).toBe(true);
+  });
+
+  it('forcePrimary puts the boss screen first on a new message from upstairs', () => {
+    const office = makeOffice();
+    // e1/e2 would normally dominate a 3-subject draw; the forced key leads anyway
+    for (let i = 0; i < 10; i++) {
+      const shot = pickShot(ctx({
+        office, lastActivity: { e1: now, e2: now, boss: now }, now,
+        rng: rng(i + 300), cutIndex: i, forcePrimary: 'boss',
+      }));
+      expect(shot.primaryKey).toBe('boss');
+    }
+  });
+});
+
 describe('groupByFacing', () => {
   const mk = (key: string, nx: number, nz: number): Subject => ({
     key,
@@ -264,31 +368,43 @@ describe('shots', () => {
     }
   });
 
-  it('pickShot rotates primaries: every active subject (incl. boss and boards) leads a shot within a few cuts', () => {
-    const office = makeOffice();
+  it('pickShot rotates primaries: every live subject (incl. boss and the todo board) leads a shot within a few cuts', () => {
     const now = 100_000;
-    const active = { boss: now, e1: now, e2: now, whiteboard: now, statusboard: now };
-    const leads = new Set<string>();
-    let recentPrimaries: string[] = [];
-    let prev: THREE.Vector3 | null = null;
-    // one continuous rng across cuts, like the live camera (fresh tiny seeds
-    // bias the first draw low, which would starve the last weighted-pool slot)
-    const r = rng(9001);
-    for (let i = 0; i < 20; i++) {
-      const shot = pickShot({
-        office, lastActivity: active, now,
-        fovY: FOV, aspect: ASPECT, rng: r, cutIndex: i,
-        prevPosition: prev, recentPrimaries,
-      });
-      expect(shot.primaryKey).toBeDefined();
-      leads.add(shot.primaryKey!);
-      recentPrimaries = [shot.primaryKey!, ...recentPrimaries].slice(0, 4);
-      prev = (shot.positionEnd ?? shot.position).clone();
-    }
+    const shots = runCuts({ boss: now, e1: now, e2: now, whiteboard: now, statusboard: now }, 20);
+    const leads = new Set(shots.map((s) => s.primaryKey!));
+    expect(shots.every((s) => s.primaryKey !== undefined)).toBe(true);
     expect(leads).toContain('boss');
     expect(leads).toContain('whiteboard');
-    expect(leads).toContain('statusboard');
     expect(leads.size).toBeGreaterThanOrEqual(4);
+  });
+
+  it('never leads on an ambient wall board while anything live is active, but does when nothing is', () => {
+    const now = 100_000;
+    // statusboard/tv stay "active" for minutes; a streaming monitor must always outrank them
+    const busy = runCuts({ e1: now, whiteboard: now, statusboard: now, tv: now }, 20);
+    expect(busy.map((s) => s.primaryKey)).not.toContain('statusboard');
+    expect(busy.map((s) => s.primaryKey)).not.toContain('tv');
+
+    const quiet = runCuts({ statusboard: now, tv: now }, 20);
+    expect(new Set(quiet.map((s) => s.primaryKey))).toContain('statusboard');
+  });
+
+  it('keeps every active cut at close/medium range on its primary, start and end', () => {
+    const now = 100_000;
+    const office = makeOffice();
+    const cases: Record<string, number>[] = [{ e1: now }, { e1: now, e2: now, boss: now }, { whiteboard: now }, { tv: now }];
+    for (const active of cases) {
+      for (const shot of runCuts(active, 12, { office })) {
+        const primary = subjectFor(shot.primaryKey!, office)!;
+        const max = fitDistance(primary.width, primary.height, FOV, ASPECT, 1.3) * MEDIUM_MAX_MUL;
+        expect(shot.position.distanceTo(primary.center)).toBeLessThanOrEqual(max + 1e-6);
+        expect((shot.positionEnd ?? shot.position).distanceTo(primary.center)).toBeLessThanOrEqual(max + 1e-6);
+      }
+    }
+  });
+
+  it('an idle office still gets the far/wide idle coverage', () => {
+    expect(runCuts({}, 8).every((s) => IDLE_POOL.includes(s.archetype))).toBe(true);
   });
 
   it('pickShot returns a sane idle shot with no activity and even no office', () => {
@@ -715,21 +831,18 @@ describe('static archetype invariants', () => {
     expect(hits).toBeGreaterThanOrEqual(15);
   });
 
-  it('staticGroup has no positionEnd/lookAtEnd/fov', () => {
+  it('group archetypes are not offered at default desk spacing (fitting two screens is a wide shot)', () => {
+    // Desks sit 3.4 apart, and framing two 1.35-wide monitors at 50° needs the camera
+    // ~8 units back — past the close/medium ceiling an active office is held to. So the
+    // group pool simply isn't in play here, even when every other archetype is stale.
     const office = makeOffice();
     const now = Date.now();
     const lastActivity = { e1: now, e2: now };
     const othersRecent = forceArchetype([...SINGLE_POOL, ...GROUP_POOL], 'staticGroup');
-    let hits = 0;
     for (let i = 0; i < 20; i++) {
       const shot = pickShot(ctx({ office, lastActivity, now, rng: rng(i + 950), cutIndex: i, recentArchetypes: othersRecent }));
-      if (shot.archetype !== 'staticGroup') continue;
-      hits++;
-      expect(shot.positionEnd).toBeUndefined();
-      expect(shot.lookAtEnd).toBeUndefined();
-      expect(shot.fov).toBeUndefined();
+      expect(GROUP_POOL).not.toContain(shot.archetype);
     }
-    expect(hits).toBeGreaterThanOrEqual(10);
   });
 
   it.each(STATIC_IDLE)('%s has no positionEnd/lookAtEnd/fov', (name) => {

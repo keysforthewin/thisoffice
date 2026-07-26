@@ -1,5 +1,6 @@
 import { Suspense, useEffect, useRef, useState } from 'react';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, useFrame } from '@react-three/fiber';
+import { dismissBootScreen } from './boot.ts';
 import { shouldExitFocusOnMissedClick, useStore, type CameraMode } from './store.ts';
 import { Office } from './scene/Office.tsx';
 import { DuskSky } from './scene/DuskSky.tsx';
@@ -116,6 +117,8 @@ export default function App() {
         <Suspense fallback={null}>
           <DuskSky />
           <Office />
+          {/* inside the boundary on purpose — see SceneReady */}
+          <SceneReady />
         </Suspense>
         <CameraRig />
         <ShadowControl />
@@ -131,6 +134,32 @@ export default function App() {
       {settingsOpen && <SettingsPanel />}
     </div>
   );
+}
+
+/**
+ * Drops the index.html loading screen once there is something worth looking at.
+ *
+ * It lives *inside* the Suspense boundary so it only ticks while the scene is
+ * actually mounted: the roster arrives over the WebSocket after first paint, and
+ * the characters it pulls in re-suspend the subtree — a probe outside the
+ * boundary would fade the spinner out onto an empty room. It also waits for the
+ * office state itself, so the reveal is a furnished room rather than bare floor,
+ * with a short grace period so a dead server still gets you into the scene.
+ */
+const OFFICE_WAIT_S = 3;
+const SETTLE_FRAMES = 2;
+
+function SceneReady() {
+  const office = useStore((s) => s.office);
+  const frames = useRef(0);
+  const waited = useRef(0);
+  useFrame((_, delta) => {
+    waited.current += delta;
+    if (!office && waited.current < OFFICE_WAIT_S) return;
+    // one more frame after the models resolve, so the fade uncovers a drawn scene
+    if (++frames.current >= SETTLE_FRAMES) dismissBootScreen();
+  });
+  return null;
 }
 
 /** Center-screen aim dot for the pointer-locked fly cam; fills in over a monitor. */

@@ -107,6 +107,7 @@ function emptyStats(): UsageStats {
     hourCounts: {},
     tokensByDowHour: {},
     gameWins: {},
+    charsByEmployee: {},
   };
 }
 
@@ -326,6 +327,16 @@ export class StatsAggregator {
     const key = name.trim();
     if (!key) return;
     this.stats.gameWins[key] = (this.stats.gameWins[key] ?? 0) + 1;
+    this.markDirty();
+  }
+
+  /** Text that reached an employee's monitor. Keyed by name like recordGameWin, so a
+   *  rehired seat keeps its tally. Called on every streamed chunk, hence the cheap
+   *  guard: no name or no characters means no write and no dirty flag. */
+  recordChars(name: string, n: number): void {
+    const key = name.trim();
+    if (!key || !Number.isFinite(n) || n <= 0) return;
+    this.stats.charsByEmployee[key] = (this.stats.charsByEmployee[key] ?? 0) + n;
     this.markDirty();
   }
 

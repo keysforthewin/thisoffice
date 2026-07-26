@@ -9,13 +9,36 @@ export interface TvPage {
   value: string;
   sub?: string;
   /** when set, WallTV draws this chart in place of the big centered `value` */
-  chart?: DowHourChart;
+  chart?: TvChart;
 }
+
+export type TvChart = DowHourChart | PieChart;
 
 /** Token usage as [weekday 0=Mon … 6=Sun][hour 0-23], in the viewer's local zone. */
 export interface DowHourChart {
   kind: 'dowHours';
   grid: number[][];
+}
+
+/** Slices in draw order, largest first; already trimmed to what fits the legend. */
+export interface PieChart {
+  kind: 'pie';
+  slices: { label: string; value: number }[];
+}
+
+export const TOP_EMPLOYEES = 5;
+
+/** The busiest desks, largest first — ties broken by name so the page is stable
+ *  between redraws rather than reshuffling on every stats broadcast. */
+export function topEmployees(
+  charsByEmployee: Record<string, number>,
+  limit = TOP_EMPLOYEES,
+): { label: string; value: number }[] {
+  return Object.entries(charsByEmployee)
+    .filter(([name, chars]) => name && chars > 0)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([label, value]) => ({ label, value }));
 }
 
 /** Monday-first, matching the chart's row order and legend. */
@@ -249,7 +272,21 @@ export function tvPages(stats: UsageStats | null): TvPage[] {
     pages.push({ title: 'Busiest hours', value: '', sub: peak, chart: { kind: 'dowHours', grid } });
   }
 
-  // 16. Quiz champion — only once someone has actually won a round
+  // 16. Busiest desks — share of everything typed onto a monitor, top 5
+  const busiest = topEmployees(stats.charsByEmployee ?? {});
+  if (busiest.length > 0) {
+    const shown = busiest.reduce((a, s) => a + s.value, 0);
+    const all = Object.values(stats.charsByEmployee ?? {}).reduce((a, n) => a + n, 0);
+    pages.push({
+      title: 'Busiest desks',
+      value: '',
+      // the top-5 share of the whole office, so a truncated tail is visible rather than implied
+      sub: `${formatTokens(all)} chars${shown < all ? ` · top ${busiest.length} = ${Math.round((shown / all) * 100)}%` : ''}`,
+      chart: { kind: 'pie', slices: busiest },
+    });
+  }
+
+  // 17. Quiz champion — only once someone has actually won a round
   const wins = Object.entries(stats.gameWins ?? {});
   if (wins.length > 0) {
     const [topName, topWins] = wins.reduce((best, cur) => (cur[1] > best[1] ? cur : best));
@@ -261,7 +298,7 @@ export function tvPages(stats: UsageStats | null): TvPage[] {
     });
   }
 
-  // 17. Tracking since — always present when stats exist
+  // 18. Tracking since — always present when stats exist
   const days = Math.max(0, Math.round((Date.now() - Date.parse(stats.trackingSince)) / 86_400_000));
   pages.push({
     title: 'Tracking since',

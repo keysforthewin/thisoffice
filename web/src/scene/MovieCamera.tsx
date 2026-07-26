@@ -11,6 +11,9 @@ import { activeSetKey, ARCHETYPES, pickShot, type PickedShot } from './movieShot
  * duration, is what sets the cut rate, so it has to move with the rest.
  */
 const MIN_HOLD_S = 5;
+/** Shortened floor for urgent events (a new message from upstairs, the waiting beacon
+ *  lighting up): quick enough to feel like a reaction, long enough not to cut mid-beat. */
+const PREEMPT_HOLD_S = 1.5;
 const CUT_MIN_S = 5;
 const CUT_MAX_S = 15;
 /** handheld position noise amplitude (world units; world scale is 1.35× human) */
@@ -25,11 +28,17 @@ function isTyping(t: EventTarget | null) {
 }
 
 /**
- * Auto-director: hard-cuts every 3–10 s (or on arrow key / active-set change)
+ * Auto-director: hard-cuts every 5–15 s (or on arrow key / active-set change)
  * to a randomized shot around one active monitor (plus opportunistic
  * neighbors). Shots carry authored motion — dollies, arcs, trucks, board pans,
  * lens zooms — eased across the shot, with layered sinusoid noise on top for a
  * handheld feel.
+ *
+ * Two events preempt on the shortened PREEMPT_HOLD_S floor instead of waiting out
+ * MIN_HOLD_S: a new message from upstairs (which also forces the boss's screen as
+ * the next primary), and the waiting beacon lighting up (which turns the red light
+ * into a hard framing requirement on every subsequent shot). Only the arrow keys
+ * still bypass the hold entirely.
  */
 export function MovieCamera() {
   const camera = useThree((s) => s.camera) as THREE.PerspectiveCamera;
@@ -49,6 +58,11 @@ export function MovieCamera() {
   const recentPrimaries = useRef<string[]>([]);
   const recentMotion = useRef<boolean[]>([]);
   const pendingRecut = useRef(false);
+  /** the pending recut is urgent: honored at PREEMPT_HOLD_S rather than MIN_HOLD_S */
+  const preempt = useRef(false);
+  const forcePrimary = useRef<string | undefined>(undefined);
+  const lastInboxAlert = useRef<number | null>(null);
+  const lastWaiting = useRef<boolean | null>(null);
   // the fov the rest of the app runs at; zoom shots animate camera.fov, so shot
   // picking must use this stable base and unmount must restore it (CameraRig's
   // focus fitting reads camera.fov)
@@ -82,7 +96,7 @@ export function MovieCamera() {
   useFrame((_, delta) => {
     if (suppressed) return;
     const now = Date.now();
-    const { office, lastActivity } = useStore.getState();
+    const { office, lastActivity, inboxAlert } = useStore.getState();
     const key = activeSetKey(lastActivity, now, office);
     shotAge.current += delta;
 
@@ -90,10 +104,30 @@ export function MovieCamera() {
       setKey.current = key;
       pendingRecut.current = true; // honored only once the hold expires
     }
-    const held = shotAge.current < MIN_HOLD_S;
+    // A new message from upstairs lands on the boss's screen and is the most important
+    // thing in the room; the active-set fingerprint can't see it (a second prompt inside
+    // the boss key's TTL doesn't change the set at all), so watch the alert directly.
+    if (lastInboxAlert.current !== null && inboxAlert > lastInboxAlert.current) {
+      pendingRecut.current = true;
+      preempt.current = true;
+      forcePrimary.current = 'boss';
+    }
+    lastInboxAlert.current = inboxAlert;
+
+    const waiting = !!office?.waitingForInput;
+    // off → on: the current shot almost certainly doesn't frame the beacon, so recut
+    // urgently. on → off only lifts a constraint — an ordinary recut is fine.
+    if (lastWaiting.current !== null && waiting !== lastWaiting.current) {
+      pendingRecut.current = true;
+      if (waiting) preempt.current = true;
+    }
+    lastWaiting.current = waiting;
+
+    const held = shotAge.current < (preempt.current ? PREEMPT_HOLD_S : MIN_HOLD_S);
     if (!shot.current || wantCut.current || (!held && (pendingRecut.current || shotAge.current >= shotDuration.current))) {
       wantCut.current = false;
       pendingRecut.current = false;
+      preempt.current = false;
       const picked = pickShot({
         office, lastActivity, now,
         fovY: THREE.MathUtils.degToRad(baseFov.current),
@@ -104,7 +138,10 @@ export function MovieCamera() {
         recentArchetypes: recent.current,
         recentPrimaries: recentPrimaries.current,
         recentMotion: recentMotion.current,
+        waiting,
+        forcePrimary: forcePrimary.current,
       });
+      forcePrimary.current = undefined;
       shot.current = picked;
       // measure the next cut's min distance from where this shot's camera ENDS
       prevPos.current = (picked.positionEnd ?? picked.position).clone();

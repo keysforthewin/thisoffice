@@ -6,9 +6,31 @@ import type { Office } from './office.ts';
 import { Transcripts } from './transcript.ts';
 import { ScreenStreamer } from './streamer.ts';
 import type { StatsAggregator } from './stats.ts';
+import { MONITOR_IMAGE_MARKER } from '../../shared/types.ts';
 
 const PROJECTS_DIR =
   process.env.CLAUDE_PROJECTS_DIR ?? path.join(os.homedir(), '.claude', 'projects');
+
+/**
+ * Text volume for the "busiest desks" stat. The streamer's emit hook is the only path
+ * text takes to an employee monitor after pacing, so it counts what actually appeared
+ * on screen — but a screenshot line is a base64 data URL tens of thousands of
+ * characters long, which would swamp everyone else's typing, so images count as zero.
+ */
+export function countVisibleChars(text: string): number {
+  let n = 0;
+  for (const line of text.split('\n')) {
+    if (line.startsWith(MONITOR_IMAGE_MARKER)) continue;
+    n += line.length;
+  }
+  return n;
+}
+
+/** The streamer only ever addresses employees (the boss screen bypasses it), so an
+ *  unresolved id is a just-evicted desk, not the boss. */
+function employeeName(office: Office, id: string): string {
+  return office.getState().employees.find((e) => e.id === id)?.name ?? '';
+}
 
 /**
  * Tails every *.jsonl under ~/.claude/projects. Existing files are seeded at
@@ -16,7 +38,10 @@ const PROJECTS_DIR =
  */
 export function startWatcher(office: Office, stats?: StatsAggregator) {
   const streamer = new ScreenStreamer({
-    emit: (id, text) => office.monitor(id, { append: text }),
+    emit: (id, text) => {
+      office.monitor(id, { append: text });
+      stats?.recordChars(employeeName(office, id), countVisibleChars(text));
+    },
     drained: (id) => office.notifyDrained(id),
   });
   office.attachStreamer(streamer);

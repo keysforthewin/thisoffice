@@ -6,9 +6,41 @@
     <title>This Office</title>
     <style>
       html, body, #root { margin: 0; height: 100%; overflow: hidden; background: #0e0e12; }
+
+      /*
+        Lives in index.html, not React: the 5-10 s the user stares at is mostly
+        the module bundle + GLB/texture fetches, i.e. before any of our JS runs.
+        A React-rendered spinner would appear only after that wait is half over.
+        boot.ts removes this once the scene has actually drawn a frame.
+      */
+      #boot {
+        position: fixed; inset: 0; z-index: 50;
+        display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px;
+        background: radial-gradient(ellipse at 50% 45%, #2a2235 0%, #14121a 55%, #0e0e12 100%);
+        font-family: system-ui, sans-serif; color: #e6e8eb;
+        opacity: 1; transition: opacity 450ms ease;
+      }
+      #boot.boot-done { opacity: 0; pointer-events: none; }
+      #boot .ring {
+        width: 54px; height: 54px; border-radius: 50%;
+        border: 3px solid rgba(255, 233, 208, 0.16);
+        border-top-color: #ffc98a;
+        animation: boot-spin 900ms linear infinite;
+      }
+      #boot .label { font-size: 15px; font-weight: 600; letter-spacing: 0.2px; }
+      #boot .sub { font-size: 12.5px; color: #9aa4b0; margin-top: -14px; }
+      @keyframes boot-spin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) {
+        #boot .ring { animation-duration: 2.4s; }
+      }
     </style>
   </head>
   <body>
+    <div id="boot">
+      <div class="ring"></div>
+      <div class="label">Please wait — loading the office</div>
+      <div class="sub">hiring staff, wiring monitors…</div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

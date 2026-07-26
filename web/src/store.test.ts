@@ -176,7 +176,7 @@ describe('lastActivity stamping', () => {
     resetInboxKeyForTest();
     resetStatusKeyForTest();
     resetTvStatsKeyForTest();
-    useStore.setState({ office: null, stats: null, monitors: {}, monitorVersion: {}, lastActivity: {} });
+    useStore.setState({ office: null, stats: null, monitors: {}, monitorVersion: {}, lastActivity: {}, inboxAlert: 0 });
   });
   afterEach(() => vi.useRealTimers());
 
@@ -205,6 +205,33 @@ describe('lastActivity stamping', () => {
     vi.setSystemTime(1_009_000);
     useStore.getState().applyServerMsg({ type: 'state', state: changed });
     expect(useStore.getState().lastActivity['whiteboard']).toBe(1_005_000);
+  });
+
+  it('raises inboxAlert only on a genuinely new inbox item — not the first state, a rewrite, or a boss-screen stream', () => {
+    const item = (id: string, text: string) => ({ id, project: 'p', text, at: new Date().toISOString() });
+    // the connect replay must not read as a fresh message from upstairs
+    useStore.getState().applyServerMsg({ type: 'state', state: makeOffice({ inbox: [item('inbox-1', 'hi')] }) });
+    expect(useStore.getState().inboxAlert).toBe(0);
+
+    vi.setSystemTime(1_005_000);
+    useStore.getState().applyServerMsg({
+      type: 'state',
+      state: makeOffice({ inbox: [item('inbox-1', 'hi'), item('inbox-2', 'do the thing')] }),
+    });
+    expect(useStore.getState().inboxAlert).toBe(1_005_000);
+
+    // the summarizer rewriting the same tail id is not a new message
+    vi.setSystemTime(1_009_000);
+    useStore.getState().applyServerMsg({
+      type: 'state',
+      state: makeOffice({ inbox: [item('inbox-1', 'hi'), item('inbox-2', 'a tidier summary')] }),
+    });
+    expect(useStore.getState().inboxAlert).toBe(1_005_000);
+
+    // a boss-screen stream stamps lastActivity.boss but is not a message from upstairs
+    useStore.getState().applyServerMsg({ type: 'monitor', target: 'boss', append: 'more text\n' } as never);
+    expect(useStore.getState().lastActivity['boss']).toBe(1_009_000);
+    expect(useStore.getState().inboxAlert).toBe(1_005_000);
   });
 
   it('stamps the status board on a new status tail id, but not on rewrites or the first state', () => {
@@ -307,6 +334,7 @@ describe('lastActivity stamping', () => {
       hourCounts: {},
       tokensByDowHour: {},
       gameWins: {},
+      charsByEmployee: {},
     };
     useStore.getState().applyServerMsg({ type: 'stats', stats });
     expect(useStore.getState().stats).toEqual(stats);

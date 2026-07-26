@@ -8,6 +8,8 @@ import {
   tvContent,
   tvPageIndex,
   tvPages,
+  topEmployees,
+  type DowHourChart,
 } from './tvContent.ts';
 
 function baseStats(overrides: Partial<UsageStats> = {}): UsageStats {
@@ -29,6 +31,7 @@ function baseStats(overrides: Partial<UsageStats> = {}): UsageStats {
     hourCounts: {},
     tokensByDowHour: {},
     gameWins: {},
+    charsByEmployee: {},
     ...overrides,
   };
 }
@@ -191,8 +194,9 @@ describe('tvPages', () => {
     const stats = baseStats({ tokensByDowHour: { '2-9': 4_200_000 } }); // Tue 09:00 UTC
     const page = tvPages(stats).find((p) => p.title === 'Busiest hours')!;
     expect(page.chart?.kind).toBe('dowHours');
-    expect(page.chart!.grid).toHaveLength(7);
-    expect(page.chart!.grid[0]).toHaveLength(24);
+    const chart = page.chart as DowHourChart;
+    expect(chart.grid).toHaveLength(7);
+    expect(chart.grid[0]).toHaveLength(24);
     expect(page.sub).toMatch(/^peak \w{3} \d\d:00 · 4\.2M$/);
   });
 
@@ -223,6 +227,52 @@ describe('tvPages', () => {
     const stats = baseStats({});
     delete (stats as { gameWins?: unknown }).gameWins;
     expect(() => tvPages(stats)).not.toThrow();
+  });
+
+  it('tolerates stats from a server without charsByEmployee', () => {
+    const stats = baseStats({});
+    delete (stats as { charsByEmployee?: unknown }).charsByEmployee;
+    expect(() => tvPages(stats)).not.toThrow();
+    expect(tvPages(stats).some((p) => p.title === 'Busiest desks')).toBe(false);
+  });
+});
+
+describe('topEmployees', () => {
+  it('ranks by characters, largest first, and breaks ties by name', () => {
+    expect(topEmployees({ Rey: 10, Dana: 50, Ash: 10 })).toEqual([
+      { label: 'Dana', value: 50 },
+      { label: 'Ash', value: 10 },
+      { label: 'Rey', value: 10 },
+    ]);
+  });
+
+  it('keeps only the top 5 and drops blank names and zero counts', () => {
+    const many = { A: 9, B: 8, C: 7, D: 6, E: 5, F: 4, '': 100, Z: 0 };
+    expect(topEmployees(many).map((s) => s.label)).toEqual(['A', 'B', 'C', 'D', 'E']);
+  });
+
+  it('is empty for an office that has streamed nothing', () => {
+    expect(topEmployees({})).toEqual([]);
+  });
+});
+
+describe('the busiest-desks page', () => {
+  it('carries the top-5 pie and the office-wide character total', () => {
+    const pages = tvPages(baseStats({ charsByEmployee: { Dana: 300, Rey: 100 } }));
+    const page = pages.find((p) => p.title === 'Busiest desks')!;
+    expect(page.chart).toEqual({ kind: 'pie', slices: [{ label: 'Dana', value: 300 }, { label: 'Rey', value: 100 }] });
+    expect(page.sub).toBe('400 chars');
+  });
+
+  it('shows what share the visible five cover once the tail is truncated', () => {
+    const stats = baseStats({ charsByEmployee: { A: 100, B: 100, C: 100, D: 100, E: 100, F: 500 } });
+    const page = tvPages(stats).find((p) => p.title === 'Busiest desks')!;
+    // F is the largest, so the shown five are F + four 100s = 900 of 1000
+    expect(page.sub).toBe('1.0k chars · top 5 = 90%');
+  });
+
+  it('is absent until something has actually streamed', () => {
+    expect(tvPages(baseStats()).some((p) => p.title === 'Busiest desks')).toBe(false);
   });
 });
 

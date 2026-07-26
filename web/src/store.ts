@@ -157,6 +157,10 @@ export interface AppStore {
   monitorHover: string | null;
   /** subject key ('boss' | employee id | 'whiteboard') → epoch ms of last content change */
   lastActivity: Record<string, number>;
+  /** epoch ms of the last NEW inbox item (a message from upstairs); 0 until one arrives.
+   *  Distinct from lastActivity.boss, which any boss-screen stream also stamps — this
+   *  fires only on a genuinely new prompt, which is what preempts the movie camera. */
+  inboxAlert: number;
   connected: boolean;
   cameraMode: CameraMode;
   settingsOpen: boolean;
@@ -239,6 +243,7 @@ export const useStore = create<AppStore>((set, get) => ({
   pendingRelock: false,
   monitorHover: null,
   lastActivity: {},
+  inboxAlert: 0,
   connected: false,
   cameraMode: loadCameraMode(),
   settingsOpen: false,
@@ -261,10 +266,14 @@ export const useStore = create<AppStore>((set, get) => ({
       const prevStatusKey = statusKey;
       statusKey = statusTailId;
       let lastActivity = get().lastActivity;
+      let inboxAlert = get().inboxAlert;
       if (prevKey !== null && prevKey !== key) lastActivity = stampActivity(lastActivity, 'whiteboard');
-      if (prevInboxKey !== null && prevInboxKey !== tailId) lastActivity = stampActivity(lastActivity, 'boss');
+      if (prevInboxKey !== null && prevInboxKey !== tailId) {
+        lastActivity = stampActivity(lastActivity, 'boss');
+        inboxAlert = Date.now();
+      }
       if (prevStatusKey !== null && prevStatusKey !== statusTailId) lastActivity = stampActivity(lastActivity, 'statusboard');
-      set({ office: stableLayout(get().office, msg.state), lastActivity });
+      set({ office: stableLayout(get().office, msg.state), lastActivity, inboxAlert });
       return;
     }
     if (msg.type === 'catalog') {

@@ -227,6 +227,12 @@ export interface UsageStats {
   tokensByDowHour: Record<string, number>;
   /** 20 Questions wins, keyed by employee name (a rehired name inherits its wins) */
   gameWins: Record<string, number>;
+  /**
+   * Characters streamed onto each employee's monitor, all time, keyed by name for the
+   * same reason gameWins is: an employee id is minted fresh on every rehire, while a
+   * seat's remembered name carries across an idle eviction.
+   */
+  charsByEmployee: Record<string, number>;
 }
 
 /**

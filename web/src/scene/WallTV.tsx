@@ -126,7 +126,8 @@ const SUB_COLOR = '#8b949e';
 const DOT_ACTIVE = '#7ee787';
 const DOT_INACTIVE = '#2a2f38';
 
-function drawTvPage(ctx: CanvasRenderingContext2D, page: TvPage, pageNum: number, pageCount: number) {
+/** Exported for offscreen rendering (verification/screenshots); WallTV is its only caller in the scene. */
+export function drawTvPage(ctx: CanvasRenderingContext2D, page: TvPage, pageNum: number, pageCount: number) {
   ctx.fillStyle = '#0d1117';
   ctx.fillRect(0, 0, W, H);
 
@@ -143,7 +144,8 @@ function drawTvPage(ctx: CanvasRenderingContext2D, page: TvPage, pageNum: number
       ctx.font = '20px ui-monospace, Menlo, monospace';
       ctx.fillText(page.sub, W / 2, 104);
     }
-    drawDowHourChart(ctx, page.chart.grid);
+    if (page.chart.kind === 'dowHours') drawDowHourChart(ctx, page.chart.grid);
+    else drawPieChart(ctx, page.chart.slices);
   } else {
     // value: huge centered, shrink-to-fit if wider than the canvas
     const maxValueWidth = W - 60;
@@ -246,6 +248,66 @@ function drawDowHourChart(ctx: CanvasRenderingContext2D, grid: number[][]) {
     x += it.w + gap;
   });
   ctx.textAlign = 'center';
+}
+
+/**
+ * Top-N pie with a name/share legend down the right. The pie sits left of centre so
+ * the legend gets a full column — from across the room the names are the payload and
+ * the wedges are the ranking, so neither can be squeezed into the middle.
+ */
+function drawPieChart(ctx: CanvasRenderingContext2D, slices: { label: string; value: number }[]) {
+  const total = slices.reduce((a, s) => a + s.value, 0);
+  if (total <= 0) return;
+
+  const cx = 168;
+  const cy = 224;
+  const r = 74;
+  let angle = -Math.PI / 2; // 12 o'clock, so the largest wedge starts where the eye lands
+  slices.forEach((s, i) => {
+    const sweep = (s.value / total) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, r, angle, angle + sweep);
+    ctx.closePath();
+    ctx.fillStyle = DOW_COLORS[i % DOW_COLORS.length];
+    ctx.fill();
+    // a hairline of background between wedges keeps adjacent colours from bleeding
+    // together at this texture size; a single full-circle slice needs no seam
+    if (slices.length > 1) {
+      ctx.strokeStyle = '#0d1117';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+    angle += sweep;
+  });
+
+  ctx.textAlign = 'left';
+  ctx.font = '17px ui-monospace, Menlo, monospace';
+  const chip = 11;
+  const rowH = 28;
+  const x = 300;
+  let y = cy - ((slices.length - 1) * rowH) / 2 + 6;
+  for (const [i, s] of slices.entries()) {
+    ctx.fillStyle = DOW_COLORS[i % DOW_COLORS.length];
+    ctx.fillRect(x, y - chip, chip, chip);
+    const pct = `${Math.round((s.value / total) * 100)}%`;
+    ctx.fillStyle = VALUE_COLOR;
+    ctx.fillText(clipToWidth(ctx, s.label, 210), x + chip + 8, y);
+    ctx.fillStyle = SUB_COLOR;
+    ctx.textAlign = 'right';
+    ctx.fillText(pct, W - 40, y);
+    ctx.textAlign = 'left';
+    y += rowH;
+  }
+  ctx.textAlign = 'center';
+}
+
+/** Truncate with an ellipsis so a long hire name can't run into the percentage column. */
+function clipToWidth(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let out = text;
+  while (out.length > 1 && ctx.measureText(out + '…').width > maxWidth) out = out.slice(0, -1);
+  return out + '…';
 }
 
 function drawLetterspaced(ctx: CanvasRenderingContext2D, text: string, cx: number, y: number, spacing: number) {

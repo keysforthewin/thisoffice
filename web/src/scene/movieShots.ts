@@ -29,6 +29,13 @@ const TORSO_R = 0.4;
 const MONITOR_OFFSET = new THREE.Vector3(0, 1.66, 0.35);
 const MONITOR_W = 1.35;
 const MONITOR_H = 0.85;
+/** The boss desk's waiting-for-input beacon: WaitingLight's group offset plus the
+ *  bulb's own local y (Desk.tsx). Not a screen — it is a framing CONSTRAINT while it
+ *  blinks, and only doubles as a shot subject in the last-resort fallback, so its
+ *  "size" is the readable patch of desk around it rather than the 0.05 bulb itself. */
+const BEACON_OFFSET = new THREE.Vector3(0.7, 1.07, 0.25);
+const BEACON_SIZE = 0.9;
+export const BEACON_KEY = 'beacon';
 const WHITEBOARD_W = 3.2;
 const WHITEBOARD_H = 1.95;
 const UP = new THREE.Vector3(0, 1, 0);
@@ -111,7 +118,9 @@ function monitorAABB(seat: number, office: OfficeState | null): THREE.Box3 {
 }
 
 function seatForKey(key: string, office: OfficeState | null): number | null {
-  if (key === 'boss') return 0;
+  // the beacon sits on the boss's own desk, in front of them: treat it as seat 0 so
+  // hasLineOfSight skips the boss's body and monitor rather than self-occluding it
+  if (key === 'boss' || key === BEACON_KEY) return 0;
   const emp = office?.employees.find((e) => e.id === key);
   return emp ? emp.seat : null;
 }
@@ -229,6 +238,18 @@ export function isWallBoard(key: string): boolean {
 }
 
 export function subjectFor(key: string, office: OfficeState | null): Subject | null {
+  if (key === BEACON_KEY) {
+    const { position, rotationY } = resolveSeat(office?.layout, 0, maxSeat(office));
+    return {
+      key,
+      center: position.clone().add(BEACON_OFFSET.clone().applyAxisAngle(UP, rotationY)),
+      // the desk faces +z with the occupant behind it at local z −1.15, so the light
+      // reads from the room side and slightly above (it points up off the desk top)
+      normal: new THREE.Vector3(0, 0.4, 1).normalize().applyAxisAngle(UP, rotationY),
+      width: BEACON_SIZE,
+      height: BEACON_SIZE,
+    };
+  }
   const board = WALL_BOARDS[key];
   if (board) {
     return { key, center: board.center(office), normal: board.normal.clone(), width: board.width, height: board.height };
@@ -260,6 +281,31 @@ export function groupByFacing(subjects: Subject[]): Subject[][] {
     else groups.push([s]);
   }
   return groups;
+}
+
+/**
+ * Is `point` inside the frame of a camera at `camPos` looking at `lookAt`? LOS answers
+ * "is it unoccluded", which is not the same question — a subject can be perfectly
+ * visible and sit far outside the frame. `margin` (< 1) shrinks the frustum so the
+ * point lands off the frame edge, which also absorbs the ≤15° roll a dutch shot adds
+ * after lookAt and the handheld sinusoid noise MovieCamera layers on every frame.
+ */
+export function pointInFrame(
+  camPos: THREE.Vector3, lookAt: THREE.Vector3, point: THREE.Vector3,
+  fovY: number, aspect: number, margin = 0.85,
+): boolean {
+  const forward = lookAt.clone().sub(camPos);
+  if (forward.lengthSq() < 1e-9) return false;
+  forward.normalize();
+  const right = new THREE.Vector3().crossVectors(forward, UP);
+  if (right.lengthSq() < 1e-9) return false; // dead-vertical view: no stable basis
+  right.normalize();
+  const up = new THREE.Vector3().crossVectors(right, forward).normalize();
+  const v = point.clone().sub(camPos);
+  const z = v.dot(forward);
+  if (z <= 1e-3) return false; // behind the camera (or on the lens)
+  const tanY = Math.tan(fovY / 2) * margin;
+  return Math.abs(v.dot(up)) <= z * tanY && Math.abs(v.dot(right)) <= z * tanY * aspect;
 }
 
 /** Distance at which a spanW×spanH rect (facing the camera) fits the frustum. */
@@ -443,24 +489,49 @@ export interface PickedShot extends Shot {
   primaryKey?: string;
 }
 
+interface ShotConstraints {
+  /** LOS to every one of these is required along the whole move; empty for idle B-roll */
+  subjects: Subject[];
+  office: OfficeState | null;
+  prev: THREE.Vector3 | null;
+  minDist: number;
+  /** must be unoccluded AND inside the frame at every sample (the blinking beacon) */
+  framed?: { subject: Subject; fovY: number; aspect: number };
+  /** camera must stay within `max` of `center` — the close/medium ceiling */
+  maxRange?: { center: THREE.Vector3; max: number };
+}
+
+/** Camera pose at eased progress `e` through a shot. */
+function poseAt(shot: Shot, e: number): { pos: THREE.Vector3; look: THREE.Vector3 } {
+  return {
+    pos: shot.position.clone().lerp(shot.positionEnd ?? shot.position, e),
+    look: shot.lookAt.clone().lerp(shot.lookAtEnd ?? shot.lookAt, e),
+  };
+}
+
 /** A shot passes only if its whole camera path (start, midpoint, end) stays
  *  outside occluders and sees every required subject, and it starts far enough
  *  from the previous shot. Empty subjects (idle B-roll) skips LOS. */
-function validShot(
-  shot: Shot,
-  subjects: Subject[],
-  office: OfficeState | null,
-  prev: THREE.Vector3 | null,
-  minDist: number = MIN_SHOT_DIST,
-): boolean {
-  if (prev && shot.position.distanceTo(prev) < minDist) return false;
-  const points = [shot.position];
-  if (shot.positionEnd) {
-    points.push(shot.positionEnd, shot.position.clone().lerp(shot.positionEnd, 0.5));
+function validShot(shot: Shot, c: ShotConstraints): boolean {
+  if (c.prev && shot.position.distanceTo(c.prev) < c.minDist) return false;
+  // a lookAt-only move (boardPan, tiltReveal) holds position but re-aims, so framing
+  // has to be sampled across it too — hence poses, not just positions
+  const moves = !!shot.positionEnd || !!shot.lookAtEnd;
+  const poses = moves ? [poseAt(shot, 0), poseAt(shot, 0.5), poseAt(shot, 1)] : [poseAt(shot, 0)];
+  // frame the required point at the TIGHTEST fov the shot reaches, so a zoomPunch
+  // narrowing to 34° can't push it out mid-move
+  const fovDeg = Math.min(shot.fov ?? Infinity, shot.fovEnd ?? Infinity);
+  const framedFovY = Number.isFinite(fovDeg) ? deg(fovDeg) : c.framed?.fovY ?? 0;
+  // cheap pose-local tests first: they're plain vector math, while the occluder/LOS
+  // pass below loops every occupied seat's body spheres and monitor box
+  for (const { pos, look } of poses) {
+    if (c.maxRange && pos.distanceTo(c.maxRange.center) > c.maxRange.max) return false;
+    if (c.framed && !pointInFrame(pos, look, c.framed.subject.center, framedFovY, c.framed.aspect)) return false;
   }
-  for (const pos of points) {
-    if (isInsideOccluder(pos, office)) return false;
-    if (!subjects.every((s) => hasLineOfSight(pos, s, office))) return false;
+  for (const { pos } of poses) {
+    if (isInsideOccluder(pos, c.office)) return false;
+    if (!c.subjects.every((s) => hasLineOfSight(pos, s, c.office))) return false;
+    if (c.framed && !hasLineOfSight(pos, c.framed.subject, c.office)) return false;
   }
   return true;
 }
@@ -748,6 +819,46 @@ export interface ShotContext {
   /** whether each of the recent shots had motion, most recent first — two moving shots
    *  in a row force the next pick's candidate order to try static archetypes first */
   recentMotion?: boolean[];
+  /** the boss-desk beacon is blinking: every shot must frame it (office.waitingForInput) */
+  waiting?: boolean;
+  /** subject key to try first regardless of weighting — a new inbox message forces 'boss' */
+  forcePrimary?: string;
+}
+
+/**
+ * Long-lived wall surfaces: they stay "active" for minutes (see ACTIVITY_TTL_MS) so
+ * they read as ambient set dressing, not live work. A primary is only ever drawn from
+ * them when nothing live — a streaming monitor or the todo board — is active at all.
+ */
+const AMBIENT_KEYS = new Set(['statusboard', 'tv']);
+
+/** Camera distance ceiling while anything is active, as a multiple of the primary's
+ *  fit distance: a busy office gets close/medium coverage where a screen is legible.
+ *  2.4 keeps pushInCloseup (starts at ×2.2) and everything tighter; wides are already
+ *  unreachable here since IDLE_POOL only runs on an empty active set. */
+export const MEDIUM_MAX_MUL = 2.4;
+
+/** How many primaries a single cut will try before falling back. */
+const MAX_PRIMARY_TRIES = 3;
+
+/** Weighted sampling without replacement: repeatedly draw from the remaining set by
+ *  weight. Higher-weight items tend to sort earlier, but it's still randomized (not a
+ *  plain sort), so ties and near-ties still shuffle. */
+function weightedShuffle<T>(items: T[], weight: (t: T) => number, rng: () => number): T[] {
+  const remaining = items.slice();
+  const out: T[] = [];
+  while (remaining.length > 0) {
+    const total = remaining.reduce((sum, t) => sum + weight(t), 0);
+    let r = rng() * total;
+    let idx = remaining.length - 1;
+    for (let i = 0; i < remaining.length; i++) {
+      r -= weight(remaining[i]);
+      if (r < 0) { idx = i; break; }
+    }
+    out.push(remaining[idx]);
+    remaining.splice(idx, 1);
+  }
+  return out;
 }
 
 /** Boss screen and wall boards fire rarely; give them extra draw weight so their
@@ -756,17 +867,19 @@ function subjectWeight(s: Subject): number {
   return s.key === 'boss' || isWallBoard(s.key) ? 2 : 1;
 }
 
-function pickPrimary(subjects: Subject[], recentPrimaries: string[], rng: () => number): Subject {
+/**
+ * The whole tier in try-order: least-recently-led first (weighted within each half),
+ * recently-led as a last resort. An ORDER rather than a single draw because a primary
+ * can now fail outright — the beacon-framing and close/medium constraints reject every
+ * candidate for some subjects — and the next one should get its turn instead of the
+ * cut collapsing to the unvalidated fallback.
+ */
+function orderPrimaries(subjects: Subject[], recentPrimaries: string[], rng: () => number): Subject[] {
   const recent = recentPrimaries.slice(0, 2);
-  const fresh = subjects.filter((s) => !recent.includes(s.key));
-  const pool = fresh.length > 0 ? fresh : subjects;
-  const total = pool.reduce((sum, s) => sum + subjectWeight(s), 0);
-  let r = rng() * total;
-  for (const s of pool) {
-    r -= subjectWeight(s);
-    if (r < 0) return s;
-  }
-  return pool[pool.length - 1];
+  return [
+    ...weightedShuffle(subjects.filter((s) => !recent.includes(s.key)), subjectWeight, rng),
+    ...weightedShuffle(subjects.filter((s) => recent.includes(s.key)), subjectWeight, rng),
+  ];
 }
 
 export function pickShot(ctx: ShotContext): PickedShot {
@@ -777,25 +890,8 @@ export function pickShot(ctx: ShotContext): PickedShot {
     .map((k) => subjectFor(k, office))
     .filter((s): s is Subject => s !== null);
 
-  /** Weighted sampling without replacement: repeatedly draw from the remaining set by
-   *  ARCHETYPES[name].weight. Higher-weight archetypes tend to sort earlier, but it's
-   *  still randomized (not a plain sort), so ties and near-ties still shuffle. */
-  const weightedOrder = (names: ArchetypeName[]): ArchetypeName[] => {
-    const remaining = names.slice();
-    const out: ArchetypeName[] = [];
-    while (remaining.length > 0) {
-      const total = remaining.reduce((sum, n) => sum + ARCHETYPES[n].weight, 0);
-      let r = rng() * total;
-      let idx = remaining.length - 1;
-      for (let i = 0; i < remaining.length; i++) {
-        r -= ARCHETYPES[remaining[i]].weight;
-        if (r < 0) { idx = i; break; }
-      }
-      out.push(remaining[idx]);
-      remaining.splice(idx, 1);
-    }
-    return out;
-  };
+  const weightedOrder = (names: ArchetypeName[]): ArchetypeName[] =>
+    weightedShuffle(names, (n) => ARCHETYPES[n].weight, rng);
 
   // Two moving shots in a row: break the streak by trying every static candidate —
   // fresh ones first, then recently-used ones — before any moving candidate at all
@@ -819,10 +915,22 @@ export function pickShot(ctx: ShotContext): PickedShot {
     return [...weightedOrder(fresh), ...weightedOrder(used)];
   };
 
-  const attempt = (name: ArchetypeName, gen: () => Shot, losSubjects: Subject[], minDist: number = MIN_SHOT_DIST): PickedShot | null => {
+  // While the boss-desk beacon blinks it is a hard framing requirement on EVERY shot:
+  // unoccluded and inside the frame at start, midpoint and end. It outranks the
+  // active-screen preference — a screen is framed only if a beacon-valid shot happens
+  // to include one.
+  const beacon = ctx.waiting ? subjectFor(BEACON_KEY, office) : null;
+  const framed = beacon ? { subject: beacon, fovY, aspect } : undefined;
+
+  const attempt = (
+    name: ArchetypeName, gen: () => Shot, losSubjects: Subject[],
+    minDist: number, maxRange: ShotConstraints['maxRange'],
+  ): PickedShot | null => {
     for (let i = 0; i < LOS_CANDIDATES; i++) {
       const shot = gen();
-      if (validShot(shot, losSubjects, office, prev, minDist)) return { ...shot, archetype: name };
+      if (validShot(shot, { subjects: losSubjects, office, prev, minDist, framed, maxRange })) {
+        return { ...shot, archetype: name };
+      }
     }
     return null;
   };
@@ -835,18 +943,22 @@ export function pickShot(ctx: ShotContext): PickedShot {
     pool: ArchetypeName[],
     gens: Record<string, () => Shot>,
     losSubjects: Subject[],
+    maxRange?: ShotConstraints['maxRange'],
   ): PickedShot | null => {
     const ordered = order(pool);
-    for (const name of ordered) {
-      const hit = attempt(name, gens[name], losSubjects);
-      if (hit) return hit;
-    }
-    for (const name of ordered) {
-      const hit = attempt(name, gens[name], losSubjects, MIN_SHOT_DIST / 2);
-      if (hit) return hit;
+    for (const minDist of [MIN_SHOT_DIST, MIN_SHOT_DIST / 2]) {
+      for (const name of ordered) {
+        const hit = attempt(name, gens[name], losSubjects, minDist, maxRange);
+        if (hit) return hit;
+      }
     }
     return null;
   };
+
+  /** Last resort while the beacon blinks: a close-up on the beacon itself, which frames
+   *  it by construction. Preferred over any unvalidated fallback that might miss it. */
+  const beaconFallback = (): PickedShot | null =>
+    beacon ? { ...closeUpShot(beacon, fovY, aspect, rng, office), archetype: 'staticCloseup', primaryKey: BEACON_KEY } : null;
 
   if (subjects.length === 0) {
     const gens: Record<string, () => Shot> = {
@@ -859,45 +971,83 @@ export function pickShot(ctx: ShotContext): PickedShot {
     };
     const hit = tryPool(IDLE_POOL, gens, []);
     if (hit) return hit;
-    return { ...wideShot(office, rng), archetype: 'wideEstablishing' }; // last-resort, unvalidated
+    // an idle office whose light is blinking still owes the viewer the light
+    return beaconFallback() ?? { ...wideShot(office, rng), archetype: 'wideEstablishing' }; // last-resort, unvalidated
   }
 
   // One primary subject per cut — the hard invariant is LOS to this ONE active
   // screen (validated along the whole camera move). Facing-compatible neighbors
   // are framed opportunistically by group archetypes but never constrain LOS,
   // so a crowd of active monitors can't starve boss/board shots anymore.
-  const primary = pickPrimary(subjects, ctx.recentPrimaries ?? [], rng);
-  const neighbors = subjects.filter((s) => s !== primary && s.normal.dot(primary.normal) > -0.01);
-
-  const gens: Record<string, () => Shot> = {
-    otsCloseup: () => otsCloseupCandidate(primary, fovY, aspect, rng, office),
-    highAngle: () => highAngleCandidate(primary, fovY, aspect, rng, office),
-    sideProfile: () => sideProfileCandidate(primary, fovY, aspect, rng, office),
-    pushInCloseup: () => pushInCloseupCandidate(primary, fovY, aspect, rng, office),
-    orbitArc: () => orbitArcCandidate(primary, fovY, aspect, rng, office),
-    zoomPunch: () => zoomPunchCandidate(primary, aspect, rng, office),
-    lowPush: () => lowPushCandidate(primary, fovY, aspect, rng, office),
-    boardPan: () => boardPanCandidate(primary, fovY, aspect, rng, office),
-    staticCloseup: () => staticCloseupCandidate(primary, fovY, aspect, rng, office),
-    staticProfile: () => staticProfileCandidate(primary, fovY, aspect, rng, office),
-    staticHighAngle: () => staticHighAngleCandidate(primary, fovY, aspect, rng, office),
-    staticLow: () => staticLowCandidate(primary, fovY, aspect, rng, office),
-    dutchStatic: () => dutchStaticCandidate(primary, fovY, aspect, rng, office),
-    tiltReveal: () => tiltRevealCandidate(primary, fovY, aspect, rng, office),
-  };
-  let pool: ArchetypeName[] = [...SINGLE_POOL];
-  if (isWallBoard(primary.key)) pool.push('boardPan');
-  if (neighbors.length > 0) {
-    const group = [primary, ...neighbors];
-    gens.groupLevel = () => groupCandidate(group, fovY, aspect, rng, office, GROUP_PITCH_MIN, GROUP_PITCH_MAX, 'truck');
-    gens.elevatedGroup = () => groupCandidate(group, fovY, aspect, rng, office, deg(25), deg(45), 'pushIn');
-    gens.groupArc = () => groupCandidate(group, fovY, aspect, rng, office, GROUP_PITCH_MIN, GROUP_PITCH_MAX, 'arc');
-    gens.staticGroup = () => groupCandidate(group, fovY, aspect, rng, office, GROUP_PITCH_MIN, GROUP_PITCH_MAX, 'none');
-    pool = [...pool, ...GROUP_POOL];
+  //
+  // Live monitors and the todo board outrank the ambient wall boards, whose activity
+  // windows run for minutes: never cut to set dressing while real work is on screen.
+  const live = subjects.filter((s) => !AMBIENT_KEYS.has(s.key));
+  const tier = live.length > 0 ? live : subjects;
+  let ordered = orderPrimaries(tier, ctx.recentPrimaries ?? [], rng);
+  if (ctx.forcePrimary) {
+    const forced = subjects.find((s) => s.key === ctx.forcePrimary) ?? subjectFor(ctx.forcePrimary, office);
+    if (forced) ordered = [forced, ...ordered.filter((s) => s.key !== forced.key)];
   }
 
-  const hit = tryPool(pool, gens, [primary]);
-  if (hit) return { ...hit, primaryKey: primary.key };
-  // best-effort fallback: static close-up on the primary
-  return { ...closeUpShot(primary, fovY, aspect, rng, office), archetype: 'otsCloseup', primaryKey: primary.key };
+  // bounded so a hard cut (every candidate for every archetype rejected) can't fan out
+  // across a nine-desk office: three primaries is enough for the constraints to find air
+  for (const primary of ordered.slice(0, MAX_PRIMARY_TRIES)) {
+    const neighbors = subjects.filter((s) => s.key !== primary.key && s.normal.dot(primary.normal) > -0.01);
+
+    const gens: Record<string, () => Shot> = {
+      otsCloseup: () => otsCloseupCandidate(primary, fovY, aspect, rng, office),
+      highAngle: () => highAngleCandidate(primary, fovY, aspect, rng, office),
+      sideProfile: () => sideProfileCandidate(primary, fovY, aspect, rng, office),
+      pushInCloseup: () => pushInCloseupCandidate(primary, fovY, aspect, rng, office),
+      orbitArc: () => orbitArcCandidate(primary, fovY, aspect, rng, office),
+      zoomPunch: () => zoomPunchCandidate(primary, aspect, rng, office),
+      lowPush: () => lowPushCandidate(primary, fovY, aspect, rng, office),
+      boardPan: () => boardPanCandidate(primary, fovY, aspect, rng, office),
+      staticCloseup: () => staticCloseupCandidate(primary, fovY, aspect, rng, office),
+      staticProfile: () => staticProfileCandidate(primary, fovY, aspect, rng, office),
+      staticHighAngle: () => staticHighAngleCandidate(primary, fovY, aspect, rng, office),
+      staticLow: () => staticLowCandidate(primary, fovY, aspect, rng, office),
+      dutchStatic: () => dutchStaticCandidate(primary, fovY, aspect, rng, office),
+      tiltReveal: () => tiltRevealCandidate(primary, fovY, aspect, rng, office),
+    };
+    // something is active, so this cut stays at close/medium range on its primary:
+    // far coverage is reserved for the idle branch above
+    const maxRange = {
+      center: primary.center,
+      max: fitDistance(primary.width, primary.height, fovY, aspect, 1.3) * MEDIUM_MAX_MUL,
+    };
+
+    // Only offer group archetypes for a cluster tight enough to shoot from inside that
+    // ceiling — nearest neighbor first, stopping at the first one that pushes the framing
+    // too far back. At the default 3.4-unit desk spacing that means no group shot at all
+    // (fitting two desks needs ~8 units, which is a wide), but desks dragged together in
+    // build mode still get one. dist + |centroid − primary| bounds the camera-to-primary
+    // distance from above, so a group that passes here can't breach the ceiling later.
+    const group = [primary];
+    for (const n of [...neighbors].sort((a, b) => a.center.distanceTo(primary.center) - b.center.distanceTo(primary.center))) {
+      const trial = [...group, n];
+      const { centroid, dist } = groupFraming(trial, fovY, aspect);
+      if (dist + centroid.distanceTo(primary.center) > maxRange.max) break;
+      group.push(n);
+    }
+
+    let pool: ArchetypeName[] = [...SINGLE_POOL];
+    if (isWallBoard(primary.key)) pool.push('boardPan');
+    if (group.length > 1) {
+      gens.groupLevel = () => groupCandidate(group, fovY, aspect, rng, office, GROUP_PITCH_MIN, GROUP_PITCH_MAX, 'truck');
+      gens.elevatedGroup = () => groupCandidate(group, fovY, aspect, rng, office, deg(25), deg(45), 'pushIn');
+      gens.groupArc = () => groupCandidate(group, fovY, aspect, rng, office, GROUP_PITCH_MIN, GROUP_PITCH_MAX, 'arc');
+      gens.staticGroup = () => groupCandidate(group, fovY, aspect, rng, office, GROUP_PITCH_MIN, GROUP_PITCH_MAX, 'none');
+      pool = [...pool, ...GROUP_POOL];
+    }
+
+    const hit = tryPool(pool, gens, [primary], maxRange);
+    if (hit) return { ...hit, primaryKey: primary.key };
+  }
+
+  // best-effort fallback: static close-up on the beacon (if it must be framed) or the
+  // first-choice primary
+  return beaconFallback()
+    ?? { ...closeUpShot(ordered[0], fovY, aspect, rng, office), archetype: 'otsCloseup', primaryKey: ordered[0].key };
 }

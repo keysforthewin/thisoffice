@@ -297,6 +297,29 @@ describe('StatsAggregator.recordGameWin', () => {
   });
 });
 
+describe('StatsAggregator.recordChars', () => {
+  it('accumulates characters per employee name and persists them', () => {
+    const s1 = new StatsAggregator(file);
+    s1.recordChars('Dana', 120);
+    s1.recordChars('Dana', 30);
+    s1.recordChars('Rey', 5);
+    expect(s1.snapshot().charsByEmployee).toEqual({ Dana: 150, Rey: 5 });
+    s1.flush();
+
+    const s2 = new StatsAggregator(file);
+    expect(s2.snapshot().charsByEmployee).toEqual({ Dana: 150, Rey: 5 });
+  });
+
+  it('ignores a blank name, a zero count, and a non-finite count without dirtying', () => {
+    const s = new StatsAggregator(file);
+    s.recordChars('  ', 10);
+    s.recordChars('Dana', 0);
+    s.recordChars('Dana', Number.NaN);
+    expect(s.snapshot().charsByEmployee).toEqual({});
+    expect(s.isDirty()).toBe(false);
+  });
+});
+
 describe('pricing.estCostUSD', () => {
   it('computes opus/sonnet family math', () => {
     const cost = estCostUSD({
