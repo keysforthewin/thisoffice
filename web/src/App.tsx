@@ -13,8 +13,8 @@ export default function App() {
   const setMode = useStore((s) => s.setCameraMode);
   const settingsOpen = useStore((s) => s.settingsOpen);
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
-  const office = useStore((s) => s.office);
-  const povCount = (office?.employees.length ?? 0) + 3; // boss + employees + whiteboard + status board
+  // shared with the actual list CameraRig renders — never hand-count spots here again
+  const povCount = usePovList().length;
 
   useEffect(() => {
     loadCatalog().then(useStore.getState().setCatalog);

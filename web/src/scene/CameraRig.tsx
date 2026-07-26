@@ -4,7 +4,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { enterFocusMode, useStore, type CameraPose } from '../store.ts';
 import { whiteboardTransform, statusBoardTransform } from './layout.ts';
 import { resolveSeat } from './buildLayout.ts';
-import type { OfficeLayout } from '../../../shared/types.ts';
+import type { OfficeLayout, OfficeState } from '../../../shared/types.ts';
 import { MovieCamera } from './MovieCamera.tsx';
 import { clampToRoom, fitDistance, subjectFor } from './movieShots.ts';
 import { clampOffset, wrapLines } from './monitorScrollback.ts';
@@ -33,22 +33,31 @@ function seatPov(seat: number, label: string, layout: OfficeLayout | undefined, 
   return { label, position: camPos, lookAt: target };
 }
 
+/**
+ * Pure list builder — no hooks — so it (and therefore the POV cycle count) can be
+ * unit-tested without a React/DOM harness. `usePovList` below is a thin memoized
+ * wrapper; App.tsx's Tab/ArrowLeft cycling must derive its modulo from this same
+ * list (`usePovList().length`) rather than a hand-maintained count, or an added
+ * spot silently becomes unreachable.
+ */
+export function buildPovList(office: OfficeState | null): Pov[] {
+  const maxSeat = Math.max(3, ...(office?.employees.map((e) => e.seat) ?? []));
+  const povs: Pov[] = [seatPov(0, office?.boss.name ?? 'Boss', office?.layout, maxSeat)];
+  for (const e of office?.employees ?? []) povs.push(seatPov(e.seat, e.name, office?.layout, maxSeat));
+  const wb = whiteboardTransform(maxSeat);
+  povs.push({ label: 'Whiteboard', position: wb.camera, lookAt: wb.lookAt });
+  const sb = statusBoardTransform(maxSeat);
+  povs.push({ label: 'Status Board', position: sb.camera, lookAt: sb.lookAt });
+  // tv is a draggable wall item, so its spot comes from the same layout-aware
+  // subject the movie camera uses rather than a fixed transform.
+  const tv = subjectFor('tv', office);
+  if (tv) povs.push({ label: 'Stats TV', position: tv.center.clone().addScaledVector(tv.normal, 3.4), lookAt: tv.center.clone() });
+  return povs;
+}
+
 export function usePovList(): Pov[] {
   const office = useStore((s) => s.office);
-  return useMemo(() => {
-    const maxSeat = Math.max(3, ...(office?.employees.map((e) => e.seat) ?? []));
-    const povs: Pov[] = [seatPov(0, office?.boss.name ?? 'Boss', office?.layout, maxSeat)];
-    for (const e of office?.employees ?? []) povs.push(seatPov(e.seat, e.name, office?.layout, maxSeat));
-    const wb = whiteboardTransform(maxSeat);
-    povs.push({ label: 'Whiteboard', position: wb.camera, lookAt: wb.lookAt });
-    const sb = statusBoardTransform(maxSeat);
-    povs.push({ label: 'Status Board', position: sb.camera, lookAt: sb.lookAt });
-    // tv is a draggable wall item, so its spot comes from the same layout-aware
-    // subject the movie camera uses rather than a fixed transform.
-    const tv = subjectFor('tv', office);
-    if (tv) povs.push({ label: 'Stats TV', position: tv.center.clone().addScaledVector(tv.normal, 3.4), lookAt: tv.center.clone() });
-    return povs;
-  }, [office]);
+  return useMemo(() => buildPovList(office), [office]);
 }
 
 const MOVE_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyE', 'KeyC', 'Space']);
