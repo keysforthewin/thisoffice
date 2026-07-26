@@ -199,7 +199,9 @@ export class StatsAggregator {
   recordTool(name: string): void {
     this.stats.toolCalls[name] = (this.stats.toolCalls[name] ?? 0) + 1;
     this.dayBucket(todayKey()).toolCalls++;
-    if (name === 'Task') this.stats.subagents++;
+    // must mirror transcript.ts's `isTask` check (see transcript.ts:653) so the two
+    // never drift on what counts as a subagent launch
+    if (name === 'Task' || name === 'Agent') this.stats.subagents++;
     this.pruneByDay();
     this.markDirty();
   }

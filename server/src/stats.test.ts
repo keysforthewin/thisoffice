@@ -82,6 +82,28 @@ describe('StatsAggregator server_tool_use deltas', () => {
   });
 });
 
+describe('StatsAggregator subagent counting', () => {
+  it('counts Task tool calls as subagents', () => {
+    const s = new StatsAggregator(file);
+    s.recordTool('Task');
+    expect(s.snapshot().subagents).toBe(1);
+  });
+
+  it('counts Agent tool calls as subagents too (mirrors transcript.ts isTask)', () => {
+    const s = new StatsAggregator(file);
+    s.recordTool('Agent');
+    s.recordTool('Agent');
+    expect(s.snapshot().subagents).toBe(2);
+  });
+
+  it('does not count unrelated tool names as subagents', () => {
+    const s = new StatsAggregator(file);
+    s.recordTool('Bash');
+    s.recordTool('Read');
+    expect(s.snapshot().subagents).toBe(0);
+  });
+});
+
 describe('StatsAggregator byDay', () => {
   it('records tokens/toolCalls/prompts for today', () => {
     const s = new StatsAggregator(file);
