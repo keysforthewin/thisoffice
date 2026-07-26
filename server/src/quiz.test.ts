@@ -176,39 +176,52 @@ describe('Quiz', () => {
     expect(h.quiz.attachPhoto()).toBe(false);
   });
 
-  it('forces an outright guess from question 15', async () => {
+  it('never forces a guess, however long the round runs', async () => {
+    // the old rule turned Q15+ into blind naming — hopeless in a field of
+    // thousands, and the reason a round used to end in random celebrities
     const h = harness();
     h.quiz.setEnabled(true);
     await settle();
-    // answer 13 narrowing questions; the 15th question asked must be a guess
-    for (let i = 0; i < 13; i++) {
+    for (let i = 0; i < 24; i++) {
       h.setReply(`{"question":"Narrow ${i}?","guess":false}`);
       h.answerCurrent('no');
       await settle();
+      expect(h.quiz.getState().question!.guess).toBe(false);
     }
-    expect(h.quiz.getState().askedCount).toBe(14);
-    h.setReply('{"question":"Still narrowing?","guess":false}');
-    h.answerCurrent('no');
-    await settle();
-    expect(h.quiz.getState().askedCount).toBe(15);
-    expect(h.quiz.getState().question!.guess).toBe(true);
   });
 
-  it('concedes at 20 questions and starts a fresh round', async () => {
+  it('runs past 20 questions without conceding or resetting the round', async () => {
     const h = harness();
     h.quiz.setEnabled(true);
     await settle();
     const roundId = h.quiz.getState().roundId;
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 30; i++) {
       h.setReply(`{"question":"Q${i}?","guess":false}`);
       h.answerCurrent('no');
       await settle();
     }
-    expect(h.statuses.some((s) => s.startsWith('⚠'))).toBe(true);
     const st = h.quiz.getState();
-    expect(st.roundId).not.toBe(roundId);
-    expect(st.answers).toHaveLength(0);
-    expect(st.winner).toBeNull();
+    expect(st.roundId).toBe(roundId);
+    expect(st.answers).toHaveLength(30);
+    expect(st.askedCount).toBe(31);
+    expect(h.statuses.some((s) => s.includes('gave up'))).toBe(false);
+  });
+
+  it('still wins whenever the model volunteers a guess that lands', async () => {
+    const h = harness();
+    h.quiz.setEnabled(true);
+    await settle();
+    for (let i = 0; i < 3; i++) {
+      h.setReply(`{"question":"Narrow ${i}?","guess":false}`);
+      h.answerCurrent('no');
+      await settle();
+    }
+    h.setReply('{"question":"Is it a bicycle?","guess":true}');
+    h.answerCurrent('no');
+    await settle();
+    expect(h.quiz.getState().question!.guess).toBe(true);
+    h.answerCurrent('yes');
+    expect(h.quiz.getState().winner).not.toBeNull();
   });
 
   it('falls back to a canned question when Haiku rejects, and says so', async () => {
@@ -411,19 +424,11 @@ describe('Quiz', () => {
   });
 
   it('never flags a canned fallback as an outright guess', async () => {
-    // Haiku is down exactly when a guess is due (Q15+): a canned narrowing
-    // question must not be winnable, or a YES would credit a win for a
-    // question that named nothing.
+    // Haiku is down: a canned narrowing question must not be winnable, or a
+    // YES would credit a win for a question that named nothing.
     const h = harness();
     h.quiz.setEnabled(true);
     await settle();
-    for (let i = 0; i < 14; i++) {
-      h.setReply(`{"question":"Narrow ${i}?","guess":false}`);
-      h.answerCurrent('no');
-      await settle();
-    }
-    expect(h.quiz.getState().askedCount).toBe(15);
-    // now break Haiku and re-issue the forced-guess turn
     (h.deps.ask as ReturnType<typeof vi.fn>).mockImplementation(async () => {
       throw new Error('spawn claude ENOENT');
     });

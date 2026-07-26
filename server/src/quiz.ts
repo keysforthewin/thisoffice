@@ -2,14 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  QUIZ_MAX_QUESTIONS,
   type QuizAnswer,
   type QuizQuestion,
   type QuizState,
   type QuizWinner,
   type ServerMsg,
 } from '../../shared/types.ts';
-import { buildQuizPrompt, fallbackQuestion, mustGuessAt, parseQuizReply, type AskFn } from './quizPrompt.ts';
+import { buildQuizPrompt, fallbackQuestion, parseQuizReply, type AskFn } from './quizPrompt.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_FILE = path.resolve(__dirname, '../../data/quiz.json');
@@ -181,11 +180,10 @@ export class Quiz {
     if (!this.state.enabled || this.asking || this.state.awaitingPhoto) return;
     const asker = this.pickAsker();
     if (!asker) return;
-    const mustGuess = mustGuessAt(this.state.askedCount);
     this.asking = true;
     let parsed: { text: string; guess: boolean } | null = null;
     try {
-      parsed = parseQuizReply(await this.deps.ask(buildQuizPrompt(this.state.answers, mustGuess)), mustGuess);
+      parsed = parseQuizReply(await this.deps.ask(buildQuizPrompt(this.state.answers)));
     } catch {
       this.deps.status('⚠ Haiku unavailable — the office is guessing blind');
       parsed = null;
@@ -196,10 +194,9 @@ export class Quiz {
     if (!this.state.enabled) return;
     const asked = new Set(this.state.answers.map((a) => a.question.toLowerCase()));
     if (!parsed || asked.has(parsed.text.toLowerCase())) {
-      // A canned narrowing question is never a guess, even past QUIZ_GUESS_FROM:
-      // flagging it `guess: true` would let a YES win the round — crediting a win
-      // and hanging a photo — for a question that named nothing. Without the flag
-      // the round simply walks on to the honest Q20 concession.
+      // A canned narrowing question is never a guess: flagging it `guess: true`
+      // would let a YES win the round — crediting a win and hanging a photo —
+      // for a question that named nothing.
       parsed = { text: this.freshFallback(asked), guess: false };
     }
     const question: QuizQuestion = {
@@ -235,11 +232,10 @@ export class Quiz {
       this.win(q);
       return 'ok';
     }
-    if (this.state.askedCount >= QUIZ_MAX_QUESTIONS) {
-      this.deps.status(`⚠ The office gave up after ${QUIZ_MAX_QUESTIONS} questions`);
-      this.newRound();
-      return 'ok';
-    }
+    // No question cap and no concession: the round runs until it is guessed.
+    // The game is ambient background play while the agents work, and a forced
+    // deadline is exactly what pushed the office into naming celebrities at
+    // random rather than narrowing (see buildQuizPrompt).
     this.publish();
     void this.askNext();
     return 'ok';
@@ -321,11 +317,5 @@ export class Quiz {
     this.state.awaitingPhoto = false;
     this.publish();
     void this.askNext();
-  }
-
-  /** Fresh round with no winner — the Q20 concession path. */
-  private newRound(): void {
-    this.resetRound();
-    this.openNextRound();
   }
 }

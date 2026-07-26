@@ -60,7 +60,15 @@ only exist while a question is open, and they are the only way to answer while
 the fly camera holds pointer lock, since the browser routes clicks to the camera
 then. A YES to a guess wins. The award frame is gated on `quiz.enabled`, so an
 office that never plays shows a plain wall rather than an empty award frame.
-Guessing is forced from Q15 and the office concedes at Q20. On a win the server
+A round has **no question limit and no concession** — it runs until the office
+guesses right, since this is ambient play while the agents work. The deadline it
+replaces (forced guessing from Q15, concede at Q20) was actively harmful: forcing
+a name into a field of thousands turned the endgame into celebrity roulette. The
+strategy now lives entirely in `quizPrompt.ts`, whose reply schema makes Haiku
+state what the answers establish and size the remaining field *before* it writes
+the question, and forbids naming anything — a person especially — until that
+field is down to a handful. The full history goes into every prompt uncompacted:
+a NO is as much of a fact as a YES. On a win the server
 asks exactly ONE client (assigned, not elected) to fly the camera to a group shot
 and POST a canvas capture to `/api/decor/eotm`; that photo hangs in the `eotm`
 wall frame with a plaque until the next winner. Failure of any kind still credits

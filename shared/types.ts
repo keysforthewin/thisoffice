@@ -160,10 +160,11 @@ export interface QuizState {
   photo?: EotmPhoto;
 }
 
-/** From this question number on, the asker must make an outright guess. */
-export const QUIZ_GUESS_FROM = 15;
-/** At this many questions the office concedes and a fresh round starts. */
-export const QUIZ_MAX_QUESTIONS = 20;
+/**
+ * A round has no question limit and no concession: it runs until the office
+ * guesses right. It is ambient play while the agents work, and a deadline only
+ * bought hopeless long-odds guessing (see server/src/quizPrompt.ts).
+ */
 /** Questions stay one short line; anything longer is truncated. */
 export const QUIZ_QUESTION_MAX_CHARS = 120;
 
