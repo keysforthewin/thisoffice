@@ -144,6 +144,17 @@ export interface AppStore {
    */
   pendingCapture: QuizWinner | null;
   clearPendingCapture: () => void;
+  /**
+   * A capture sequence is running on this client: the fly-in, the shutter, and
+   * the ten seconds the camera lingers on the winner's face afterwards.
+   *
+   * It exists to keep `pendingCapture` set across the server's own reply to the
+   * upload — that broadcast reports `awaitingPhoto: false`, which would clear
+   * the assignment, unmount PhotoControls and snap the camera away in the middle
+   * of the linger. Only PhotoControls sets it, and it always clears it.
+   */
+  captureHold: boolean;
+  setCaptureHold: (hold: boolean) => void;
   monitors: Record<string, MonitorContent>;
   /** bumps every time a monitor changes so screens know to redraw */
   monitorVersion: Record<string, number>;
@@ -249,6 +260,7 @@ export const useStore = create<AppStore>((set, get) => ({
   stats: null,
   quiz: null,
   pendingCapture: null,
+  captureHold: false,
   monitors: {},
   monitorVersion: {},
   monitorHistory: {},
@@ -309,8 +321,11 @@ export const useStore = create<AppStore>((set, get) => ({
       set({
         quiz: msg.quiz,
         // an explicit assignment wins; otherwise keep an existing assignment
-        // only while the server is still awaiting a photo; otherwise clear it
-        pendingCapture: msg.capture ?? (msg.quiz.awaitingPhoto ? get().pendingCapture : null),
+        // while the server is still awaiting a photo, or while this client is
+        // still holding the camera on the winner (`captureHold` — the shot runs
+        // on past the upload the server is replying to); otherwise clear it
+        pendingCapture:
+          msg.capture ?? (msg.quiz.awaitingPhoto || get().captureHold ? get().pendingCapture : null),
       });
       return;
     }
@@ -369,7 +384,8 @@ export const useStore = create<AppStore>((set, get) => ({
   setMonitorHover: (monitorHover) =>
     get().monitorHover === monitorHover ? undefined : set({ monitorHover }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
-  clearPendingCapture: () => set({ pendingCapture: null }),
+  clearPendingCapture: () => set({ pendingCapture: null, captureHold: false }),
+  setCaptureHold: (captureHold) => set({ captureHold }),
   setCatalog: (catalog) => set({ catalog }),
   patchCharacter: (id, patch) =>
     set((s) =>

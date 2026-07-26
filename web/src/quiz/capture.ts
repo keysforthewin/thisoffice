@@ -3,6 +3,13 @@ import type * as THREE from 'three';
 /** Camera fly-in and the beat it holds before the shutter. */
 export const PHOTO_FLY_MS = 1200;
 export const PHOTO_HOLD_MS = 400;
+/**
+ * How long the camera stays on the winner's face after the shutter. The photo
+ * is taken in the first second and a half of a shot that runs for twelve: the
+ * point of flying over there is that the room sees who won, and a cut back the
+ * instant the file uploads is over before anyone has looked up.
+ */
+export const PHOTO_LINGER_MS = 10_000;
 
 /**
  * Read the scene out of the WebGL canvas.

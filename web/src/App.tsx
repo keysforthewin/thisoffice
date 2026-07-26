@@ -5,6 +5,7 @@ import { shouldExitFocusOnMissedClick, useStore, type CameraMode } from './store
 import { Office } from './scene/Office.tsx';
 import { DuskSky } from './scene/DuskSky.tsx';
 import { CameraRig, usePovList } from './scene/CameraRig.tsx';
+import { EOTM_KEY } from './scene/eotmTexture.ts';
 import { SettingsPanel } from './settings/SettingsPanel.tsx';
 import { PerfPanel, PerfSampler } from './scene/PerfOverlay.tsx';
 import { ShadowControl } from './scene/ShadowControl.tsx';
@@ -195,6 +196,7 @@ function Hud({ connected, mode, onSettings }: { connected: boolean; mode: Return
       body: JSON.stringify({ name: nameDraft }),
     }).catch(() => {});
   };
+  const eotmName = useStore((s) => s.quiz?.photo?.name ?? '');
   const focusName =
     mode.kind === 'focus'
       ? mode.target === 'boss'
@@ -210,6 +212,8 @@ function Hud({ connected, mode, onSettings }: { connected: boolean; mode: Return
         ? 'Movie mode — auto-follows the action · arrows cut now · right-drag for first person · M/Esc exit'
         : mode.kind === 'focus' && mode.target === 'tv'
           ? 'Stats TV — scroll wheel to flip through stats · Esc or click away = back'
+        : mode.kind === 'focus' && mode.target === EOTM_KEY
+          ? `Employee of the Month${eotmName ? `: ${eotmName}` : ''} — Esc or click away = back`
         : mode.kind === 'focus'
           ? `Screen: ${focusName} — scroll wheel for history · End = live · Esc or click away = back`
           : `POV: ${povs[Math.min(mode.index, povs.length - 1)]?.label ?? ''} — Tab/← → cycle · right-drag for first person · V/Esc exit`;

@@ -515,7 +515,7 @@ const quizState = (over: Partial<QuizState> = {}): QuizState => ({
 
 describe('quiz messages', () => {
   beforeEach(() => {
-    useStore.setState({ quiz: null, pendingCapture: null });
+    useStore.setState({ quiz: null, pendingCapture: null, captureHold: false });
   });
 
   it('stores quiz state', () => {
@@ -549,6 +549,20 @@ describe('quiz messages', () => {
 
     useStore.getState().applyServerMsg({ type: 'quiz', quiz: quizState({ awaitingPhoto: true, winner }) });
     expect(useStore.getState().pendingCapture).toEqual(winner);
+  });
+
+  it('keeps a pending capture while the camera is still lingering on the winner', () => {
+    const winner = { name: 'Dana', variant: 'Mage', asker: 'e1', seat: 1, at: '2026-07-26T00:00:00.000Z' };
+    useStore.getState().applyServerMsg({ type: 'quiz', quiz: quizState({ awaitingPhoto: true, winner }), capture: winner });
+    useStore.getState().setCaptureHold(true);
+
+    // the server's reply to the upload: the photo is in, but the shot is not over
+    useStore.getState().applyServerMsg({ type: 'quiz', quiz: quizState({ awaitingPhoto: false }) });
+    expect(useStore.getState().pendingCapture).toEqual(winner);
+
+    useStore.getState().clearPendingCapture();
+    expect(useStore.getState().pendingCapture).toBeNull();
+    expect(useStore.getState().captureHold).toBe(false);
   });
 });
 

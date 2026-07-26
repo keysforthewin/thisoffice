@@ -4,6 +4,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { useStore } from '../store.ts';
 import { activeSetKey, ARCHETYPES, pickShot, type PickedShot } from './movieShots.ts';
 import { askerAnchor, fallbackAnchor } from '../quiz/askerAnchor.ts';
+import { EOTM_KEY } from './eotmTexture.ts';
 
 /**
  * This is a visualizer, not a trailer — shots dwell so you can actually read a
@@ -43,7 +44,8 @@ function isTyping(t: EventTarget | null) {
  */
 export function MovieCamera() {
   const camera = useThree((s) => s.camera) as THREE.PerspectiveCamera;
-  // A winner's photo owns the camera for its ~1.6s fly+hold: freeze rather than
+  // A winner's photo owns the camera for its ~12 s (fly, shutter, then ten
+  // seconds lingering on the winner's face): freeze rather than
   // unmount, so shotAge/setKey/recent-shot history survive and the director
   // picks up the same shot at the same progress once the capture releases the
   // camera back — no fov/fov-restore race with PhotoControls, no extra hard cut.
@@ -64,6 +66,8 @@ export function MovieCamera() {
   const forcePrimary = useRef<string | undefined>(undefined);
   const lastInboxAlert = useRef<number | null>(null);
   const lastWaiting = useRef<boolean | null>(null);
+  /** `quiz.photo.v` as of the last frame — a change means a new winner is on the wall */
+  const lastPhotoV = useRef<number | null>(null);
   // the fov the rest of the app runs at; zoom shots animate camera.fov, so shot
   // picking must use this stable base and unmount must restore it (CameraRig's
   // focus fitting reads camera.fov)
@@ -108,9 +112,16 @@ export function MovieCamera() {
         ? askerAnchor(question.asker, question.askerSeat, { layout: office.layout, katPerson: office.katPerson }, maxSeat) ??
           fallbackAnchor(maxSeat)
         : null;
+    // The award frame is a standing subject rather than an active one: while the
+    // game is on and someone has won, it is always available to cut to (at
+    // ambient rank, so live work still comes first).
+    const photoV = quiz?.photo?.v ?? null;
+    const awardFrame = !!quiz?.enabled && photoV !== null;
     // a new question is a new subject in a new place: fold it into the recut
-    // fingerprint so the camera turns to whoever just spoke up
-    const key = `${activeSetKey(lastActivity, now, office)}#${question?.id ?? ''}`;
+    // fingerprint so the camera turns to whoever just spoke up. The frame goes in
+    // too, so switching the game on (or off) puts it in the rotation right away
+    // instead of at the next unrelated recut.
+    const key = `${activeSetKey(lastActivity, now, office)}#${question?.id ?? ''}#${awardFrame ? photoV : ''}`;
     shotAge.current += delta;
 
     if (key !== setKey.current) {
@@ -126,6 +137,16 @@ export function MovieCamera() {
       forcePrimary.current = 'boss';
     }
     lastInboxAlert.current = inboxAlert;
+
+    // A newly hung photo is worth going to look at: the first cut after the
+    // winner's portrait releases the camera leads on the frame. Not a preempt —
+    // the shot in progress when it lands is the winner's own close-up, which has
+    // just finished being the most interesting thing in the room.
+    if (photoV !== null && lastPhotoV.current !== null && photoV !== lastPhotoV.current) {
+      pendingRecut.current = true;
+      forcePrimary.current = EOTM_KEY;
+    }
+    lastPhotoV.current = photoV;
 
     // Dismissing the beacon releases the camera too. Forcing every shot to frame a
     // light the viewer has explicitly acknowledged is the loudest part of the
@@ -159,6 +180,7 @@ export function MovieCamera() {
         waiting,
         forcePrimary: forcePrimary.current,
         quizAnchor,
+        awardFrame,
       });
       forcePrimary.current = undefined;
       shot.current = picked;

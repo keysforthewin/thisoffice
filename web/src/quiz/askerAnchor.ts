@@ -29,6 +29,29 @@ export function askerAnchor(
   office: (Pick<OfficeState, 'layout'> & { katPerson?: boolean }) | null,
   maxSeat: number,
 ): [number, number, number] | null {
+  const pose = askerPose(asker, seat, office, maxSeat);
+  return pose ? [pose.x, BUBBLE_Y, pose.z] : null;
+}
+
+/** Where an asker stands and which way they are turned. */
+export interface AskerPose {
+  x: number;
+  z: number;
+  /** World Y-rotation; characters are rendered looking down their local +z. */
+  rotY: number;
+}
+
+/**
+ * The same lookup `askerAnchor` does, with the facing kept. The winner's photo
+ * needs it: a head-on portrait is only head-on if the camera stands on the
+ * character's own facing axis (`photoShot`).
+ */
+export function askerPose(
+  asker: string,
+  seat: number | null,
+  office: (Pick<OfficeState, 'layout'> & { katPerson?: boolean }) | null,
+  maxSeat: number,
+): AskerPose | null {
   if (!office) return null;
   if (asker === 'catPerson') {
     // Kat Person is furniture, not staff: her spot comes from the layout, and
@@ -36,15 +59,16 @@ export function askerAnchor(
     // simply not there, and the caller falls back rather than pointing at a
     // corner she has left.
     const item = resolveFurniture(office.layout, maxSeat, office.katPerson !== false).find((f) => f.id === 'catPerson');
-    return item ? [item.pose.x, BUBBLE_Y, item.pose.z] : null;
+    return item ? { x: item.pose.x, z: item.pose.z, rotY: item.pose.rotY } : null;
   }
   const resolvedSeat = asker === 'boss' ? 0 : seat;
   if (resolvedSeat === null) return null;
-  const { position } = resolveSeat(office.layout, resolvedSeat, maxSeat);
+  const { position, rotationY } = resolveSeat(office.layout, resolvedSeat, maxSeat);
   // The room is sized to the current roster, so an evicted asker's seat can now
   // lie beyond the front wall — the bubble would hang outside the room, in view
   // of nobody. Clamped, it stays inside and therefore stays clickable.
-  return clampInside(position.x, position.z, maxSeat);
+  const [x, , z] = clampInside(position.x, position.z, maxSeat);
+  return { x, z, rotY: rotationY };
 }
 
 /** Room margin for a clamped anchor: enough that the bubble is not inside a wall. */

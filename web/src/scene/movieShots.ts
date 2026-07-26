@@ -4,6 +4,7 @@ import { roomDims } from './layout.ts';
 import { resolveSeat, resolveWallItem } from './buildLayout.ts';
 import { wallFrame, wallToWorld } from './walls.ts';
 import { TV_SCREEN_W, TV_SCREEN_H } from './WallTV.tsx';
+import { EOTM_KEY, EOTM_W, EOTM_H, EOTM_CAPTION_H } from './eotmTexture.ts';
 
 export const ACTIVE_WINDOW_MS = 22_000;
 
@@ -225,6 +226,12 @@ const WALL_BOARD_ITEMS: Record<string, { id: string; width: number; height: numb
   whiteboard: { id: 'todoBoard', width: WHITEBOARD_W, height: WHITEBOARD_H },
   statusboard: { id: 'statusBoard', width: WHITEBOARD_W, height: WHITEBOARD_H },
   tv: { id: 'tv', width: TV_SCREEN_W, height: TV_SCREEN_H },
+  // Photo *and* plaque *and* moulding: the whole point of visiting the frame is
+  // reading who won, and the subject size is what every archetype fits its
+  // distance to — so this is the outer box (EotmFrame's + 0.16), not the
+  // aperture. The moulding is a picture frame's own margin; without it the
+  // jittered oblique shots crop a corner off the thing they came to look at.
+  [EOTM_KEY]: { id: 'eotm', width: EOTM_W + 0.16, height: EOTM_H + EOTM_CAPTION_H + 0.16 },
 };
 
 /** The live subject for a wall surface, from wherever the layout hangs it. */
@@ -850,14 +857,23 @@ export interface ShotContext {
   forcePrimary?: string;
   /** world anchor of the open 20 Questions bubble, if one is up (quiz/askerAnchor.ts) */
   quizAnchor?: [number, number, number] | null;
+  /** the Employee of the Month frame is hanging with a photo in it: keep it in the rotation */
+  awardFrame?: boolean;
 }
 
 /**
  * Long-lived wall surfaces: they stay "active" for minutes (see ACTIVITY_TTL_MS) so
  * they read as ambient set dressing, not live work. A primary is only ever drawn from
  * them when nothing live — a streaming monitor or the todo board — is active at all.
+ *
+ * `EOTM_KEY` belongs here for a stronger reason than the other two: it has no
+ * activity window at all — while the game is on, the award frame is *always* a
+ * candidate — so anything but ambient rank would park the camera on a wall
+ * hanging while real work streamed, and its permanent presence in the active set
+ * would also stop the quiz bubble ever joining the cast (see `pickShot`, which
+ * admits the bubble only when everything else on offer is ambient).
  */
-const AMBIENT_KEYS = new Set(['statusboard', 'tv']);
+const AMBIENT_KEYS = new Set(['statusboard', 'tv', EOTM_KEY]);
 
 /** Camera distance ceiling while anything is active, as a multiple of the primary's
  *  fit distance: a busy office gets close/medium coverage where a screen is legible.
@@ -867,6 +883,17 @@ export const MEDIUM_MAX_MUL = 2.4;
 
 /** How many primaries a single cut will try before falling back. */
 const MAX_PRIMARY_TRIES = 3;
+
+/**
+ * The award frame is offered on one cut in three.
+ *
+ * Unlike every other subject it has no activity window to expire, so without a
+ * duty cycle a silent office — game on, photo hung, nothing else stamped — would
+ * have exactly one candidate and cut to the same wall hanging forever, losing the
+ * idle branch's far/wide coverage entirely. At a third it reads as the camera
+ * wandering past the frame now and then, which is what it is.
+ */
+const AWARD_CUT_PERIOD = 3;
 
 /** Weighted sampling without replacement: repeatedly draw from the remaining set by
  *  weight. Higher-weight items tend to sort earlier, but it's still randomized (not a
@@ -913,9 +940,13 @@ export function pickShot(ctx: ShotContext): PickedShot {
   const { office, fovY, aspect, rng } = ctx;
   const prev = ctx.prevPosition ?? null;
   const recent = ctx.recentArchetypes ?? [];
-  const active = activeKeys(ctx.lastActivity, ctx.now)
+  const stamped = activeKeys(ctx.lastActivity, ctx.now)
     .map((k) => subjectFor(k, office))
     .filter((s): s is Subject => s !== null);
+  // The award frame has no activity to stamp — a photo hangs there for days —
+  // so it is simply always in the cast while the game is on, at ambient rank.
+  const award = ctx.awardFrame && ctx.cutIndex % AWARD_CUT_PERIOD === 0 ? subjectFor(EOTM_KEY, office) : null;
+  const active = award ? [...stamped, award] : stamped;
   // An open question joins the cast only while no live screen is streaming: with
   // work on the monitors the bubble waits its turn, and with the office quiet it
   // becomes one of the things the camera cuts to instead of pure B-roll.

@@ -95,12 +95,54 @@ interesting, and it read on the board as "Haiku unavailable".
 `QuizAnswer.fallback` survives as a **read-only legacy flag** — nothing writes it,
 but rounds recorded before the removal are still on disk mid-play, and
 `buildQuizPrompt` filters those turns out. Don't reintroduce a fallback question. On a win the server
-asks exactly ONE client (assigned, not elected) to fly the camera to a group shot
+asks exactly ONE client (assigned, not elected) to fly the camera to the winner
 and POST a canvas capture to `/api/decor/eotm`; that photo hangs in the `eotm`
-wall frame with a plaque until the next winner. Failure of any kind still credits
+wall frame until the next winner, under a plaque reading EMPLOYEE OF THE MONTH
+and the winner's name (`eotmTexture.ts` paints it; the name rides
+`quiz.photo.name`, so it survives the winner being evicted). The frame is
+**click-to-focus** like the monitors and the TV — `EOTM_TARGET` is a
+`WALL_BOARD_ITEMS` subject sized to photo *plus* plaque, since reading who won
+is the point of going over — and it answers the fly cam's crosshair through the
+same `userData.monitorTarget` channel. It is the one focus subject with nothing
+to scroll, so `FocusControls` leaves the wheel alone there instead of driving
+`focusScroll` against an empty history. The movie camera cuts to it too
+(`ShotContext.awardFrame`), with two properties no other subject has: it is
+**never stamped in `lastActivity`** — a photo hangs there for days, so while the
+game is on and someone has won it is simply always on offer — and it therefore
+needs a duty cycle (`AWARD_CUT_PERIOD`, one cut in three), or a silent office
+would have exactly one candidate and park on a wall hanging forever, losing the
+idle branch's wides. It is an `AMBIENT_KEYS` member for the same reason the
+status board is, plus one of its own: permanently in the active set at live rank,
+it would both outrank streaming work and stop the quiz bubble ever joining the
+cast. A newly hung photo forces the next cut to lead on it — the shot it
+interrupts is the winner's own close-up, which has just finished. Its subject
+size is the frame's **outer** box, moulding included; the size is what every
+archetype fits its distance to, so the moulding is the margin that stops an
+oblique shot cropping the plaque. Failure of any kind still credits
 the win — `gameWins` on `UsageStats` drives a TV champion page. Screenshots
 render-then-`toDataURL` in one tick precisely so `preserveDrawingBuffer` can stay
 off.
+
+The shot is a **head-on portrait**, not a group photo (`quiz/photoShot.ts`), and
+it is the only place in the room a face can be shot from: a seated character
+looks straight at their own monitor, so the camera parks in the ~1.15 u gap
+between face and screen, on the character's own facing axis (`askerPose` carries
+the rotation the bubble anchor throws away). Both of the numbers that frame it
+are measured off the live scene at capture time (`quiz/facePoint.ts`), because
+neither is knowable from the layout: the head bone lands anywhere in y 1.51–2.11
+depending on character and sit pose, and the face sits above that bone by 0.08 u
+on a human and half a unit on Kat Person. Head size drives the standoff — capped
+by the monitor for anyone at a desk, which is why a big-headed *seated*
+character is framed tighter than a standing one — and the aim point is only a
+quarter of the way to the silhouette top, since hats and hair are the difference
+between a face in the middle of the frame and a portrait of a hat. Then
+`PhotoControls` **holds the shot for `PHOTO_LINGER_MS` (10 s) after the
+shutter**: the point of flying over is that the room sees who won, and the
+upload lands 1.6 s in. `store.captureHold` is what makes that possible — the
+server answers the upload by broadcasting `awaitingPhoto: false`, which would
+otherwise clear `pendingCapture`, unmount PhotoControls and snap the camera away
+mid-linger. Every other camera path already bails while `pendingCapture` is set,
+so the linger is a timer, not a loop.
 
 ## Gotchas
 

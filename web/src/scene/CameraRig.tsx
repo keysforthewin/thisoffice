@@ -10,11 +10,13 @@ import { clampOffset, wrapLines } from './monitorScrollback.ts';
 import { pickMonitorTarget } from './monitorPicking.ts';
 import { bossScreenLines } from './bossScreen.ts';
 import { MONITOR_COLS, MONITOR_ROWS } from './MonitorScreen.tsx';
+import { EOTM_KEY } from './eotmTexture.ts';
 import { pickWallArtImage, reframeWallArt } from '../wallArt.ts';
 import { clampPan, clampZoom } from './wallArtTexture.ts';
-import { askerAnchor } from '../quiz/askerAnchor.ts';
+import { askerAnchor, askerPose } from '../quiz/askerAnchor.ts';
 import { photoShot } from '../quiz/photoShot.ts';
-import { captureCanvas, PHOTO_FLY_MS, PHOTO_HOLD_MS } from '../quiz/capture.ts';
+import { facePoint } from '../quiz/facePoint.ts';
+import { captureCanvas, PHOTO_FLY_MS, PHOTO_HOLD_MS, PHOTO_LINGER_MS } from '../quiz/capture.ts';
 import { uploadEotmPhoto } from '../quiz/quizApi.ts';
 import { applyLook, modeForDragLook, MAX_LOOK_DELTA, MAX_PITCH, type Look } from './dragLook.ts';
 
@@ -401,6 +403,9 @@ function FocusControls({ target }: { target: string }) {
     // race guard: entering focus from a pointer-locked fly cam
     if (document.pointerLockElement) document.exitPointerLock();
     const onWheel = (e: WheelEvent) => {
+      // a photo has nothing to scroll: leave the wheel alone rather than
+      // swallowing it and driving focusScroll against an empty history
+      if (target === EOTM_KEY) return;
       e.preventDefault();
       const st = useStore.getState();
       if (target === 'tv') {
@@ -421,17 +426,27 @@ function FocusControls({ target }: { target: string }) {
   return null;
 }
 
+/** Face height to shoot at when the winner's head bone can't be found in the scene. */
+const FALLBACK_FACE_Y = 1.85;
+/** How far behind their desk a seated character sits (see PERSON_OFFSET_Z in Desk). */
+const SEAT_FACE_BACK = 1.15;
+
 /**
- * Runs only when the server asked THIS client for the winner's photo: fly to the
- * group shot, hold a beat, shoot, upload, fly back. Failure is silent by design —
- * the win is credited server-side the moment the guess lands, photo or not.
+ * Runs only when the server asked THIS client for the winner's photo: fly round
+ * to the front of the winner's face, hold a beat, shoot, upload, then linger on
+ * them for {@link PHOTO_LINGER_MS} before handing the camera back. Failure is
+ * silent by design — the win is credited server-side the moment the guess
+ * lands, photo or not.
  *
- * In a hidden tab the fly-in is skipped entirely (see below): rAF does not run
- * there, so an animated capture would never fire inside the server's window.
+ * In a hidden tab the fly-in and the linger are both skipped (see below): rAF
+ * does not run there, so an animated capture would never fire inside the
+ * server's window, and nobody is watching the hold either.
  *
  * Office state is read once via `useStore.getState()` rather than subscribed to:
  * a subscription would re-run this effect (and restart the fly-in) on every
- * unrelated broadcast that arrives during the ~1.6s capture window.
+ * unrelated broadcast that arrives during the capture window — of which there
+ * is now one guaranteed, since the server answers the upload by broadcasting
+ * the new photo while this component is still holding the camera.
  */
 function PhotoControls({ winner, maxSeat }: { winner: QuizWinner; maxSeat: number }) {
   const { camera, gl, scene } = useThree();
@@ -442,15 +457,30 @@ function PhotoControls({ winner, maxSeat }: { winner: QuizWinner; maxSeat: numbe
     // lookup in the live roster: a winner idle-evicted between the guess and the
     // capture would otherwise fall through to Kat Person and be photographed
     // under someone else's name.
-    const anchor = office
-      ? askerAnchor(winner.asker, winner.seat, { layout: office.layout, katPerson: office.katPerson }, maxSeat)
+    const pose = office
+      ? askerPose(winner.asker, winner.seat, { layout: office.layout, katPerson: office.katPerson }, maxSeat)
       : null;
-    if (!anchor) {
+    if (!pose) {
       useStore.getState().clearPendingCapture();
       return;
     }
-    const subject = new THREE.Vector3(anchor[0], 0, anchor[2]);
-    const shot = photoShot(subject, maxSeat);
+    // hold `pendingCapture` past the server's own "photo received" broadcast,
+    // which would otherwise unmount this component mid-linger
+    useStore.getState().setCaptureHold(true);
+
+    // The face is measured off the animated skeleton, not derived from the seat:
+    // see facePoint. The fallback only bites for a character with no head bone.
+    // Kat Person is the one asker who is not at a desk — which is also the one
+    // thing that decides how far the camera may back off (see photoShot).
+    const seated = winner.asker !== 'catPerson';
+    const forward = new THREE.Vector3(Math.sin(pose.rotY), 0, Math.cos(pose.rotY));
+    const face = facePoint(scene, pose.x, pose.z) ?? {
+      point: new THREE.Vector3(pose.x, 0, pose.z)
+        .addScaledVector(forward, seated ? -SEAT_FACE_BACK : 0)
+        .setY(FALLBACK_FACE_Y),
+      size: 0.3,
+    };
+    const shot = photoShot(face.point, pose.rotY, maxSeat, { headSize: face.size, seated });
     const from = camera.position.clone();
     const fromQuat = camera.quaternion.clone();
     const perspective = camera as THREE.PerspectiveCamera;
@@ -464,11 +494,12 @@ function PhotoControls({ winner, maxSeat }: { winner: QuizWinner; maxSeat: numbe
 
     let raf = 0;
     let holdTimer = 0;
+    let lingerTimer = 0;
     const t0 = performance.now();
     let shooting = false;
-    // guards the hold-timer callback: setTimeout isn't cancelled by unmount
-    // the way rAF is, so without this an unmount during the hold beat (the
-    // server's timeout or another tab finishing first) would still fire the
+    // guards the hold- and linger-timer callbacks: setTimeout isn't cancelled by
+    // unmount the way rAF is, so without this an unmount during the hold beat
+    // (the server's timeout or another tab finishing first) would still fire the
     // capture/upload against whatever the camera looks at post-restore
     let cancelled = false;
 
@@ -479,7 +510,22 @@ function PhotoControls({ winner, maxSeat }: { winner: QuizWinner; maxSeat: numbe
       perspective.updateProjectionMatrix();
     };
 
-    /** render → toDataURL → POST, then put the camera back. */
+    /** Hand the camera back to whatever mode was running before the photo. */
+    const release = () => {
+      if (cancelled) return;
+      restore();
+      useStore.getState().clearPendingCapture();
+    };
+
+    /**
+     * render → toDataURL → POST, then stay on the winner.
+     *
+     * The shutter is the middle of the shot, not the end of it: the camera holds
+     * the portrait for another {@link PHOTO_LINGER_MS} so the room gets a good
+     * look at whoever just won, and only then goes back to its rounds. Nothing
+     * has to keep the camera there during that hold — every other camera path
+     * bails while `pendingCapture` is set — so the linger is a timer, not a loop.
+     */
     const shoot = () => {
       if (cancelled) return;
       void captureCanvas(gl, scene, camera)
@@ -487,23 +533,27 @@ function PhotoControls({ winner, maxSeat }: { winner: QuizWinner; maxSeat: numbe
         .catch(() => {})
         .finally(() => {
           if (cancelled) return;
-          restore();
-          useStore.getState().clearPendingCapture();
+          lingerTimer = window.setTimeout(release, PHOTO_LINGER_MS);
         });
     };
 
     // Browsers pause rAF in a hidden tab, so the fly-in below would never reach
     // t === 1: the shutter would not fire at all, and would then fire on focus —
     // long after the server's 20 s window closed. Nobody is watching a fly-in
-    // they cannot see, so jump the camera to the shot and take it now.
+    // they cannot see, so jump the camera to the shot and take it now — and skip
+    // the linger with it, since it exists purely to be watched.
     if (document.hidden) {
       camera.position.copy(shot.position);
       camera.quaternion.copy(toQuat);
       perspective.fov = shot.fov;
       perspective.updateProjectionMatrix();
-      shoot();
+      void captureCanvas(gl, scene, camera)
+        .then(uploadEotmPhoto)
+        .catch(() => {})
+        .finally(release);
       return () => {
         cancelled = true;
+        useStore.getState().setCaptureHold(false);
         restore();
       };
     }
@@ -529,9 +579,13 @@ function PhotoControls({ winner, maxSeat }: { winner: QuizWinner; maxSeat: numbe
       cancelled = true;
       cancelAnimationFrame(raf);
       clearTimeout(holdTimer);
-      // covers unmount mid-flight or mid-hold (pendingCapture cleared
-      // externally) as well as the normal capture-then-clear path above —
-      // restoring twice there is harmless.
+      clearTimeout(lingerTimer);
+      // the hold is this component's alone: whatever ends it (the sequence
+      // finishing, or an unmount cutting it short) also drops the flag, or a
+      // stale hold would pin `pendingCapture` on for good
+      useStore.getState().setCaptureHold(false);
+      // covers unmount mid-flight, mid-hold or mid-linger as well as the normal
+      // capture-then-release path above — restoring twice there is harmless.
       restore();
     };
     // one effect per capture request; `winner` identity is the trigger

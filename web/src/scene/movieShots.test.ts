@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import type { Employee, OfficeState } from '../../../shared/types.ts';
 import { roomDims, seatTransform } from './layout.ts';
+import { EOTM_KEY, EOTM_H } from './eotmTexture.ts';
 import {
   ACTIVE_WINDOW_MS,
   activeKeys,
@@ -411,6 +412,55 @@ describe('shots', () => {
     expect(runCuts({}, 8).every((s) => IDLE_POOL.includes(s.archetype))).toBe(true);
   });
 
+  describe('the employee of the month frame as a subject', () => {
+    const now = 100_000;
+
+    it('is cut to in a quiet office, with no activity to stamp it', () => {
+      const shots = runCuts({}, 10, { awardFrame: true });
+      expect(shots.some((s) => s.primaryKey === EOTM_KEY)).toBe(true);
+    });
+
+    it('is absent while the game is off', () => {
+      expect(runCuts({}, 10).some((s) => s.primaryKey === EOTM_KEY)).toBe(false);
+    });
+
+    it('leaves the silent office its idle coverage instead of parking on the wall', () => {
+      const shots = runCuts({}, 12, { awardFrame: true });
+      // it has no activity window to expire, so without a duty cycle it would be
+      // the only candidate on every cut, forever
+      expect(shots.filter((s) => s.primaryKey === EOTM_KEY).length).toBeLessThan(shots.length / 2);
+      expect(shots.some((s) => IDLE_POOL.includes(s.archetype))).toBe(true);
+    });
+
+    it('yields entirely to a live monitor — it is a wall hanging, not work', () => {
+      const shots = runCuts({ e1: now - 1, e2: now - 1 }, 10, { awardFrame: true });
+      expect(shots.some((s) => s.primaryKey === EOTM_KEY)).toBe(false);
+    });
+
+    it('takes its turn among the other ambient boards rather than owning the room', () => {
+      const shots = runCuts({ statusboard: now - 1, tv: now - 1 }, 14, { awardFrame: true });
+      const primaries = new Set(shots.map((s) => s.primaryKey));
+      expect(primaries.has(EOTM_KEY)).toBe(true);
+      expect([...primaries].some((k) => k === 'statusboard' || k === 'tv')).toBe(true);
+    });
+
+    it('leads the cut when a new photo forces it, even with the office busy', () => {
+      const shots = runCuts({ e1: now - 1, e2: now - 1 }, 1, { awardFrame: true, forcePrimary: EOTM_KEY });
+      expect(shots[0].primaryKey).toBe(EOTM_KEY);
+    });
+
+    it('is framed from in front of the wall it hangs on, photo and plaque both', () => {
+      const office = makeOffice();
+      const subject = subjectFor(EOTM_KEY, office)!;
+      for (const shot of runCuts({}, 8, { office, awardFrame: true }).filter((s) => s.primaryKey === EOTM_KEY)) {
+        const toCamera = shot.position.clone().sub(subject.center).normalize();
+        expect(toCamera.dot(subject.normal)).toBeGreaterThan(0);
+      }
+      // the plaque is inside the subject the camera fits, not cropped off below it
+      expect(subject.height).toBeGreaterThan(EOTM_H);
+    });
+  });
+
   describe('the 20 questions bubble as a subject', () => {
     const anchor: [number, number, number] = [0, 3, -4.6]; // the boss asking, at their desk
 
@@ -441,6 +491,13 @@ describe('shots', () => {
 
     it('is absent when no question is up', () => {
       expect(runCuts({}, 8, { quizAnchor: null }).some((s) => s.primaryKey === QUIZ_KEY)).toBe(false);
+    });
+
+    it('shares the quiet office with the award frame too', () => {
+      const shots = runCuts({}, 12, { quizAnchor: anchor, awardFrame: true });
+      const primaries = new Set(shots.map((s) => s.primaryKey));
+      expect(primaries.has(QUIZ_KEY)).toBe(true);
+      expect(primaries.has(EOTM_KEY)).toBe(true);
     });
 
     it('frames the asker under the bubble, from open floor', () => {
