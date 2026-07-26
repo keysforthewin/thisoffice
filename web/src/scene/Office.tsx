@@ -32,6 +32,7 @@ function WallArt({ position }: { position: [number, number, number] }) {
   const v = art?.v;
   const zoom = art?.zoom ?? 1;
   const panX = art?.panX ?? 0;
+  const panY = art?.panY ?? 0;
   const url = v ? `/api/decor/wallart?v=${v}` : '/decor/wallart_1.jpg';
   const texture = useTexture(url);
   const gl = useThree((s) => s.gl);
@@ -39,13 +40,20 @@ function WallArt({ position }: { position: [number, number, number] }) {
   useEffect(() => {
     const img = texture.image as { width?: number; height?: number } | undefined;
     if (!img?.width || !img?.height) return;
-    const { repeat, offset } = wallArtTransform(img.width / img.height, ART_W / ART_H, zoom, panX);
-    texture.wrapS = THREE.ClampToEdgeWrapping;
-    texture.wrapT = THREE.ClampToEdgeWrapping;
+    const { repeat, offset } = wallArtTransform(img.width / img.height, ART_W / ART_H, zoom, panX, panY);
+    // `needsUpdate` re-uploads the whole image to the GPU, so it must be set only
+    // when the wrap modes actually change — never per reframe. Panning now runs
+    // off mousemove, and re-uploading a multi-megapixel texture 60+ times a
+    // second visibly stalls the room. repeat/offset need no flag: they feed the
+    // texture matrix, which three.js recomputes every frame on its own.
+    if (texture.wrapS !== THREE.ClampToEdgeWrapping || texture.wrapT !== THREE.ClampToEdgeWrapping) {
+      texture.wrapS = THREE.ClampToEdgeWrapping;
+      texture.wrapT = THREE.ClampToEdgeWrapping;
+      texture.needsUpdate = true;
+    }
     texture.repeat.set(repeat[0], repeat[1]);
     texture.offset.set(offset[0], offset[1]);
-    texture.needsUpdate = true;
-  }, [texture, zoom, panX]);
+  }, [texture, zoom, panX, panY]);
 
   const onPointerDown = (e: ThreeEvent<PointerEvent>) => {
     if (document.pointerLockElement) return; // pointer-locked clicks steer the fly cam

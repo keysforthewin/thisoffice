@@ -210,13 +210,13 @@ const server = http.createServer((req, res) => {
         if (!result.ok) return send(400, { error: result.error });
         decor.clearWallArt(ext); // one painting at a time, whatever the previous format was
         // a fresh upload resets the framing; `v` busts the immutable cache entry
-        office.setWallArt({ v: Date.now(), ext, zoom: 1, panX: 0 });
+        office.setWallArt({ v: Date.now(), ext, zoom: 1, panX: 0, panY: 0 });
         return send(200, { ok: true, wallArt: office.getState().wallArt });
       }
       if (req.method === 'PUT') {
         const body = await readBody();
         if (!office.getState().wallArt) return send(404, { error: 'no custom wall art' });
-        office.setWallArt({ zoom: body?.zoom, panX: body?.panX });
+        office.setWallArt({ zoom: body?.zoom, panX: body?.panX, panY: body?.panY });
         return send(200, { ok: true, wallArt: office.getState().wallArt });
       }
       if (req.method === 'DELETE') {

@@ -804,15 +804,15 @@ describe('wall art', () => {
     const file = tempFile();
     const office = new Office(() => ['Knight'], file);
     office.setWallArt({ v: 1234, ext: 'png', zoom: 1, panX: 0 });
-    expect(office.getState().wallArt).toEqual({ v: 1234, ext: 'png', zoom: 1, panX: 0 });
-    expect(new Office(() => ['Knight'], file).getState().wallArt).toEqual({ v: 1234, ext: 'png', zoom: 1, panX: 0 });
+    expect(office.getState().wallArt).toEqual({ v: 1234, ext: 'png', zoom: 1, panX: 0, panY: 0 });
+    expect(new Office(() => ['Knight'], file).getState().wallArt).toEqual({ v: 1234, ext: 'png', zoom: 1, panX: 0, panY: 0 });
   });
 
   it('applies a framing-only patch on top of the stored upload', () => {
     const office = new Office(() => ['Knight'], tempFile());
     office.setWallArt({ v: 1, ext: 'jpg', zoom: 1, panX: 0 });
     office.setWallArt({ zoom: 2.5, panX: -0.4 });
-    expect(office.getState().wallArt).toEqual({ v: 1, ext: 'jpg', zoom: 2.5, panX: -0.4 });
+    expect(office.getState().wallArt).toEqual({ v: 1, ext: 'jpg', zoom: 2.5, panX: -0.4, panY: 0 });
   });
 
   it('ignores a framing patch when no image is stored', () => {
@@ -834,8 +834,39 @@ describe('wall art', () => {
   it('drops non-finite framing values instead of storing them', () => {
     const office = new Office(() => ['Knight'], tempFile());
     office.setWallArt({ v: 1, ext: 'webp', zoom: 2, panX: 0.5 });
-    office.setWallArt({ zoom: NaN, panX: Infinity });
-    expect(office.getState().wallArt).toEqual({ v: 1, ext: 'webp', zoom: 2, panX: 0.5 });
+    office.setWallArt({ zoom: NaN, panX: Infinity, panY: NaN });
+    expect(office.getState().wallArt).toEqual({ v: 1, ext: 'webp', zoom: 2, panX: 0.5, panY: 0 });
+  });
+
+  it('pans vertically, clamped, and independently of panX', () => {
+    const office = new Office(() => ['Knight'], tempFile());
+    office.setWallArt({ v: 1, ext: 'png', zoom: 1, panX: 0, panY: 0 });
+    office.setWallArt({ panY: 0.6 });
+    expect(office.getState().wallArt).toMatchObject({ panX: 0, panY: 0.6 });
+    office.setWallArt({ panY: 9 });
+    expect(office.getState().wallArt).toMatchObject({ panY: 1 });
+    office.setWallArt({ panY: -9 });
+    expect(office.getState().wallArt).toMatchObject({ panY: -1 });
+  });
+
+  it('reads a painting framed before panY existed as centred', () => {
+    const file = tempFile();
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        boss: { name: 'Boss', variant: 'Knight' },
+        employees: [],
+        // no panY key at all, as written by an older build
+        wallArt: { v: 7, ext: 'png', zoom: 3, panX: 0.25 },
+      }),
+    );
+    expect(new Office(() => ['Knight'], file).getState().wallArt).toEqual({
+      v: 7,
+      ext: 'png',
+      zoom: 3,
+      panX: 0.25,
+      panY: 0,
+    });
   });
 
   it('clearWallArt and resetLayout both go back to the built-in artwork', () => {
@@ -862,7 +893,7 @@ describe('wall art', () => {
         wallArt: { v: 5, ext: 'png', zoom: 500, panX: -9 },
       }),
     );
-    expect(new Office(() => ['Knight'], file).getState().wallArt).toEqual({ v: 5, ext: 'png', zoom: 6, panX: -1 });
+    expect(new Office(() => ['Knight'], file).getState().wallArt).toEqual({ v: 5, ext: 'png', zoom: 6, panX: -1, panY: 0 });
   });
 
   it('broadcasts state after a wall-art change', () => {

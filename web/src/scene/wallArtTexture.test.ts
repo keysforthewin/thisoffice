@@ -44,8 +44,45 @@ describe('wallArtTransform', () => {
   });
 
   it('ignores pan when there is nothing to pan across', () => {
-    const { offset } = wallArtTransform(PLANE, PLANE, 1, 1);
+    const { offset } = wallArtTransform(PLANE, PLANE, 1, 1, 1);
     expect(offset[0]).toBeCloseTo(0);
+    expect(offset[1]).toBeCloseTo(0);
+  });
+
+  it('pans vertically across a tall image without sampling outside it', () => {
+    const top = wallArtTransform(PLANE / 2, PLANE, 1, 0, 1);
+    expect(top.offset[1]).toBeCloseTo(0.5); // flush with the top edge
+    expect(top.offset[1] + top.repeat[1]).toBeCloseTo(1);
+
+    const bottom = wallArtTransform(PLANE / 2, PLANE, 1, 0, -1);
+    expect(bottom.offset[1]).toBeCloseTo(0); // flush with the bottom edge
+  });
+
+  it('pans vertically once zoom creates overflow on an exact-fit image', () => {
+    // no vertical overflow at zoom 1, so panY only bites after zooming in
+    expect(wallArtTransform(PLANE, PLANE, 1, 0, 1).offset[1]).toBeCloseTo(0);
+    const zoomed = wallArtTransform(PLANE, PLANE, 2, 0, 1);
+    expect(zoomed.offset[1]).toBeCloseTo(0.5);
+    expect(zoomed.offset[1] + zoomed.repeat[1]).toBeCloseTo(1);
+  });
+
+  it('pans both axes at once', () => {
+    const { offset, repeat } = wallArtTransform(PLANE, PLANE, 2, 1, -1);
+    expect(offset[0]).toBeCloseTo(0.5); // flush right
+    expect(offset[0] + repeat[0]).toBeCloseTo(1);
+    expect(offset[1]).toBeCloseTo(0); // flush bottom
+  });
+
+  it('defaults panY to centred when omitted, so old callers are unaffected', () => {
+    const withArg = wallArtTransform(PLANE / 2, PLANE, 1, 0, 0);
+    const without = wallArtTransform(PLANE / 2, PLANE, 1, 0);
+    expect(without.offset).toEqual(withArg.offset);
+    expect(without.offset[1]).toBeCloseTo(0.25); // centred crop
+  });
+
+  it('clamps an out-of-range or non-finite panY like panX', () => {
+    expect(wallArtTransform(PLANE / 2, PLANE, 1, 0, 9).offset[1]).toBeCloseTo(0.5);
+    expect(wallArtTransform(PLANE / 2, PLANE, 1, 0, Number.NaN).offset[1]).toBeCloseTo(0.25);
   });
 
   it('clamps out-of-range and non-finite inputs', () => {

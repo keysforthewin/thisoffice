@@ -500,12 +500,15 @@ export function CameraRig() {
 }
 
 /**
- * Wheel → reframe the painting, while the cursor is over it. Mounted only on
- * hover, so it never competes with FocusControls' own wheel listener.
+ * Reframe the painting while the cursor is over it: wheel zooms, and holding
+ * ctrl turns mouse movement into a two-axis pan. Mounted only on hover, so it
+ * never competes with FocusControls' own wheel listener.
  *
- * This has to be a native non-passive listener rather than an R3F `onWheel`
- * prop: ctrl+wheel is the browser's page-zoom gesture, and only
- * `preventDefault` on a non-passive listener suppresses it.
+ * The wheel has to be a native non-passive listener rather than an R3F
+ * `onWheel` prop: ctrl+wheel is the browser's page-zoom gesture, and only
+ * `preventDefault` on a non-passive listener suppresses it. That still applies
+ * with ctrl held even though the wheel no longer pans — otherwise leaning on
+ * ctrl and brushing the wheel mid-pan zooms the whole page.
  */
 function WallArtControls() {
   const gl = useThree((s) => s.gl);
@@ -515,22 +518,42 @@ function WallArtControls() {
       const art = useStore.getState().office?.wallArt;
       if (!art) return; // the built-in artwork has no framing to change
       e.preventDefault();
-      if (e.ctrlKey) {
-        reframeWallArt({ panX: clampPan(art.panX + (e.deltaY > 0 ? PAN_PER_TICK : -PAN_PER_TICK)) });
-      } else {
-        reframeWallArt({ zoom: clampZoom(art.zoom * (e.deltaY > 0 ? 1 / ZOOM_PER_TICK : ZOOM_PER_TICK)) });
-      }
+      if (e.ctrlKey) return; // ctrl is the pan modifier; suppress page zoom and nothing else
+      reframeWallArt({ zoom: clampZoom(art.zoom * (e.deltaY > 0 ? 1 / ZOOM_PER_TICK : ZOOM_PER_TICK)) });
+    };
+    /**
+     * Ctrl + move drags the picture inside its frame, on both axes. The image
+     * follows the cursor — dragging right slides the picture right, which means
+     * sampling further *left*, hence the subtraction on both axes. There is
+     * nothing to pan on an axis with no overflow; `wallArtTransform` ignores the
+     * value there, so this needs no special case for it.
+     */
+    const onMouseMove = (e: MouseEvent) => {
+      if (!e.ctrlKey) return;
+      if (document.pointerLockElement) return; // pointer-locked movement steers the fly cam
+      const art = useStore.getState().office?.wallArt;
+      if (!art) return;
+      if (e.movementX === 0 && e.movementY === 0) return;
+      reframeWallArt({
+        panX: clampPan((art.panX ?? 0) - e.movementX * PAN_PER_PIXEL),
+        panY: clampPan((art.panY ?? 0) - e.movementY * PAN_PER_PIXEL),
+      });
     };
     const dom = gl.domElement;
     dom.addEventListener('wheel', onWheel, { passive: false });
-    return () => dom.removeEventListener('wheel', onWheel);
+    dom.addEventListener('mousemove', onMouseMove);
+    return () => {
+      dom.removeEventListener('wheel', onWheel);
+      dom.removeEventListener('mousemove', onMouseMove);
+    };
   }, [gl]);
 
   return null;
 }
 
 const ZOOM_PER_TICK = 1.12;
-const PAN_PER_TICK = 0.08;
+/** ~200 px of travel covers the full pan range, which feels like dragging the picture. */
+const PAN_PER_PIXEL = 0.005;
 
 const UP = new THREE.Vector3(0, 1, 0);
 const CENTER_NDC = new THREE.Vector2(0, 0);

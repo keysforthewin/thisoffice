@@ -71,11 +71,14 @@ export function mergeWallArt(base: WallArtConfig | undefined, patch: Partial<Wal
   if (!ext || !(WALL_ART_EXTS as readonly string[]).includes(ext) || v === undefined) return undefined;
   const zoom = Number.isFinite(patch.zoom) ? patch.zoom! : base?.zoom ?? 1;
   const panX = Number.isFinite(patch.panX) ? patch.panX! : base?.panX ?? 0;
+  // panY is absent from paintings framed before vertical panning existed
+  const panY = Number.isFinite(patch.panY) ? patch.panY! : base?.panY ?? 0;
   return {
     v,
     ext: ext as WallArtExt,
     zoom: clamp(zoom, WALL_ART_ZOOM_MIN, WALL_ART_ZOOM_MAX),
     panX: clamp(panX, -1, 1),
+    panY: clamp(panY, -1, 1),
   };
 }
 

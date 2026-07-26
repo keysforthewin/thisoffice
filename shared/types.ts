@@ -83,8 +83,11 @@ export interface WallArtConfig {
   ext: WallArtExt;
   /** 1 = the image covers the frame exactly; >1 zooms in */
   zoom: number;
-  /** -1..1 of the horizontal overflow; 0 = centred */
+  /** -1..1 of the horizontal overflow; 0 = centred, +1 flush with the right edge */
   panX: number;
+  /** -1..1 of the vertical overflow; 0 = centred, +1 flush with the top edge.
+   *  Absent on paintings framed before vertical panning existed → treated as 0. */
+  panY: number;
 }
 
 export const WALL_ART_ZOOM_MIN = 1;

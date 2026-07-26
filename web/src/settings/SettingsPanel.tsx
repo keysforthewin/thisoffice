@@ -111,7 +111,7 @@ export function SettingsPanel() {
         </button>
         <div style={{ fontSize: 12, color: '#9aa4b0', marginTop: 6 }}>
           Tip: press <b>B</b> in the free camera to rearrange the office. Click the painting behind the boss to hang
-          your own picture — scroll over it to zoom, ctrl+scroll to pan.
+          your own picture — scroll over it to zoom, hold ctrl and move the mouse to pan it around.
         </div>
       </div>
     </div>
