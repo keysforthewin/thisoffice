@@ -124,6 +124,14 @@ export interface QuizAnswer {
   answer: 'yes' | 'no';
   /** true when the asker was making an outright guess rather than narrowing down */
   guess: boolean;
+  /**
+   * Legacy, read-only: a question the office made up while Haiku was unreachable.
+   * Nothing writes this any more — the office waits for a real question instead
+   * of guessing blind — but rounds recorded before that change are still on disk
+   * and mid-play, and a blind question's answer is not evidence about the secret
+   * word, so `buildQuizPrompt` keeps flagged turns out of the history.
+   */
+  fallback?: boolean;
   askerName: string;
   at: string;
 }

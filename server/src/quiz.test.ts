@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Quiz, type QuizAsker, type QuizDeps } from './quiz.ts';
+import { Quiz, ASK_RETRY_MAX_MS, ASK_RETRY_MS, retryDelay, type QuizAsker, type QuizDeps } from './quiz.ts';
 import type { ServerMsg } from '../../shared/types.ts';
 
 function harness(over: Partial<QuizDeps> = {}) {
@@ -15,9 +15,17 @@ function harness(over: Partial<QuizDeps> = {}) {
     { id: 'e1', name: 'Dana', variant: 'Mage', seat: 1, idle: true },
     { id: 'catPerson', name: 'Kat Person', variant: 'CatPerson', seat: null, idle: true },
   ];
-  let reply = '{"question":"Is it alive?","guess":false}';
+  // A fresh question per call, because that is what Haiku does — a mock that
+  // returns one fixed string forever is a mock of a model with temperature 0,
+  // and the office now (correctly) refuses a repeat instead of asking it. The
+  // first is fixed so tests can assert on it; `setReply` pins every later one.
+  let reply: string | null = null;
+  let calls = 0;
   const deps: QuizDeps = {
-    ask: vi.fn(async () => reply),
+    ask: vi.fn(async () =>
+      reply ?? (++calls === 1
+        ? '{"question":"Is it alive?","guess":false}'
+        : `{"question":"Narrowing question ${calls}?","guess":false}`)),
     emit: (m) => emitted.push(m),
     requestCapture: (w) => captures.push(w.name),
     status: (t) => statuses.push(t),
@@ -106,7 +114,11 @@ describe('Quiz', () => {
   });
 
   it('keeps playing when a guess is answered NO', async () => {
-    const h = harness({ ask: vi.fn(async () => '{"question":"Is it a cat?","guess":true}') });
+    let n = 0;
+    const h = harness({
+      ask: vi.fn(async () =>
+        ++n === 1 ? '{"question":"Is it a cat?","guess":true}' : '{"question":"Is it a dog?","guess":true}'),
+    });
     h.quiz.setEnabled(true);
     await settle();
     h.answerCurrent('no');
@@ -290,30 +302,112 @@ describe('Quiz', () => {
     expect(h.quiz.getState().winner).not.toBeNull();
   });
 
-  it('falls back to a canned question when Haiku rejects, and says so', async () => {
+  it('never asks anything of its own invention while Haiku is down, however long it lasts', async () => {
+    // The whole point: a question chosen without reading the round is a false
+    // fact the player answers in good faith, and it outlives the outage.
     const h = harness({ ask: vi.fn(async () => { throw new Error('spawn claude ENOENT'); }) });
     h.quiz.setEnabled(true);
     await settle();
-    expect(h.quiz.getState().question!.text.length).toBeGreaterThan(0);
-    expect(h.statuses.some((s) => s.startsWith('⚠'))).toBe(true);
+    expect(h.quiz.getState().question).toBeNull();
+    for (let i = 0; i < 40; i++) {
+      await vi.advanceTimersByTimeAsync(ASK_RETRY_MAX_MS);
+      await settle();
+      expect(h.quiz.getState().question).toBeNull();
+    }
+    expect(h.quiz.getState().answers).toHaveLength(0); // and the round is untouched
   });
 
-  it('falls back to a canned question when the reply is unparseable', async () => {
+  it('says the office is waiting exactly once, not once per retry', async () => {
+    const h = harness({ ask: vi.fn(async () => { throw new Error('down'); }) });
+    h.quiz.setEnabled(true);
+    await settle();
+    for (let i = 0; i < 5; i++) {
+      await vi.advanceTimersByTimeAsync(ASK_RETRY_MAX_MS);
+      await settle();
+    }
+    expect(h.statuses.filter((s) => s.startsWith('⚠'))).toHaveLength(1);
+  });
+
+  it('says why it failed, so a timeout is distinguishable from a missing CLI', async () => {
+    const h = harness({ ask: vi.fn(async () => { throw new Error('claude timed out after 120000ms'); }) });
+    h.quiz.setEnabled(true);
+    await settle();
+    expect(h.statuses.find((s) => s.startsWith('⚠'))).toContain('timed out');
+  });
+
+  it('distinguishes an unusable reply from an unreachable CLI on the board', async () => {
+    const h = harness({ ask: vi.fn(async () => 'no json here') });
+    h.quiz.setEnabled(true);
+    await settle();
+    expect(h.statuses.find((s) => s.startsWith('⚠'))).toContain('unusable reply');
+  });
+
+  it('backs off, so an outage lasting hours is not a spawn every twenty seconds', async () => {
+    expect(retryDelay(1)).toBe(ASK_RETRY_MS);
+    expect(retryDelay(2)).toBe(ASK_RETRY_MS * 2);
+    expect(retryDelay(99)).toBe(ASK_RETRY_MAX_MS);
+  });
+
+  it('picks the round straight back up when Haiku returns', async () => {
+    let up = false;
+    const ask = vi.fn(async () => {
+      if (!up) throw new Error('overloaded');
+      return '{"question":"Is she British?","guess":false}';
+    });
+    const h = harness({ ask });
+    h.quiz.setEnabled(true);
+    await settle();
+    expect(h.quiz.getState().question).toBeNull(); // no bubble at all during the outage
+    up = true;
+    await vi.advanceTimersByTimeAsync(ASK_RETRY_MS);
+    await settle();
+    expect(h.quiz.getState().question!.text).toBe('Is she British?');
+    expect(h.statuses.some((s) => s.includes('thinking again'))).toBe(true);
+  });
+
+  it('waits rather than inventing one when the reply is unparseable', async () => {
     const h = harness({ ask: vi.fn(async () => 'I would rather not.') });
     h.quiz.setEnabled(true);
     await settle();
-    expect(h.quiz.getState().question!.text.length).toBeGreaterThan(0);
+    expect(h.quiz.getState().question).toBeNull();
+    expect(h.statuses.some((s) => s.startsWith('⚠'))).toBe(true);
   });
 
-  it('falls back rather than re-prompting when Haiku repeats itself', async () => {
+  it('re-asks rather than accepting a repeat, since Haiku samples', async () => {
     const h = harness();
+    h.setReply('{"question":"Is it alive?","guess":false}'); // pinned: every turn returns this
     h.quiz.setEnabled(true);
     await settle();
     const first = h.quiz.getState().question!.text;
-    h.answerCurrent('yes'); // reply is unchanged, so the same question comes back
+    h.answerCurrent('yes'); // so the very same question comes back
     await settle();
-    expect(h.quiz.getState().question!.text).not.toBe(first);
-    expect(h.deps.ask).toHaveBeenCalledTimes(2); // one call per turn, no retry loop
+    expect(h.quiz.getState().question).toBeNull(); // the repeat is refused, not asked
+
+    h.setReply('{"question":"Is it a mammal?","guess":false}');
+    await vi.advanceTimersByTimeAsync(ASK_RETRY_MS);
+    await settle();
+    const next = h.quiz.getState().question!.text;
+    expect(next).not.toBe(first);
+  });
+
+  it('still keeps a legacy blind turn out of the prompt, for a round recorded before the removal', async () => {
+    // Rounds with `fallback` answers are on disk mid-play; their answers were
+    // never evidence and must not reach Haiku now that the round can resume.
+    const dataFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'quiz-')), 'quiz.json');
+    fs.writeFileSync(dataFile, JSON.stringify({
+      enabled: true,
+      roundId: 'r1',
+      askedCount: 2,
+      answers: [
+        { question: 'Is she known for acting?', answer: 'yes', guess: false, askerName: 'Dana', at: '' },
+        { question: 'Is it bigger than a microwave?', answer: 'no', guess: false, fallback: true, askerName: 'Dana', at: '' },
+      ],
+    }));
+    const h = harness({ dataFile });
+    await settle();
+    const prompt = (h.deps.ask as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(prompt).toContain('Is she known for acting?');
+    expect(prompt).not.toContain('Is it bigger than a microwave?');
   });
 
   it('prefers idle employees but still plays when everyone is busy', async () => {
@@ -489,9 +583,10 @@ describe('Quiz', () => {
     expect(h2.quiz.getState().question).not.toBeNull();
   });
 
-  it('never flags a canned fallback as an outright guess', async () => {
-    // Haiku is down: a canned narrowing question must not be winnable, or a
-    // YES would credit a win for a question that named nothing.
+  it('cannot credit a win for a question the office invented, because it invents none', async () => {
+    // The old canned questions had to be forced to `guess: false` or a YES would
+    // hang a photo for a question that named nothing. With no canned questions,
+    // an outage simply produces no bubble to answer.
     const h = harness();
     h.quiz.setEnabled(true);
     await settle();
@@ -500,10 +595,9 @@ describe('Quiz', () => {
     });
     h.answerCurrent('no');
     await settle();
-    const q = h.quiz.getState().question!;
-    expect(q.text.length).toBeGreaterThan(0);
-    expect(q.guess).toBe(false);
-    expect(h.quiz.answer(q.id, 'yes')).toBe('ok');
+    await vi.advanceTimersByTimeAsync(ASK_RETRY_MAX_MS * 4);
+    await settle();
+    expect(h.quiz.getState().question).toBeNull();
     expect(h.quiz.getState().winner).toBeNull();
     expect(h.wins).toEqual([]);
   });

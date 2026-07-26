@@ -551,3 +551,40 @@ describe('quiz messages', () => {
     expect(useStore.getState().pendingCapture).toEqual(winner);
   });
 });
+
+describe('beacon mute', () => {
+  const apply = (waitingForInput: boolean) =>
+    useStore.getState().applyServerMsg({ type: 'state', state: makeOffice({ waitingForInput }) });
+
+  beforeEach(() => useStore.setState({ beaconMuted: false }));
+
+  it('starts unmuted', () => {
+    apply(true);
+    expect(useStore.getState().beaconMuted).toBe(false);
+  });
+
+  it('stays muted across later broadcasts while the wait continues', () => {
+    apply(true);
+    useStore.getState().muteBeacon();
+    apply(true);
+    apply(true);
+    expect(useStore.getState().beaconMuted).toBe(true);
+  });
+
+  it('re-arms once the server reports the beacon dark', () => {
+    // the dismissal is "I've seen this one", not "never blink again" — the next
+    // session to block on the user has to be able to say so
+    apply(true);
+    useStore.getState().muteBeacon();
+    apply(false);
+    expect(useStore.getState().beaconMuted).toBe(false);
+    apply(true);
+    expect(useStore.getState().beaconMuted).toBe(false);
+  });
+
+  it('never mutes the underlying fact, only the blink', () => {
+    apply(true);
+    useStore.getState().muteBeacon();
+    expect(useStore.getState().office!.waitingForInput).toBe(true);
+  });
+});

@@ -97,7 +97,7 @@ export function MovieCamera() {
   useFrame((_, delta) => {
     if (suppressed) return;
     const now = Date.now();
-    const { office, lastActivity, inboxAlert, quiz } = useStore.getState();
+    const { office, lastActivity, inboxAlert, quiz, beaconMuted } = useStore.getState();
     // Resolved exactly the way SpeechBubble resolves it, so the camera frames
     // where the bubble actually is — including the clamp that keeps an evicted
     // asker's bubble inside the room.
@@ -127,7 +127,12 @@ export function MovieCamera() {
     }
     lastInboxAlert.current = inboxAlert;
 
-    const waiting = !!office?.waitingForInput;
+    // Dismissing the beacon releases the camera too. Forcing every shot to frame a
+    // light the viewer has explicitly acknowledged is the loudest part of the
+    // nagging, and it costs the room every wide and every group shot for as long
+    // as the session stays blocked — which, once someone is done prompting for the
+    // day, is indefinitely.
+    const waiting = !!office?.waitingForInput && !beaconMuted;
     // off → on: the current shot almost certainly doesn't frame the beacon, so recut
     // urgently. on → off only lifts a constraint — an ordinary recut is fine.
     if (lastWaiting.current !== null && waiting !== lastWaiting.current) {

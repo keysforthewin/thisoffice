@@ -139,6 +139,34 @@ export function isTagFullyVisible(
 }
 
 /**
+ * True when something `worldHeight` tall at `distance` would cover more than
+ * `maxFraction` of the viewport's height — i.e. it is close enough to be in the
+ * way rather than in the scene.
+ *
+ * A label is only worth drawing at a size you can take in. Pressed right up
+ * against the lens it stops being a label and becomes a sheet of colour over the
+ * room, and both of these surfaces sit at head height or above, exactly where a
+ * camera flying through the office ends up. The far cutoff (MAX_TAG_DISTANCE)
+ * has always existed for the mirror-image reason; this is the near one.
+ *
+ * Measured as a fraction of the screen rather than in world units because the
+ * movie camera zooms the fov mid-shot: at 20° a tag that was unobtrusive at 50°
+ * covers three times as much of the frame from the very same spot.
+ */
+export function fillsView(
+  worldHeight: number,
+  distance: number,
+  camera: THREE.Camera,
+  maxFraction: number
+): boolean {
+  const persp = camera as THREE.PerspectiveCamera;
+  if (!persp.isPerspectiveCamera) return false;
+  if (distance <= 1e-4) return true;
+  const visibleHeight = 2 * distance * Math.tan(THREE.MathUtils.degToRad(persp.fov) / 2);
+  return worldHeight / visibleHeight > maxFraction;
+}
+
+/**
  * The bone to hang a nametag over: the highest-sitting bone whose name
  * contains "head" (crown bones like HeadTop_End win over the head pivot).
  * Works for KayKit ("head") and Mixamo ("mixamorigHead") rigs alike.

@@ -161,6 +161,17 @@ export interface AppStore {
    *  Distinct from lastActivity.boss, which any boss-screen stream also stamps — this
    *  fires only on a genuinely new prompt, which is what preempts the movie camera. */
   inboxAlert: number;
+  /**
+   * The viewer clicked the blinking boss-desk beacon to shut it up. Purely local:
+   * `office.waitingForInput` is a fact read off the transcripts, and nothing here
+   * can answer the session, so this mutes the *notification*, never the state.
+   *
+   * Scoped to the wait that is in progress — `applyServerMsg` drops it the moment
+   * the server reports the beacon dark, so the next session to block on the user
+   * blinks again. Dismissing is "I've seen this one", not "never blink again";
+   * there is no way to get stuck permanently muted.
+   */
+  beaconMuted: boolean;
   connected: boolean;
   cameraMode: CameraMode;
   settingsOpen: boolean;
@@ -171,6 +182,8 @@ export interface AppStore {
   /** P toggles the dev fps/draw-call readout */
   perfOverlay: boolean;
   applyServerMsg: (msg: ServerMsg) => void;
+  /** click on the blinking boss-desk beacon: stop blinking for this wait */
+  muteBeacon: () => void;
   setConnected: (v: boolean) => void;
   setCameraMode: (m: CameraMode) => void;
   setFocusScroll: (n: number) => void;
@@ -244,6 +257,7 @@ export const useStore = create<AppStore>((set, get) => ({
   monitorHover: null,
   lastActivity: {},
   inboxAlert: 0,
+  beaconMuted: false,
   connected: false,
   cameraMode: loadCameraMode(),
   settingsOpen: false,
@@ -273,7 +287,10 @@ export const useStore = create<AppStore>((set, get) => ({
         inboxAlert = Date.now();
       }
       if (prevStatusKey !== null && prevStatusKey !== statusTailId) lastActivity = stampActivity(lastActivity, 'statusboard');
-      set({ office: stableLayout(get().office, msg.state), lastActivity, inboxAlert });
+      // The dismissal expires with the wait it dismissed: once the server says the
+      // beacon is dark, the next one to light up is a new event and blinks.
+      const beaconMuted = msg.state.waitingForInput && get().beaconMuted;
+      set({ office: stableLayout(get().office, msg.state), lastActivity, inboxAlert, beaconMuted });
       return;
     }
     if (msg.type === 'catalog') {
@@ -332,6 +349,7 @@ export const useStore = create<AppStore>((set, get) => ({
     }
   },
 
+  muteBeacon: () => set({ beaconMuted: true }),
   setConnected: (connected) => set({ connected }),
   // any mode change lands on the live tail: entering focus starts unscrolled,
   // and exiting mid-history must not leave a stale offset for the next visit

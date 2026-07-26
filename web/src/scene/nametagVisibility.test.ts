@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import {
   NO_RAYCAST,
   crownOffset,
+  fillsView,
   findHeadBone,
   isTagFullyVisible,
   resetOccluderCache,
@@ -159,6 +160,42 @@ describe('isTagFullyVisible', () => {
     expect(isTagFullyVisible(scene, CAM_POS, CAM_QUAT, TAG_CENTER, TAG_W, TAG_H, ignoreOwn)).toBe(false);
     other.removeFromParent();
     expect(isTagFullyVisible(scene, CAM_POS, CAM_QUAT, TAG_CENTER, TAG_W, TAG_H, ignoreOwn)).toBe(true);
+  });
+});
+
+describe('fillsView', () => {
+  const cam = (fov: number) => {
+    const c = new THREE.PerspectiveCamera(fov, 16 / 9, 0.1, 100);
+    return c;
+  };
+
+  it('lets a tag through at a normal viewing distance', () => {
+    expect(fillsView(0.22, 6, cam(50), 0.2)).toBe(false);
+  });
+
+  it('culls the same tag once the camera is on top of it', () => {
+    expect(fillsView(0.22, 0.5, cam(50), 0.2)).toBe(true);
+  });
+
+  it('culls sooner at a longer lens, from the very same spot', () => {
+    // the movie camera zooms fov mid-shot, which is why this is measured in
+    // screen fraction and not in world units
+    expect(fillsView(0.22, 2, cam(50), 0.2)).toBe(false);
+    expect(fillsView(0.22, 2, cam(18), 0.2)).toBe(true);
+  });
+
+  it('gives a big surface a proportionally closer cutoff at the same threshold', () => {
+    // a 1.3-unit card and a 0.22-unit pill cannot share one distance rule
+    expect(fillsView(1.3, 3, cam(50), 0.2)).toBe(true);
+    expect(fillsView(0.22, 3, cam(50), 0.2)).toBe(false);
+  });
+
+  it('treats a degenerate distance as filling the view rather than dividing by zero', () => {
+    expect(fillsView(0.22, 0, cam(50), 0.2)).toBe(true);
+  });
+
+  it('never culls under an orthographic camera, which has no fov to reason about', () => {
+    expect(fillsView(0.22, 0.01, new THREE.OrthographicCamera(-1, 1, 1, -1), 0.2)).toBe(false);
   });
 });
 

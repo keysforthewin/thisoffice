@@ -8,10 +8,30 @@ import {
   type QuizWinner,
   type ServerMsg,
 } from '../../shared/types.ts';
-import { buildQuizPrompt, fallbackQuestion, parseQuizReply, type AskFn } from './quizPrompt.ts';
+import { buildQuizPrompt, parseQuizReply, type AskFn } from './quizPrompt.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_FILE = path.resolve(__dirname, '../../data/quiz.json');
+
+/**
+ * When Haiku cannot produce a question, the office waits for one. It never makes
+ * a question up: a question chosen without reading the round is not a placeholder
+ * that expires with the outage, it is a false fact the player answers in good
+ * faith and that then sits in `answers` for the rest of the round.
+ *
+ * So there is no attempt limit and no giving up — just a retry that backs off
+ * from `ASK_RETRY_MS` to `ASK_RETRY_MAX_MS`, because an outage lasting hours
+ * should not mean a spawn every twenty seconds for hours. The bubble is simply
+ * down until Haiku answers, which is the honest rendering of "the office has
+ * nothing to ask yet".
+ */
+export const ASK_RETRY_MS = 20_000;
+export const ASK_RETRY_MAX_MS = 5 * 60_000;
+
+/** Exponential backoff on consecutive failures, capped. `failures` is 1-based. */
+export function retryDelay(failures: number): number {
+  return Math.min(ASK_RETRY_MS * 2 ** (failures - 1), ASK_RETRY_MAX_MS);
+}
 
 /** How long a client gets to deliver the winner's photo before we move on without one. */
 export const PHOTO_TIMEOUT_MS = 20_000;
@@ -57,6 +77,10 @@ export class Quiz {
   private asking = false;
   private photoTimer: NodeJS.Timeout | null = null;
   private roundTimer: NodeJS.Timeout | null = null;
+  /** pending retry of a Haiku call that failed; see ASK_RETRY_MS */
+  private askTimer: NodeJS.Timeout | null = null;
+  /** consecutive failed Haiku calls for the current turn, reset by any success */
+  private askFailures = 0;
 
   constructor(private deps: QuizDeps) {
     this.dataFile = deps.dataFile ?? DATA_FILE;
@@ -168,20 +192,11 @@ export class Quiz {
   private clearTimers(): void {
     if (this.photoTimer) clearTimeout(this.photoTimer);
     if (this.roundTimer) clearTimeout(this.roundTimer);
+    if (this.askTimer) clearTimeout(this.askTimer);
     this.photoTimer = null;
     this.roundTimer = null;
-  }
-
-  /**
-   * A canned question that hasn't been asked yet this round. Cycles the fallback
-   * list locally — no extra `ask` calls — since the list is short and finite.
-   */
-  private freshFallback(asked: Set<string>): string {
-    for (let i = 0; i < 32; i++) {
-      const candidate = fallbackQuestion(this.state.askedCount + i);
-      if (!asked.has(candidate.toLowerCase())) return candidate;
-    }
-    return fallbackQuestion(this.state.askedCount);
+    this.askTimer = null;
+    this.askFailures = 0;
   }
 
   private pickAsker(): QuizAsker | null {
@@ -193,33 +208,57 @@ export class Quiz {
   }
 
   /**
-   * One Haiku call per turn, never a retry loop: an unusable reply (missing CLI,
-   * garbage, or a repeat of a question already asked) falls through to a canned
-   * question so the round keeps moving at a bounded cost.
+   * At most one Haiku call in flight, and no way out of it but a real question.
+   *
+   * Every failure is the same failure as far as the round is concerned — a
+   * missing CLI, a timeout, garbage JSON, or a repeat of a question already
+   * asked all mean "no question yet" — and every one of them is handled by
+   * waiting and asking again. Nothing here invents a question. A repeat is worth
+   * re-asking rather than accepting because Haiku samples: the same prompt is
+   * quite likely to come back with something new.
+   *
+   * The bubble stays down for the whole outage, and no state is touched, so a
+   * round survives an outage of any length intact and resumes exactly where it
+   * left off.
    */
   private async askNext(): Promise<void> {
     if (!this.state.enabled || this.asking || this.state.awaitingPhoto) return;
     const asker = this.pickAsker();
     if (!asker) return;
+    if (this.askTimer) clearTimeout(this.askTimer);
+    this.askTimer = null;
     this.asking = true;
     let parsed: { text: string; guess: boolean } | null = null;
+    // Why it failed, for the status board. Swallowing this entirely made a
+    // 30 s timeout indistinguishable from a missing CLI, which is exactly the
+    // distinction someone reading the board needs.
+    let reason = 'unusable reply';
     try {
       parsed = parseQuizReply(await this.deps.ask(buildQuizPrompt(this.state.answers)));
-    } catch {
-      this.deps.status('⚠ Haiku unavailable — the office is guessing blind');
+    } catch (err) {
       parsed = null;
+      reason = err instanceof Error ? err.message : String(err);
     } finally {
       this.asking = false;
     }
     // enabled may have flipped while the call was in flight
     if (!this.state.enabled) return;
+
     const asked = new Set(this.state.answers.map((a) => a.question.toLowerCase()));
     if (!parsed || asked.has(parsed.text.toLowerCase())) {
-      // A canned narrowing question is never a guess: flagging it `guess: true`
-      // would let a YES win the round — crediting a win and hanging a photo —
-      // for a question that named nothing.
-      parsed = { text: this.freshFallback(asked), guess: false };
+      // Say it once per outage: a status line per retry would push the round's
+      // real history off the board for something the office is handling.
+      const why = parsed ? 'repeated itself' : reason;
+      if (++this.askFailures === 1) {
+        this.deps.status(`⚠ Haiku unavailable (${why.slice(0, 60)}) — the office is waiting`);
+      }
+      this.askTimer = setTimeout(() => void this.askNext(), retryDelay(this.askFailures));
+      this.askTimer.unref?.();
+      return;
     }
+    if (this.askFailures > 0) this.deps.status('20 questions: the office is thinking again');
+    this.askFailures = 0;
+
     const question: QuizQuestion = {
       id: nextId('q'),
       text: parsed.text,

@@ -4,8 +4,16 @@ import type { AskFn } from './quizPrompt.ts';
 /** The cheapest model that can play this game. Do not "upgrade" it. */
 export const HAIKU_MODEL = 'claude-haiku-4-5';
 
-/** A slow round is fine; a hung one is not. */
-const TIMEOUT_MS = 30_000;
+/**
+ * A slow round is fine; a hung one is not — and this is set to catch only the
+ * hung case. It used to be 30 s, which quietly became the round's real failure
+ * mode: the prompt carries the whole history and asks for reasoning before the
+ * question, so a turn that took ~8 s early in a round takes ~22 s by question 14,
+ * and turns started timing out exactly as the round got interesting. The office
+ * would rather wait a minute for the right question than lose the round, and
+ * nothing downstream is blocking on this call.
+ */
+const TIMEOUT_MS = 120_000;
 
 /**
  * `--no-session-persistence` is load-bearing, not tidiness: without it the CLI

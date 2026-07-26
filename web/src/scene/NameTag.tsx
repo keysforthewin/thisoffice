@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
-import { NO_RAYCAST, isTagFullyVisible } from './nametagVisibility.ts';
+import { NO_RAYCAST, fillsView, isTagFullyVisible } from './nametagVisibility.ts';
 
 interface Props {
   name: string;
@@ -28,6 +28,12 @@ const FONT = `600 ${FONT_PX}px system-ui, -apple-system, sans-serif`;
 const CHECK_MS = 100;
 /** Past this the pill is a couple of pixels tall; skip the check and hide it. */
 const MAX_TAG_DISTANCE = 26;
+/**
+ * ...and this is the near end: a pill covering more than a fifth of the frame
+ * is not a label any more, it is a wall. At the default fov that lands around
+ * 1.3 units — close enough that the camera is practically inside the character.
+ */
+const MAX_TAG_SCREEN_FRACTION = 0.2;
 
 const _camPos = new THREE.Vector3();
 const _camQuat = new THREE.Quaternion();
@@ -105,11 +111,14 @@ export function NameTag({ name, position = [0, 0, 0], height = 0.22, accent = '#
       sprite.current.getWorldPosition(center);
       camera.getWorldPosition(_camPos);
 
-      // Cheap rejects before the raycasts: a tag that is off-screen or far
-      // enough to be illegible never needs an occlusion test.
+      // Cheap rejects before the raycasts: a tag that is off-screen, far enough
+      // to be illegible, or close enough to be in the way never needs an
+      // occlusion test.
       const frame = clock.elapsedTime;
+      const dist = center.distanceTo(_camPos);
       if (
-        center.distanceTo(_camPos) > MAX_TAG_DISTANCE ||
+        dist > MAX_TAG_DISTANCE ||
+        fillsView(scale[1], dist, camera, MAX_TAG_SCREEN_FRACTION) ||
         !cameraFrustum(camera, frame).containsPoint(center)
       ) {
         shown.current = 0;

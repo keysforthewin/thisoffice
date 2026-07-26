@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildQuizPrompt, parseQuizReply, fallbackQuestion } from './quizPrompt.ts';
+import { buildQuizPrompt, parseQuizReply } from './quizPrompt.ts';
 import type { QuizAnswer } from '../../shared/types.ts';
 import { QUIZ_QUESTION_MAX_CHARS } from '../../shared/types.ts';
 
@@ -26,6 +26,24 @@ describe('buildQuizPrompt', () => {
     expect(p.indexOf('Is it alive?')).toBeLessThan(p.indexOf('Is it a mammal?'));
     expect(p).toMatch(/Is it alive\?[\s\S]*YES/i);
     expect(p).toMatch(/Is it a mammal\?[\s\S]*NO/i);
+  });
+
+  it('leaves a legacy blind turn out of the evidence', () => {
+    // Nothing writes `fallback` any more, but rounds recorded before blind
+    // guessing was removed are still on disk: the answer says nothing about the
+    // secret word, and reads as a contradiction of what is established.
+    const canned: QuizAnswer = { ...a('Is it bigger than a microwave?', 'no'), fallback: true };
+    const p = buildQuizPrompt([a('Is she known for acting?', 'yes'), canned]);
+    expect(p).toContain('Is she known for acting?');
+    expect(p).not.toContain('Is it bigger than a microwave?');
+  });
+
+  it('numbers the surviving history contiguously', () => {
+    const canned: QuizAnswer = { ...a('Is it man-made?', 'no'), fallback: true };
+    const p = buildQuizPrompt([a('Is it alive?', 'yes'), canned, a('Is it a person?', 'yes')]);
+    expect(p).toContain('1. Is it alive?');
+    expect(p).toContain('2. Is it a person?');
+    expect(p).not.toMatch(/^3\./m);
   });
 
   it('never demands a guess — narrowing always beats a long-odds name', () => {
@@ -95,15 +113,5 @@ describe('parseQuizReply', () => {
     expect(parseQuizReply('')).toBeNull();
     expect(parseQuizReply('{"question":"   "}')).toBeNull();
     expect(parseQuizReply('{"question": 42}')).toBeNull();
-  });
-});
-
-describe('fallbackQuestion', () => {
-  it('returns a non-empty question for any count', () => {
-    for (const n of [0, 1, 7, 19, 200]) expect(fallbackQuestion(n).length).toBeGreaterThan(0);
-  });
-
-  it('varies across consecutive counts so the office does not repeat itself', () => {
-    expect(fallbackQuestion(0)).not.toBe(fallbackQuestion(1));
   });
 });

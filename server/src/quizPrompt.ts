@@ -13,6 +13,14 @@ export type AskFn = (prompt: string) => Promise<string>;
  * tail would throw away exactly what the model needs to keep bisecting. A very
  * long round is a few KB of prompt — not worth the information.
  *
+ * Turns flagged `fallback` are filtered out. Nothing writes that flag any more —
+ * blind questions are gone — but rounds recorded before they were removed are
+ * still on disk mid-play, and their answers are not evidence: a canned question
+ * landing mid-round reads as a flat contradiction of everything established
+ * ("is it bigger than a microwave?" → NO, of a film star), which the model then
+ * spends the rest of the round trying to reconcile. Keep the filter as long as
+ * such a round can still be resumed.
+ *
  * The prompt's job is to stop the model reaching for a name too early. Its
  * natural failure mode, once the category is known, is to start reeling off
  * candidates — "is it Taylor Swift?", "is it Beyoncé?" — which is hopeless in a
@@ -21,7 +29,8 @@ export type AskFn = (prompt: string) => Promise<string>;
  * is small. There is no question limit, so halving again always beats a
  * long-odds guess.
  */
-export function buildQuizPrompt(answers: QuizAnswer[]): string {
+export function buildQuizPrompt(all: QuizAnswer[]): string {
+  const answers = all.filter((r) => !r.fallback);
   const history = answers
     .map((r, i) => `${i + 1}. ${r.question} → ${r.answer.toUpperCase()}`)
     .join('\n');
@@ -66,9 +75,8 @@ function firstJsonObject(raw: string): string | null {
 }
 
 /**
- * Parse Haiku's reply defensively. Returns null when nothing usable came back —
- * the caller falls through to `fallbackQuestion` rather than retrying, so one
- * bad turn costs one call, not an unbounded loop.
+ * Parse Haiku's reply defensively. Returns null when nothing usable came back;
+ * the caller waits and asks again rather than inventing a question.
  */
 export function parseQuizReply(raw: string): { text: string; guess: boolean } | null {
   const json = firstJsonObject(raw ?? '');
@@ -88,22 +96,11 @@ export function parseQuizReply(raw: string): { text: string; guess: boolean } | 
   return { text, guess: obj.guess === true };
 }
 
-/**
- * Used when the CLI is missing, times out, or returns something unusable. These
- * are deliberately generic — they keep a round moving without pretending to know
- * anything about the answers so far.
+/*
+ * There is deliberately no canned question list here any more. When the CLI is
+ * missing, times out, or returns something unusable, the office waits and asks
+ * again (see `askNext` in quiz.ts) — it does not ask something it made up
+ * without looking at the round. A question that ignores the history is not a
+ * cheap placeholder: it is a false fact the player answers in good faith, and it
+ * then outlives the outage in `answers` forever.
  */
-const FALLBACKS = [
-  'Is it a physical object?',
-  'Is it alive?',
-  'Is it bigger than a microwave?',
-  'Would I find one indoors?',
-  'Is it man-made?',
-  'Could I hold it in one hand?',
-  'Is it something you can eat?',
-  'Does it need electricity?',
-];
-
-export function fallbackQuestion(asked: number): string {
-  return FALLBACKS[Math.abs(Math.trunc(asked)) % FALLBACKS.length];
-}

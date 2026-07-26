@@ -1,6 +1,6 @@
 import { memo, useMemo, useRef } from 'react';
 import * as THREE from 'three';
-import { useFrame, type ThreeElements } from '@react-three/fiber';
+import { useFrame, useThree, type ThreeElements, type ThreeEvent } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
 import { MonitorScreen } from './MonitorScreen.tsx';
 import { Person } from './Person.tsx';
@@ -91,16 +91,56 @@ const BEACON_BASE_GEOMETRY = new THREE.CylinderGeometry(0.055, 0.065, 0.04);
 const BEACON_BASE_MATERIAL = new THREE.MeshStandardMaterial({ color: '#1a1a1f', roughness: 0.6 });
 const BEACON_BULB_GEOMETRY = new THREE.SphereGeometry(0.05, 16, 12);
 
+/**
+ * Steady emissive level once the blink has been dismissed: clearly lit, so the
+ * session is still visibly blocked, but no longer moving. Muting is meant to
+ * stop the nagging, not to hide the fact — the fact belongs to the transcript,
+ * and no click in this room can answer the session that is waiting.
+ */
+const MUTED_EMISSIVE = 1.6;
+
 function WaitingLight({ on }: { on: boolean }) {
   const mat = useRef<THREE.MeshStandardMaterial>(null);
   const glow = useRef<THREE.PointLight>(null);
+  const muted = useStore((s) => s.beaconMuted);
+  const { gl } = useThree();
+
   useFrame(({ clock }) => {
-    const lit = on && Math.sin(clock.elapsedTime * 5) > 0; // square-wave blink ~0.8 Hz
-    if (mat.current) mat.current.emissiveIntensity = lit ? 4 : 0.15;
-    if (glow.current) glow.current.intensity = lit ? 2.2 : 0;
+    // Muted: hold the lit level instead of square-waving through it.
+    const lit = on && (muted || Math.sin(clock.elapsedTime * 5) > 0); // blink ~0.8 Hz
+    const level = on && muted ? MUTED_EMISSIVE : 4;
+    if (mat.current) mat.current.emissiveIntensity = lit ? level : 0.15;
+    if (glow.current) glow.current.intensity = lit ? (on && muted ? 0.9 : 2.2) : 0;
   });
+
+  // Only the blinking beacon is clickable — dismissing a dark one would arm a
+  // mute against a wait that hasn't happened yet, and the store deliberately has
+  // no way to express that.
+  const armed = on && !muted;
+  const dismiss = (e: ThreeEvent<PointerEvent>) => {
+    if (e.button !== 0) return; // right-drag aims the camera; it must not mute on the way past
+    if (document.pointerLockElement) return; // pointer-locked clicks steer the fly cam
+    if (useStore.getState().buildMode) return; // build mode drags the desk instead
+    if (!armed) return;
+    e.stopPropagation(); // the desk behind it would otherwise take the focus click
+    gl.domElement.style.cursor = '';
+    useStore.getState().muteBeacon();
+  };
+  const hover = (e: ThreeEvent<PointerEvent>) => {
+    if (!armed || useStore.getState().buildMode) return;
+    e.stopPropagation();
+    gl.domElement.style.cursor = 'pointer';
+  };
+  const unhover = () => {
+    gl.domElement.style.cursor = '';
+  };
+
   return (
-    <group position={[0.7, 1.0, 0.25]}>
+    <group position={[0.7, 1.0, 0.25]} onPointerDown={dismiss} onPointerOver={hover} onPointerOut={unhover}>
+      {/* The two existing meshes are the whole click target. A larger invisible
+          collider would be easier to hit, but every raycastable mesh also
+          occludes nametags (see nametagVisibility.ts) — a hit box bigger than
+          the bulb would punch a hole in the tags behind the boss desk. */}
       <mesh castShadow position={[0, 0.02, 0]} geometry={BEACON_BASE_GEOMETRY} material={BEACON_BASE_MATERIAL} />
       {/* the bulb material is per-instance: its emissiveIntensity is animated */}
       <mesh position={[0, 0.07, 0]} geometry={BEACON_BULB_GEOMETRY}>
