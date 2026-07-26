@@ -144,6 +144,8 @@ function FreeFlyControls({ glide }: { glide: React.MutableRefObject<Glide | null
     };
     const onMouseMove = (e: MouseEvent) => {
       if (document.pointerLockElement !== dom) return;
+      // a winner's photo owns the camera for its fly+hold — don't fight it with mouse-look
+      if (useStore.getState().pendingCapture) return;
       if (Math.abs(e.movementX) > MAX_LOOK_DELTA || Math.abs(e.movementY) > MAX_LOOK_DELTA) {
         console.debug('[fly-cam] discarded pointer-lock spike', e.movementX, e.movementY);
         return;
