@@ -12,6 +12,7 @@ import { WallTV } from './WallTV.tsx';
 import { roomDims, whiteboardTransform, statusBoardTransform, BACK_Z } from './layout.ts';
 import { resolveFurniture, WALL_ITEMS } from './buildLayout.ts';
 import { BuildHandle, WallHandle, displayPose, useWallOffset } from './build.tsx';
+import { EotmFrame } from './EotmFrame.tsx';
 import { wallStrips } from './wallOpenings.ts';
 import { WindowVista } from './WindowVista.tsx';
 import { SpeechBubble } from '../quiz/SpeechBubble.tsx';
@@ -193,6 +194,7 @@ export function Office() {
   const backOx = useWallOffset('windowBack', maxSeat);
   const leftOx = useWallOffset('windowLeft', maxSeat);
   const artOx = useWallOffset('wallArt', maxSeat);
+  const eotmOx = useWallOffset('eotm', maxSeat);
   const tvOx = useWallOffset('tv', maxSeat);
   const wallItem = (id: string) => WALL_ITEMS.find((w) => w.id === id)!;
 
@@ -284,10 +286,12 @@ export function Office() {
         );
       })}
       <WallArt position={[artOx, 2.15, backZ + 0.05]} />
+      <EotmFrame position={[eotmOx, 2.15, backZ + 0.05]} />
       <SpeechBubble maxSeat={maxSeat} />
       {buildMode && (
         <group position={[0, 0, backZ]}>
           <WallHandle id="wallArt" wall="back" ox={artOx} oy={2.15} w={wallItem('wallArt').halfW * 2} h={1.7} />
+          <WallHandle id="eotm" wall="back" ox={eotmOx} oy={2.15} w={wallItem('eotm').halfW * 2} h={1.3} />
         </group>
       )}
 
