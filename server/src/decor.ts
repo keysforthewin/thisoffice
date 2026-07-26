@@ -40,4 +40,16 @@ export class DecorStore {
       fs.rmSync(this.wallArtPath(ext), { force: true });
     }
   }
+
+  /**
+   * The Employee of the Month photo. Always PNG — it comes from a canvas
+   * capture, not a user upload, so there is no format to negotiate.
+   */
+  eotmPath(): string {
+    return path.join(this.dir, 'eotm.png');
+  }
+
+  clearEotm(): void {
+    fs.rmSync(this.eotmPath(), { force: true });
+  }
 }

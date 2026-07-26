@@ -7,6 +7,9 @@ import { startWatcher } from './watcher.ts';
 import { StatsAggregator } from './stats.ts';
 import { CharacterStore, sanitizeId, isAnimSlot, saveUpload, streamFile } from './characters.ts';
 import { DecorStore, isWallArtExt, wallArtContentType } from './decor.ts';
+import { Quiz, type QuizAsker } from './quiz.ts';
+import { askHaiku } from './haiku.ts';
+import type { QuizWinner } from '../../shared/types.ts';
 
 const PORT = 4680;
 /** ~8k chars is the recommended bio size; hard cap leaves generous headroom */
@@ -21,6 +24,20 @@ const characters = new CharacterStore();
 const decor = new DecorStore();
 const office = new Office(() => characters.variantIds());
 const stats = new StatsAggregator(STATS_FILE);
+
+/**
+ * Candidate questioners for the 20 Questions game: every employee, the boss, and
+ * Kat Person (who is furniture, not staff — she has no roster entry, so she is
+ * named here). Idle staff are preferred by the Quiz itself.
+ */
+const quizAskers = (): QuizAsker[] => {
+  const st = office.getState();
+  return [
+    { id: 'boss', name: st.boss.name, variant: st.boss.variant, idle: st.bossStatus === 'idle' },
+    ...st.employees.map((e) => ({ id: e.id, name: e.name, variant: e.variant, idle: e.status === 'idle' })),
+    { id: 'catPerson', name: 'Kat Person', variant: 'CatPerson', idle: true },
+  ];
+};
 
 /** Push the merged catalog to every client and refresh the hiring pool. */
 const publishCatalog = () => {
@@ -164,9 +181,12 @@ const server = http.createServer((req, res) => {
       return send(200, { ok: true });
     }
     if (url.pathname === '/api/layout' && req.method === 'DELETE') {
-      // the painting is a wall hanging: resetting the room restores the built-in art
+      // the painting and the Employee of the Month photo are both wall hangings:
+      // resetting the room restores the built-in art and takes the photo down
       decor.clearWallArt();
+      decor.clearEotm();
       office.resetLayout();
+      quiz.clearPhoto();
       return send(200, { ok: true });
     }
     if (url.pathname === '/api/decor/wallart') {
@@ -199,6 +219,37 @@ const server = http.createServer((req, res) => {
         return send(200, { ok: true });
       }
     }
+    if (url.pathname === '/api/quiz' && req.method === 'PUT') {
+      const body = await readBody();
+      if (typeof body.enabled !== 'boolean') return send(400, { error: 'enabled must be a boolean' });
+      quiz.setEnabled(body.enabled);
+      return send(200, { ok: true, quiz: quiz.getState() });
+    }
+    if (url.pathname === '/api/quiz/answer' && req.method === 'POST') {
+      const body = await readBody();
+      if (typeof body.id !== 'string' || (body.answer !== 'yes' && body.answer !== 'no')) {
+        return send(400, { error: 'need { id: string, answer: "yes" | "no" }' });
+      }
+      const result = quiz.answer(body.id, body.answer);
+      // a stale id means another tab already answered this bubble
+      return result === 'ok' ? send(200, { ok: true }) : send(409, { error: 'that question is no longer open' });
+    }
+    if (url.pathname === '/api/decor/eotm') {
+      if (req.method === 'GET') {
+        const photo = quiz.getState().photo;
+        if (!photo || !streamFile(decor.eotmPath(), res, 'image/png', 'public, max-age=31536000, immutable')) {
+          return send(404, { error: 'no employee of the month yet' });
+        }
+        return;
+      }
+      if (req.method === 'POST') {
+        // only accepted during the handshake window, so a stray POST can't hang a photo
+        if (!quiz.isAwaitingPhoto()) return send(409, { error: 'not waiting for a photo' });
+        const result = await saveUpload(req, decor.eotmPath(), 'image');
+        if (!result.ok) return send(400, { error: result.error });
+        return quiz.attachPhoto() ? send(200, { ok: true }) : send(409, { error: 'not waiting for a photo' });
+      }
+    }
     if (url.pathname === '/api/employees' && req.method === 'POST') {
       return send(200, { ok: true, employee: office.hireManual() });
     }
@@ -227,10 +278,38 @@ const broadcast = (msg: unknown) => {
   }
 };
 
+/**
+ * Ask exactly ONE client to photograph the winner. Assigned rather than elected:
+ * a dozen open tabs would otherwise each fly their camera and upload a shot.
+ * If that client is gone or its capture fails, the Quiz's photo timeout takes
+ * over and the win is credited without a new photo.
+ */
+const requestPhotoCapture = (winner: QuizWinner) => {
+  for (const client of wss.clients) {
+    if (client.readyState !== WebSocket.OPEN) continue;
+    client.send(JSON.stringify({ type: 'quiz', quiz: quiz.getState(), capture: winner }));
+    return;
+  }
+};
+
+const quiz = new Quiz({
+  ask: askHaiku,
+  emit: (msg) => broadcast(msg),
+  requestCapture: (winner) => requestPhotoCapture(winner),
+  status: (text) => office.pushStatus('quiz', text),
+  recordWin: (name) => {
+    stats.recordGameWin(name);
+    stats.flush();
+    broadcast({ type: 'stats', stats: stats.snapshot() });
+  },
+  askers: quizAskers,
+});
+
 wss.on('connection', (ws: WebSocket) => {
   ws.send(JSON.stringify({ type: 'state', state: office.getState() }));
   for (const msg of office.screenReplay()) ws.send(JSON.stringify(msg));
   ws.send(JSON.stringify({ type: 'stats', stats: stats.snapshot() }));
+  ws.send(JSON.stringify({ type: 'quiz', quiz: quiz.getState() }));
 });
 
 office.subscribe((msg) => broadcast(msg));

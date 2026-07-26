@@ -107,6 +107,12 @@ export class Quiz {
     return this.state.awaitingPhoto;
   }
 
+  /** The photo is a wall hanging: resetting the room takes it down. */
+  clearPhoto(): void {
+    delete this.state.photo;
+    this.publish();
+  }
+
   private publish(): void {
     this.save();
     this.deps.emit({ type: 'quiz', quiz: this.getState() });

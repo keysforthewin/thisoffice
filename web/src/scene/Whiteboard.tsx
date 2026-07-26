@@ -217,7 +217,7 @@ function drawStatus(ctx: CanvasRenderingContext2D, content: StatusBoardContent) 
   let y = 90;
   for (const item of content.items) {
     if (y > H - 40) break;
-    ctx.fillStyle = item.kind === 'boss' ? '#a33' : '#22262b';
+    ctx.fillStyle = item.kind === 'boss' ? '#a33' : item.kind === 'quiz' ? '#7a5c12' : '#22262b';
     const lines = wrapLines(ctx, item.text, W - 90, 2);
     ctx.fillText('•', 34, y);
     for (const l of lines) {
