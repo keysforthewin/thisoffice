@@ -18,6 +18,19 @@ There's a TV that keeps track of your Claude usage stats:
 
 Open http://localhost:5173.
 
+## How It Works
+
+Claude Code writes a transcript of every session to your local Claude home
+folder (`~/.claude/projects/`). This Office tails those transcript files and
+turns what it finds into office activity: your prompts land on the boss's
+monitor, every tool call lights up an employee's screen, and subagents get
+desks of their own.
+
+Because it reads straight from the local folder, it sees every Claude Code
+session on your machine — every project, every terminal, running or resumed —
+and visualizes all of them out of the box. No hooks, no wrappers, no per-project
+setup: just the one startup command above.
+
 ## Advanced
 
 Change the ports by setting `WEB_PORT` (the page) and `SERVER_PORT` before
