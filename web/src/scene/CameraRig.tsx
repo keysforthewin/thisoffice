@@ -209,6 +209,8 @@ function FreeFlyControls({ glide }: { glide: React.MutableRefObject<Glide | null
   }, [camera, gl]);
 
   useFrame((_, delta) => {
+    // a winner's photo owns the camera for its fly+hold — don't fight it with WASD motion
+    if (useStore.getState().pendingCapture) return;
     // while locked the cursor is hidden — hover tracking moves to the crosshair
     if (document.pointerLockElement === gl.domElement) {
       useStore.getState().setMonitorHover(crosshairTarget());
@@ -422,6 +424,11 @@ export function CameraRig() {
   }, [mode, focusPose]);
 
   useFrame((_, delta) => {
+    // a winner's photo owns the camera for its fly+hold: freeze pov/focus/glide
+    // lerps in place rather than fighting PhotoControls' own rAF writes for the
+    // same camera object. Nothing here needs unwinding on resume — lerping
+    // toward the same `pose`/`glide` target just continues where it left off.
+    if (pendingCapture) return;
     if (mode.kind === 'free' && glide.current) {
       const g = glide.current;
       const k = 1 - Math.exp(-delta * 4.5);

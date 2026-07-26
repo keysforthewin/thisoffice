@@ -33,6 +33,11 @@ function isTyping(t: EventTarget | null) {
  */
 export function MovieCamera() {
   const camera = useThree((s) => s.camera) as THREE.PerspectiveCamera;
+  // A winner's photo owns the camera for its ~1.6s fly+hold: freeze rather than
+  // unmount, so shotAge/setKey/recent-shot history survive and the director
+  // picks up the same shot at the same progress once the capture releases the
+  // camera back — no fov/fov-restore race with PhotoControls, no extra hard cut.
+  const suppressed = useStore((s) => !!s.pendingCapture);
   const shot = useRef<PickedShot | null>(null);
   const shotAge = useRef(0);
   const shotDuration = useRef(0);
@@ -75,6 +80,7 @@ export function MovieCamera() {
   }, []);
 
   useFrame((_, delta) => {
+    if (suppressed) return;
     const now = Date.now();
     const { office, lastActivity } = useStore.getState();
     const key = activeSetKey(lastActivity, now, office);
