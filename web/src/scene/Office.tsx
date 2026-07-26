@@ -12,8 +12,10 @@ import { WallTV } from './WallTV.tsx';
 import { roomDims, whiteboardTransform, statusBoardTransform, BACK_Z } from './layout.ts';
 import { resolveFurniture, WALL_ITEMS } from './buildLayout.ts';
 import { BuildHandle, WallHandle, displayPose, useWallOffset } from './build.tsx';
+import { EotmFrame } from './EotmFrame.tsx';
 import { wallStrips } from './wallOpenings.ts';
 import { WindowVista } from './WindowVista.tsx';
+import { SpeechBubble } from '../quiz/SpeechBubble.tsx';
 
 const ART_W = 1.84;
 const ART_H = 1.38;
@@ -30,6 +32,7 @@ function WallArt({ position }: { position: [number, number, number] }) {
   const v = art?.v;
   const zoom = art?.zoom ?? 1;
   const panX = art?.panX ?? 0;
+  const panY = art?.panY ?? 0;
   const url = v ? `/api/decor/wallart?v=${v}` : '/decor/wallart_1.jpg';
   const texture = useTexture(url);
   const gl = useThree((s) => s.gl);
@@ -37,13 +40,20 @@ function WallArt({ position }: { position: [number, number, number] }) {
   useEffect(() => {
     const img = texture.image as { width?: number; height?: number } | undefined;
     if (!img?.width || !img?.height) return;
-    const { repeat, offset } = wallArtTransform(img.width / img.height, ART_W / ART_H, zoom, panX);
-    texture.wrapS = THREE.ClampToEdgeWrapping;
-    texture.wrapT = THREE.ClampToEdgeWrapping;
+    const { repeat, offset } = wallArtTransform(img.width / img.height, ART_W / ART_H, zoom, panX, panY);
+    // `needsUpdate` re-uploads the whole image to the GPU, so it must be set only
+    // when the wrap modes actually change — never per reframe. Panning now runs
+    // off mousemove, and re-uploading a multi-megapixel texture 60+ times a
+    // second visibly stalls the room. repeat/offset need no flag: they feed the
+    // texture matrix, which three.js recomputes every frame on its own.
+    if (texture.wrapS !== THREE.ClampToEdgeWrapping || texture.wrapT !== THREE.ClampToEdgeWrapping) {
+      texture.wrapS = THREE.ClampToEdgeWrapping;
+      texture.wrapT = THREE.ClampToEdgeWrapping;
+      texture.needsUpdate = true;
+    }
     texture.repeat.set(repeat[0], repeat[1]);
     texture.offset.set(offset[0], offset[1]);
-    texture.needsUpdate = true;
-  }, [texture, zoom, panX]);
+  }, [texture, zoom, panX, panY]);
 
   const onPointerDown = (e: ThreeEvent<PointerEvent>) => {
     if (document.pointerLockElement) return; // pointer-locked clicks steer the fly cam
@@ -192,6 +202,7 @@ export function Office() {
   const backOx = useWallOffset('windowBack', maxSeat);
   const leftOx = useWallOffset('windowLeft', maxSeat);
   const artOx = useWallOffset('wallArt', maxSeat);
+  const eotmOx = useWallOffset('eotm', maxSeat);
   const tvOx = useWallOffset('tv', maxSeat);
   const wallItem = (id: string) => WALL_ITEMS.find((w) => w.id === id)!;
 
@@ -283,9 +294,12 @@ export function Office() {
         );
       })}
       <WallArt position={[artOx, 2.15, backZ + 0.05]} />
+      <EotmFrame position={[eotmOx, 2.15, backZ + 0.05]} />
+      <SpeechBubble maxSeat={maxSeat} />
       {buildMode && (
         <group position={[0, 0, backZ]}>
           <WallHandle id="wallArt" wall="back" ox={artOx} oy={2.15} w={wallItem('wallArt').halfW * 2} h={1.7} />
+          <WallHandle id="eotm" wall="back" ox={eotmOx} oy={2.15} w={wallItem('eotm').halfW * 2} h={1.3} />
         </group>
       )}
 

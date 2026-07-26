@@ -28,6 +28,7 @@ function baseStats(overrides: Partial<UsageStats> = {}): UsageStats {
     byDay: {},
     hourCounts: {},
     tokensByDowHour: {},
+    gameWins: {},
     ...overrides,
   };
 }
@@ -199,6 +200,29 @@ describe('tvPages', () => {
     const stats = baseStats();
     const page = tvPages(stats).find((p) => p.title === 'Tracking since')!;
     expect(page.value).toBe('3 days');
+  });
+
+  it('shows a quiz champion page once someone has won', () => {
+    const pages = tvPages(baseStats({ gameWins: { Dana: 3, Rey: 1 } }));
+    const page = pages.find((p) => p.title === 'Quiz champion');
+    expect(page).toBeDefined();
+    expect(page!.value).toBe('Dana');
+    expect(page!.sub).toBe('3 wins · 4 rounds won');
+  });
+
+  it('omits the champion page when nobody has won', () => {
+    expect(tvPages(baseStats({ gameWins: {} })).some((p) => p.title === 'Quiz champion')).toBe(false);
+  });
+
+  it('pluralises a single win', () => {
+    const page = tvPages(baseStats({ gameWins: { Rey: 1 } })).find((p) => p.title === 'Quiz champion');
+    expect(page!.sub).toBe('1 win · 1 round won');
+  });
+
+  it('tolerates stats from a server without gameWins', () => {
+    const stats = baseStats({});
+    delete (stats as { gameWins?: unknown }).gameWins;
+    expect(() => tvPages(stats)).not.toThrow();
   });
 });
 

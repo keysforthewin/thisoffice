@@ -224,6 +224,19 @@ describe('wall items', () => {
     // the left window shares no wall with the back-wall items
     expect(isWallPlacementValid(undefined, 'windowLeft', defaultWallOffset('windowBack', 3), 3)).toBe(true);
   });
+
+  it('places the employee-of-the-month frame on the back wall without overlapping', () => {
+    for (const maxSeat of [3, 6, 12]) {
+      const ox = defaultWallOffset('eotm', maxSeat);
+      expect(isWallPlacementValid(undefined, 'eotm', ox, maxSeat)).toBe(true);
+    }
+  });
+
+  it('keeps every default back-wall item mutually valid', () => {
+    for (const id of ['windowBack', 'wallArt', 'eotm']) {
+      expect(isWallPlacementValid(undefined, id, defaultWallOffset(id, 6), 6)).toBe(true);
+    }
+  });
 });
 
 describe('isPlacementValid', () => {

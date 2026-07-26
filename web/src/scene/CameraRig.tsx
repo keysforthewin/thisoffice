@@ -4,7 +4,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { enterFocusMode, useStore, type CameraPose } from '../store.ts';
 import { whiteboardTransform, statusBoardTransform } from './layout.ts';
 import { resolveSeat } from './buildLayout.ts';
-import type { OfficeLayout, OfficeState } from '../../../shared/types.ts';
+import type { OfficeLayout, OfficeState, QuizWinner } from '../../../shared/types.ts';
 import { MovieCamera } from './MovieCamera.tsx';
 import { clampToRoom, fitDistance, subjectFor } from './movieShots.ts';
 import { clampOffset, wrapLines } from './monitorScrollback.ts';
@@ -13,6 +13,10 @@ import { bossScreenLines } from './bossScreen.ts';
 import { MONITOR_COLS, MONITOR_ROWS } from './MonitorScreen.tsx';
 import { pickWallArtImage, reframeWallArt } from '../wallArt.ts';
 import { clampPan, clampZoom } from './wallArtTexture.ts';
+import { askerAnchor } from '../quiz/askerAnchor.ts';
+import { photoShot } from '../quiz/photoShot.ts';
+import { captureCanvas, PHOTO_FLY_MS, PHOTO_HOLD_MS } from '../quiz/capture.ts';
+import { uploadEotmPhoto } from '../quiz/quizApi.ts';
 
 export interface Pov {
   label: string;
@@ -140,6 +144,8 @@ function FreeFlyControls({ glide }: { glide: React.MutableRefObject<Glide | null
     };
     const onMouseMove = (e: MouseEvent) => {
       if (document.pointerLockElement !== dom) return;
+      // a winner's photo owns the camera for its fly+hold — don't fight it with mouse-look
+      if (useStore.getState().pendingCapture) return;
       if (Math.abs(e.movementX) > MAX_LOOK_DELTA || Math.abs(e.movementY) > MAX_LOOK_DELTA) {
         console.debug('[fly-cam] discarded pointer-lock spike', e.movementX, e.movementY);
         return;
@@ -205,6 +211,8 @@ function FreeFlyControls({ glide }: { glide: React.MutableRefObject<Glide | null
   }, [camera, gl]);
 
   useFrame((_, delta) => {
+    // a winner's photo owns the camera for its fly+hold — don't fight it with WASD motion
+    if (useStore.getState().pendingCapture) return;
     // while locked the cursor is hidden — hover tracking moves to the crosshair
     if (document.pointerLockElement === gl.domElement) {
       useStore.getState().setMonitorHover(crosshairTarget());
@@ -267,12 +275,131 @@ function FocusControls({ target }: { target: string }) {
   return null;
 }
 
+/**
+ * Runs only when the server asked THIS client for the winner's photo: fly to the
+ * group shot, hold a beat, shoot, upload, fly back. Failure is silent by design —
+ * the win is credited server-side the moment the guess lands, photo or not.
+ *
+ * In a hidden tab the fly-in is skipped entirely (see below): rAF does not run
+ * there, so an animated capture would never fire inside the server's window.
+ *
+ * Office state is read once via `useStore.getState()` rather than subscribed to:
+ * a subscription would re-run this effect (and restart the fly-in) on every
+ * unrelated broadcast that arrives during the ~1.6s capture window.
+ */
+function PhotoControls({ winner, maxSeat }: { winner: QuizWinner; maxSeat: number }) {
+  const { camera, gl, scene } = useThree();
+
+  useEffect(() => {
+    const office = useStore.getState().office;
+    // identity rides the protocol (`winner.asker` / `winner.seat`), never a name
+    // lookup in the live roster: a winner idle-evicted between the guess and the
+    // capture would otherwise fall through to Kat Person and be photographed
+    // under someone else's name.
+    const anchor = office ? askerAnchor(winner.asker, winner.seat, { layout: office.layout }, maxSeat) : null;
+    if (!anchor) {
+      useStore.getState().clearPendingCapture();
+      return;
+    }
+    const subject = new THREE.Vector3(anchor[0], 0, anchor[2]);
+    const shot = photoShot(subject, maxSeat);
+    const from = camera.position.clone();
+    const fromQuat = camera.quaternion.clone();
+    const perspective = camera as THREE.PerspectiveCamera;
+    const baseFov = perspective.fov;
+
+    // target orientation, computed once by parking a scratch camera at the shot
+    const scratch = perspective.clone();
+    scratch.position.copy(shot.position);
+    scratch.lookAt(shot.lookAt);
+    const toQuat = scratch.quaternion.clone();
+
+    let raf = 0;
+    let holdTimer = 0;
+    const t0 = performance.now();
+    let shooting = false;
+    // guards the hold-timer callback: setTimeout isn't cancelled by unmount
+    // the way rAF is, so without this an unmount during the hold beat (the
+    // server's timeout or another tab finishing first) would still fire the
+    // capture/upload against whatever the camera looks at post-restore
+    let cancelled = false;
+
+    const restore = () => {
+      camera.position.copy(from);
+      camera.quaternion.copy(fromQuat);
+      perspective.fov = baseFov;
+      perspective.updateProjectionMatrix();
+    };
+
+    /** render → toDataURL → POST, then put the camera back. */
+    const shoot = () => {
+      if (cancelled) return;
+      void captureCanvas(gl, scene, camera)
+        .then(uploadEotmPhoto)
+        .catch(() => {})
+        .finally(() => {
+          if (cancelled) return;
+          restore();
+          useStore.getState().clearPendingCapture();
+        });
+    };
+
+    // Browsers pause rAF in a hidden tab, so the fly-in below would never reach
+    // t === 1: the shutter would not fire at all, and would then fire on focus —
+    // long after the server's 20 s window closed. Nobody is watching a fly-in
+    // they cannot see, so jump the camera to the shot and take it now.
+    if (document.hidden) {
+      camera.position.copy(shot.position);
+      camera.quaternion.copy(toQuat);
+      perspective.fov = shot.fov;
+      perspective.updateProjectionMatrix();
+      shoot();
+      return () => {
+        cancelled = true;
+        restore();
+      };
+    }
+
+    const step = () => {
+      const t = Math.min(1, (performance.now() - t0) / PHOTO_FLY_MS);
+      const e = t * t * (3 - 2 * t); // smoothstep
+      camera.position.lerpVectors(from, shot.position, e);
+      camera.quaternion.slerpQuaternions(fromQuat, toQuat, e);
+      perspective.fov = THREE.MathUtils.lerp(baseFov, shot.fov, e);
+      perspective.updateProjectionMatrix();
+      if (t < 1) {
+        raf = requestAnimationFrame(step);
+        return;
+      }
+      if (shooting) return;
+      shooting = true;
+      holdTimer = window.setTimeout(shoot, PHOTO_HOLD_MS);
+    };
+    raf = requestAnimationFrame(step);
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      clearTimeout(holdTimer);
+      // covers unmount mid-flight or mid-hold (pendingCapture cleared
+      // externally) as well as the normal capture-then-clear path above —
+      // restoring twice there is harmless.
+      restore();
+    };
+    // one effect per capture request; `winner` identity is the trigger
+  }, [winner, maxSeat, camera, gl, scene]);
+
+  return null;
+}
+
 export function CameraRig() {
   const mode = useStore((s) => s.cameraMode);
   const buildMode = useStore((s) => s.buildMode);
   const wallArtHover = useStore((s) => s.wallArtHover);
+  const pendingCapture = useStore((s) => s.pendingCapture);
   const povs = usePovList();
   const office = useStore((s) => s.office);
+  const maxSeat = Math.max(3, ...(office?.employees.map((e) => e.seat) ?? []));
   const camera = useThree((s) => s.camera);
   const size = useThree((s) => s.size);
   const lookTarget = useRef(new THREE.Vector3(0, 1, 0));
@@ -322,6 +449,11 @@ export function CameraRig() {
   }, [mode, focusPose]);
 
   useFrame((_, delta) => {
+    // a winner's photo owns the camera for its fly+hold: freeze pov/focus/glide
+    // lerps in place rather than fighting PhotoControls' own rAF writes for the
+    // same camera object. Nothing here needs unwinding on resume — lerping
+    // toward the same `pose`/`glide` target just continues where it left off.
+    if (pendingCapture) return;
     if (mode.kind === 'free' && glide.current) {
       const g = glide.current;
       const k = 1 - Math.exp(-delta * 4.5);
@@ -361,18 +493,22 @@ export function CameraRig() {
   return (
     <>
       {wallArtHover && <WallArtControls />}
+      {pendingCapture && <PhotoControls winner={pendingCapture} maxSeat={maxSeat} />}
       {controls}
     </>
   );
 }
 
 /**
- * Wheel → reframe the painting, while the cursor is over it. Mounted only on
- * hover, so it never competes with FocusControls' own wheel listener.
+ * Reframe the painting while the cursor is over it: wheel zooms, and holding
+ * ctrl turns mouse movement into a two-axis pan. Mounted only on hover, so it
+ * never competes with FocusControls' own wheel listener.
  *
- * This has to be a native non-passive listener rather than an R3F `onWheel`
- * prop: ctrl+wheel is the browser's page-zoom gesture, and only
- * `preventDefault` on a non-passive listener suppresses it.
+ * The wheel has to be a native non-passive listener rather than an R3F
+ * `onWheel` prop: ctrl+wheel is the browser's page-zoom gesture, and only
+ * `preventDefault` on a non-passive listener suppresses it. That still applies
+ * with ctrl held even though the wheel no longer pans — otherwise leaning on
+ * ctrl and brushing the wheel mid-pan zooms the whole page.
  */
 function WallArtControls() {
   const gl = useThree((s) => s.gl);
@@ -382,22 +518,42 @@ function WallArtControls() {
       const art = useStore.getState().office?.wallArt;
       if (!art) return; // the built-in artwork has no framing to change
       e.preventDefault();
-      if (e.ctrlKey) {
-        reframeWallArt({ panX: clampPan(art.panX + (e.deltaY > 0 ? PAN_PER_TICK : -PAN_PER_TICK)) });
-      } else {
-        reframeWallArt({ zoom: clampZoom(art.zoom * (e.deltaY > 0 ? 1 / ZOOM_PER_TICK : ZOOM_PER_TICK)) });
-      }
+      if (e.ctrlKey) return; // ctrl is the pan modifier; suppress page zoom and nothing else
+      reframeWallArt({ zoom: clampZoom(art.zoom * (e.deltaY > 0 ? 1 / ZOOM_PER_TICK : ZOOM_PER_TICK)) });
+    };
+    /**
+     * Ctrl + move drags the picture inside its frame, on both axes. The image
+     * follows the cursor — dragging right slides the picture right, which means
+     * sampling further *left*, hence the subtraction on both axes. There is
+     * nothing to pan on an axis with no overflow; `wallArtTransform` ignores the
+     * value there, so this needs no special case for it.
+     */
+    const onMouseMove = (e: MouseEvent) => {
+      if (!e.ctrlKey) return;
+      if (document.pointerLockElement) return; // pointer-locked movement steers the fly cam
+      const art = useStore.getState().office?.wallArt;
+      if (!art) return;
+      if (e.movementX === 0 && e.movementY === 0) return;
+      reframeWallArt({
+        panX: clampPan((art.panX ?? 0) - e.movementX * PAN_PER_PIXEL),
+        panY: clampPan((art.panY ?? 0) - e.movementY * PAN_PER_PIXEL),
+      });
     };
     const dom = gl.domElement;
     dom.addEventListener('wheel', onWheel, { passive: false });
-    return () => dom.removeEventListener('wheel', onWheel);
+    dom.addEventListener('mousemove', onMouseMove);
+    return () => {
+      dom.removeEventListener('wheel', onWheel);
+      dom.removeEventListener('mousemove', onMouseMove);
+    };
   }, [gl]);
 
   return null;
 }
 
 const ZOOM_PER_TICK = 1.12;
-const PAN_PER_TICK = 0.08;
+/** ~200 px of travel covers the full pan range, which feels like dragging the picture. */
+const PAN_PER_PIXEL = 0.005;
 
 const UP = new THREE.Vector3(0, 1, 0);
 const CENTER_NDC = new THREE.Vector2(0, 0);

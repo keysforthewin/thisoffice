@@ -276,6 +276,27 @@ describe('StatsAggregator persistence', () => {
   });
 });
 
+describe('StatsAggregator.recordGameWin', () => {
+  it('counts game wins per name and persists them', () => {
+    const s1 = new StatsAggregator(file);
+    s1.recordGameWin('Dana');
+    s1.recordGameWin('Dana');
+    s1.recordGameWin('Rey');
+    expect(s1.snapshot().gameWins).toEqual({ Dana: 2, Rey: 1 });
+    expect(s1.isDirty()).toBe(true);
+    s1.flush();
+
+    const s2 = new StatsAggregator(file);
+    expect(s2.snapshot().gameWins).toEqual({ Dana: 2, Rey: 1 });
+  });
+
+  it('ignores a blank winner name', () => {
+    const s = new StatsAggregator(file);
+    s.recordGameWin('   ');
+    expect(s.snapshot().gameWins).toEqual({});
+  });
+});
+
 describe('pricing.estCostUSD', () => {
   it('computes opus/sonnet family math', () => {
     const cost = estCostUSD({

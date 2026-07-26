@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '../store.ts';
 import { CharacterButton } from './picker/CharacterButton.tsx';
+import { setQuizEnabled } from '../quiz/quizApi.ts';
 
 const api = (path: string, method: string, body?: unknown) =>
   fetch(`/api${path}`, {
@@ -12,6 +13,7 @@ const api = (path: string, method: string, body?: unknown) =>
 export function SettingsPanel() {
   const office = useStore((s) => s.office);
   const setOpen = useStore((s) => s.setSettingsOpen);
+  const quizEnabled = useStore((s) => s.quiz?.enabled ?? false);
   const [bossName, setBossName] = useState<string | null>(null);
 
   if (!office) return null;
@@ -72,6 +74,27 @@ export function SettingsPanel() {
           />
         </div>
 
+        <h3 style={styles.sectionTitle}>20 Questions</h3>
+        <label style={{ ...styles.row, cursor: 'pointer', alignItems: 'flex-start' }}>
+          <input
+            type="checkbox"
+            checked={quizEnabled}
+            onChange={(e) => setQuizEnabled(e.target.checked)}
+            style={{ marginTop: 3 }}
+          />
+          <span style={{ fontSize: 13, lineHeight: 1.4 }}>
+            Enable 20 questions game
+            <span style={{ display: 'block', fontSize: 12, color: '#9aa4b0', marginTop: 4 }}>
+              An employee, the boss or Kat Person asks you yes/no questions to guess what you're thinking of.
+              Answer with the buttons above their head; whoever guesses right gets their picture on the wall.
+            </span>
+            <span style={{ display: 'block', fontSize: 12, color: '#c9a227', marginTop: 6 }}>
+              ⚠ Uses tokens. Each answer you give costs one Claude Haiku 4.5 call (up to 20 per round). Nothing is
+              called while this is unchecked.
+            </span>
+          </span>
+        </label>
+
         <h3 style={styles.sectionTitle}>Layout</h3>
         <button
           style={styles.hire}
@@ -88,7 +111,7 @@ export function SettingsPanel() {
         </button>
         <div style={{ fontSize: 12, color: '#9aa4b0', marginTop: 6 }}>
           Tip: press <b>B</b> in the free camera to rearrange the office. Click the painting behind the boss to hang
-          your own picture — scroll over it to zoom, ctrl+scroll to pan.
+          your own picture — scroll over it to zoom, hold ctrl and move the mouse to pan it around.
         </div>
       </div>
     </div>

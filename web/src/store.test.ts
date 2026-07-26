@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { OfficeState, UsageStats } from '../../shared/types.ts';
+import type { OfficeState, QuizState, UsageStats } from '../../shared/types.ts';
 import {
   enterFocusMode,
   resetInboxKeyForTest,
@@ -306,6 +306,7 @@ describe('lastActivity stamping', () => {
       byDay: {},
       hourCounts: {},
       tokensByDowHour: {},
+      gameWins: {},
     };
     useStore.getState().applyServerMsg({ type: 'stats', stats });
     expect(useStore.getState().stats).toEqual(stats);
@@ -462,5 +463,63 @@ describe('layout reference stability', () => {
     expect(useStore.getState().office!.layout).toBeUndefined();
     apply({ type: 'state', state: makeOffice({ layout: layout() } as never) });
     expect(useStore.getState().office!.layout).toBeDefined();
+  });
+});
+
+const quizState = (over: Partial<QuizState> = {}): QuizState => ({
+  enabled: true,
+  roundId: 'r1',
+  askedCount: 1,
+  answers: [],
+  question: {
+    id: 'q1',
+    text: 'Is it alive?',
+    guess: false,
+    asker: 'e1',
+    askerName: 'Dana',
+    askerSeat: 1,
+    at: '2026-07-26T00:00:00.000Z',
+  },
+  awaitingPhoto: false,
+  winner: null,
+  ...over,
+});
+
+describe('quiz messages', () => {
+  beforeEach(() => {
+    useStore.setState({ quiz: null, pendingCapture: null });
+  });
+
+  it('stores quiz state', () => {
+    useStore.getState().applyServerMsg({ type: 'quiz', quiz: quizState() });
+    expect(useStore.getState().quiz!.question!.text).toBe('Is it alive?');
+  });
+
+  it('records a capture request only when one is addressed to this client', () => {
+    useStore.getState().applyServerMsg({ type: 'quiz', quiz: quizState({ awaitingPhoto: true }) });
+    expect(useStore.getState().pendingCapture).toBeNull();
+
+    const winner = { name: 'Dana', variant: 'Mage', asker: 'e1', seat: 1, at: '2026-07-26T00:00:00.000Z' };
+    useStore.getState().applyServerMsg({ type: 'quiz', quiz: quizState({ awaitingPhoto: true, winner }), capture: winner });
+    expect(useStore.getState().pendingCapture).toEqual(winner);
+
+    useStore.getState().clearPendingCapture();
+    expect(useStore.getState().pendingCapture).toBeNull();
+  });
+
+  it('drops a pending capture when the server stops waiting for a photo', () => {
+    const winner = { name: 'Dana', variant: 'Mage', asker: 'e1', seat: 1, at: '2026-07-26T00:00:00.000Z' };
+    useStore.getState().applyServerMsg({ type: 'quiz', quiz: quizState({ awaitingPhoto: true, winner }), capture: winner });
+    useStore.getState().applyServerMsg({ type: 'quiz', quiz: quizState({ awaitingPhoto: false }) });
+    expect(useStore.getState().pendingCapture).toBeNull();
+  });
+
+  it('keeps a pending capture across a later broadcast that carries no capture field, while still awaiting a photo', () => {
+    const winner = { name: 'Dana', variant: 'Mage', asker: 'e1', seat: 1, at: '2026-07-26T00:00:00.000Z' };
+    useStore.getState().applyServerMsg({ type: 'quiz', quiz: quizState({ awaitingPhoto: true, winner }), capture: winner });
+    expect(useStore.getState().pendingCapture).toEqual(winner);
+
+    useStore.getState().applyServerMsg({ type: 'quiz', quiz: quizState({ awaitingPhoto: true, winner }) });
+    expect(useStore.getState().pendingCapture).toEqual(winner);
   });
 });

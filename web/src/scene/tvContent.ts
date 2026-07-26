@@ -249,7 +249,19 @@ export function tvPages(stats: UsageStats | null): TvPage[] {
     pages.push({ title: 'Busiest hours', value: '', sub: peak, chart: { kind: 'dowHours', grid } });
   }
 
-  // 16. Tracking since — always present when stats exist
+  // 16. Quiz champion — only once someone has actually won a round
+  const wins = Object.entries(stats.gameWins ?? {});
+  if (wins.length > 0) {
+    const [topName, topWins] = wins.reduce((best, cur) => (cur[1] > best[1] ? cur : best));
+    const total = wins.reduce((a, [, n]) => a + n, 0);
+    pages.push({
+      title: 'Quiz champion',
+      value: topName,
+      sub: `${topWins} win${topWins === 1 ? '' : 's'} · ${total} round${total === 1 ? '' : 's'} won`,
+    });
+  }
+
+  // 17. Tracking since — always present when stats exist
   const days = Math.max(0, Math.round((Date.now() - Date.parse(stats.trackingSince)) / 86_400_000));
   pages.push({
     title: 'Tracking since',

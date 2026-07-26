@@ -266,6 +266,7 @@ export const WALL_ITEMS: WallItemDef[] = [
   { id: 'windowLeft', wall: 'left', halfW: 1.9 },
   { id: 'wallArt', wall: 'back', halfW: 1.0 },
   { id: 'tv', wall: 'left', halfW: 1.5 },
+  { id: 'eotm', wall: 'back', halfW: 0.8 },
 ];
 
 function wallItem(id: string): WallItemDef | undefined {
@@ -283,6 +284,11 @@ export function defaultWallOffset(id: string, maxSeat: number): number {
       return 1.5;
     case 'wallArt':
       return width / 4 + 0.5;
+    case 'eotm':
+      // dead centre of the back wall, directly behind the boss. windowBack sits at
+      // -width/4 and wallArt at width/4 + 0.5, so 0 clears both half-widths at every
+      // room size (width is constant as the room grows).
+      return 0;
     case 'tv':
       // Left-wall `ox` maps to world z = centerZ - ox, so a SMALLER ox sits further
       // forward (nearer the employees). 5.0 is the furthest forward the TV can go:
