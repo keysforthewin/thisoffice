@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildQuizPrompt, parseQuizReply, fallbackQuestion } from './quizPrompt.ts';
 import type { QuizAnswer } from '../../shared/types.ts';
+import { QUIZ_QUESTION_MAX_CHARS } from '../../shared/types.ts';
 
 const a = (question: string, answer: 'yes' | 'no', guess = false): QuizAnswer => ({
   question,
@@ -70,7 +71,7 @@ describe('parseQuizReply', () => {
   it('truncates an over-long question', () => {
     const long = 'x'.repeat(400);
     const out = parseQuizReply(JSON.stringify({ question: long }), false);
-    expect(out!.text.length).toBeLessThanOrEqual(120);
+    expect(out!.text.length).toBeLessThanOrEqual(QUIZ_QUESTION_MAX_CHARS);
   });
 
   it('returns null for garbage, empty output, and a blank question', () => {
