@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { CharacterCatalog, Employee, OfficeState, InboxItem, ItemPose, OfficeLayout, StatusItem, TodoItem, ServerMsg, WallArtConfig, WallArtExt, WorkerStatus, StaffingSettings } from '../../shared/types.ts';
+import type { CharacterCatalog, Employee, OfficeState, InboxItem, ItemPose, OfficeLayout, PendingAsk, StatusItem, TodoItem, ServerMsg, WallArtConfig, WallArtExt, WorkerStatus, StaffingSettings } from '../../shared/types.ts';
 import { CHARACTER_VARIANTS, MONITOR_IMAGE_MARKER, WALL_ART_EXTS, WALL_ART_ZOOM_MAX, WALL_ART_ZOOM_MIN } from '../../shared/types.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -525,8 +525,20 @@ export class Office {
 
   /** Ephemeral (never persisted): some tailed session finished its turn and awaits the user. */
   setWaitingForInput(on: boolean) {
-    if (this.state.waitingForInput === on) return;
+    // pendingAsk must never outlive the beacon, so going dark clears it in the
+    // same broadcast — that covers every clear path the transcript already has
+    // (user line, sibling eviction, stale sweep) with no extra bookkeeping.
+    const dropAsk = !on && !!this.state.pendingAsk;
+    if (this.state.waitingForInput === on && !dropAsk) return;
     this.state.waitingForInput = on;
+    if (!on) delete this.state.pendingAsk;
+    this.broadcastState();
+  }
+
+  /** Ephemeral: the plan-approval / question menu the session is blocked on. */
+  setPendingAsk(ask: PendingAsk) {
+    if (this.state.pendingAsk?.id === ask.id) return;
+    this.state.pendingAsk = ask;
     this.broadcastState();
   }
 

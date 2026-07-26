@@ -306,6 +306,21 @@ describe('waiting for input', () => {
     expect(office.getState().waitingForInput).toBe(false);
     expect(msgs.length).toBe(2);
   });
+
+  it('a pending ask never outlives the beacon', () => {
+    const office = makeOffice();
+    const ask = { id: 'tu-1', kind: 'plan' as const, project: 'myapp', summary: 'Do it', options: [], at: '' };
+    office.setWaitingForInput(true);
+    office.setPendingAsk(ask);
+    expect(office.getState().pendingAsk).toEqual(ask);
+    const msgs: unknown[] = [];
+    office.subscribe((m) => msgs.push(m));
+    office.setPendingAsk(ask); // same id: no re-broadcast
+    expect(msgs.length).toBe(0);
+    office.setWaitingForInput(false);
+    expect(office.getState().pendingAsk).toBeUndefined();
+    expect(msgs.length).toBe(1);
+  });
 });
 
 describe('screen snapshots (monitor replay on connect)', () => {

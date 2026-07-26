@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Transcripts } from './transcript.ts';
+import { Transcripts, describeAsk } from './transcript.ts';
 import type { Office } from './office.ts';
 import type { ScreenStreamer } from './streamer.ts';
 
@@ -41,6 +41,7 @@ function makeHarness(opts: { queue?: boolean; hire?: boolean } = {}) {
     monitor: vi.fn((target: string, opts: any) => monitors.push({ target, ...opts })),
     setBossStatus: vi.fn(),
     setWaitingForInput: vi.fn(),
+    setPendingAsk: vi.fn(),
     pushInbox: vi.fn(),
     updateInboxText: vi.fn(),
     pushStatus: vi.fn(),
@@ -711,6 +712,77 @@ describe('waiting-for-input detection', () => {
     ]);
     const calls = vi.mocked(h.office.setWaitingForInput).mock.calls;
     expect(calls.every((c) => c[0] === false)).toBe(true);
+  });
+
+  /**
+   * The whole point of ASK_TOOLS: these responses carry stop_reason 'tool_use'
+   * like any other, so without the name check they'd switch the light OFF at the
+   * moment the session is blocked on the user.
+   */
+  function askTool(t: Transcripts, tu: Record<string, unknown>, file = MAIN) {
+    t.handleLines(file, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-x',
+        cwd: '/home/user/code/myapp',
+        message: { stop_reason: 'tool_use', content: [{ type: 'tool_use', ...tu }] },
+      }),
+    ]);
+  }
+
+  it('a pending plan approval marks the office as waiting', () => {
+    const h = makeHarness();
+    askTool(h.transcripts, { id: 'tu-plan', name: 'ExitPlanMode', input: { plan: '# Rewire the beacon\n\nsome detail' } });
+    expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([true]);
+    expect(vi.mocked(h.office.setPendingAsk).mock.lastCall?.[0]).toMatchObject({
+      id: 'tu-plan',
+      kind: 'plan',
+      summary: 'Rewire the beacon',
+      options: [],
+      project: 'myapp',
+    });
+  });
+
+  it('a pending question carries its menu labels in order', () => {
+    const h = makeHarness();
+    askTool(h.transcripts, {
+      id: 'tu-q',
+      name: 'AskUserQuestion',
+      input: {
+        questions: [
+          { question: 'Which approach?', options: [{ label: 'Rewrite' }, { label: 'Patch' }] },
+          { question: 'And the tests?', options: [{ label: 'Later' }] },
+        ],
+      },
+    });
+    expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([true]);
+    expect(vi.mocked(h.office.setPendingAsk).mock.lastCall?.[0]).toMatchObject({
+      kind: 'question',
+      summary: 'Which approach? (+1 more)',
+      options: ['Rewrite', 'Patch'],
+    });
+  });
+
+  it('answering a plan approval clears waiting', () => {
+    const h = makeHarness();
+    askTool(h.transcripts, { id: 'tu-plan', name: 'ExitPlanMode', input: { plan: '# Do it' } });
+    h.transcripts.handleLines(MAIN, [
+      line({
+        type: 'user',
+        sessionId: 'sess-x',
+        message: { content: [{ type: 'tool_result', tool_use_id: 'tu-plan', content: 'approved' }] },
+      }),
+    ]);
+    expect(vi.mocked(h.office.setWaitingForInput).mock.lastCall).toEqual([false]);
+  });
+
+  it('re-reading the same ask line does not re-announce it', () => {
+    const h = makeHarness();
+    const tu = { id: 'tu-plan', name: 'ExitPlanMode', input: { plan: '# Do it' } };
+    askTool(h.transcripts, tu);
+    askTool(h.transcripts, tu);
+    expect(vi.mocked(h.office.setPendingAsk).mock.calls).toHaveLength(1);
+    expect(vi.mocked(h.office.pushStatus).mock.calls.filter((c) => c[0] === 'ask')).toHaveLength(1);
   });
 
   it('a stale waiting session stops holding the light after the sweep', () => {
@@ -1406,5 +1478,36 @@ describe('user prompt display (no summary)', () => {
     const call = vi.mocked(h.office.pushInbox).mock.lastCall!;
     expect(call[1]).toBe('x'.repeat(157) + '…'); // preview: the real text, clipped
     expect(call[2]).toBe(long); // fullText: untouched, what the focus camera scrolls
+  });
+});
+
+describe('describeAsk', () => {
+  it('prefers the plan headline over its first prose line', () => {
+    const ask = describeAsk({ id: 'a', name: 'ExitPlanMode', input: { plan: '\n## Fix the light\n\nbody' } }, 'p');
+    expect(ask.summary).toBe('Fix the light');
+  });
+
+  it('falls back to the first prose line, then to a default', () => {
+    expect(describeAsk({ id: 'a', name: 'ExitPlanMode', input: { plan: 'just do it\nmore' } }, 'p').summary).toBe('just do it');
+    expect(describeAsk({ id: 'a', name: 'ExitPlanMode', input: {} }, 'p').summary).toBe('Plan ready for approval');
+  });
+
+  it('caps a long summary, leaving room for the +N suffix', () => {
+    const long = 'x'.repeat(300);
+    expect(describeAsk({ id: 'a', name: 'ExitPlanMode', input: { plan: long } }, 'p').summary).toHaveLength(120);
+    const q = describeAsk(
+      { id: 'a', name: 'AskUserQuestion', input: { questions: [{ question: long }, { question: 'b' }] } },
+      'p',
+    );
+    expect(q.summary).toHaveLength(120);
+    expect(q.summary.endsWith(' (+1 more)')).toBe(true);
+  });
+
+  it('drops option entries with no label rather than showing blanks', () => {
+    const ask = describeAsk(
+      { id: 'a', name: 'AskUserQuestion', input: { questions: [{ question: 'q', options: [{ label: 'A' }, {}] }] } },
+      'p',
+    );
+    expect(ask.options).toEqual(['A']);
   });
 });

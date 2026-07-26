@@ -2,7 +2,7 @@ import path from 'node:path';
 import type { Office } from './office.ts';
 import type { ScreenStreamer } from './streamer.ts';
 import type { StatsAggregator } from './stats.ts';
-import { MONITOR_IMAGE_MARKER, type Employee } from '../../shared/types.ts';
+import { ASK_SUMMARY_MAX_CHARS, MONITOR_IMAGE_MARKER, type Employee, type PendingAsk } from '../../shared/types.ts';
 
 /**
  * Turns raw Claude Code transcript JSONL lines into office activity.
@@ -58,6 +58,17 @@ const DIGEST_MAX_LINES = 20;
  */
 const WAITING_STOP_REASONS = new Set(['end_turn', 'stop_sequence', 'max_tokens', 'refusal']);
 /**
+ * Tools that are blocked on the user by definition, so their response's
+ * `stop_reason: 'tool_use'` lies about the session being busy — without this the
+ * plan-approval menu would switch the beacon *off* at the moment it should blink.
+ *
+ * Only these two, and only by name: a tool_use awaiting the permission dialog
+ * and one that is simply still running are byte-identical on disk. What tells
+ * them apart is the absence of a tool_result, and absence is not an event a
+ * tailer can observe.
+ */
+const ASK_TOOLS = new Set(['ExitPlanMode', 'AskUserQuestion']);
+/**
  * Backstop only: user-activity eviction handles resumes/forks in the same
  * project dir; this catches files eviction can't see (deleted transcripts,
  * renamed project dirs, missed watcher events).
@@ -99,6 +110,8 @@ export class Transcripts {
    * in the same project dir (see clearSiblingSessions).
    */
   private sessions = new Map<string, { waiting: boolean; lastEventAt: number }>();
+  /** tool_use id of the last published ask, so a re-read line can't double-announce it */
+  private lastAskId: string | null = null;
 
   constructor(
     private office: Office,
@@ -199,6 +212,25 @@ export class Transcripts {
     this.office.monitor(employee.id, { clear: true, title: fullTitle });
     this.streamer.enqueue(employee.id, body);
     this.office.finish(key);
+  }
+
+  /**
+   * Publish a user-blocking ask: the HUD card, a status-board row, and a
+   * monitor screen listing the menu as the CLI numbers it. Guarded by tool_use
+   * id because one response can reach us as several lines.
+   */
+  private showAsk(sessionId: string, project: string, ask: PendingAsk) {
+    if (this.lastAskId === ask.id) return;
+    this.lastAskId = ask.id;
+    const title = ask.kind === 'plan' ? 'Plan Ready' : 'Question';
+    this.office.setPendingAsk(ask);
+    this.office.pushStatus('ask', `${title} · ${ask.summary}`);
+    this.showEphemeral(
+      sessionId,
+      project,
+      title,
+      [ask.summary, ...ask.options.map((o, i) => `${i + 1}. ${o}`)].join('\n'),
+    );
   }
 
   /** Append a housekeeping one-liner; flushes as one "Office Chores" screen after a quiet gap. */
@@ -430,7 +462,9 @@ export class Transcripts {
     const toolUses = blocks.filter((b) => b.type === 'tool_use');
     // every content block of one response repeats the response's stop_reason,
     // so this just re-sets the same boolean — no dedupe needed
-    this.setSessionWaiting(file, WAITING_STOP_REASONS.has(line.message?.stop_reason));
+    const ask = toolUses.find((tu) => ASK_TOOLS.has(tu.name));
+    this.setSessionWaiting(file, !!ask || WAITING_STOP_REASONS.has(line.message?.stop_reason));
+    if (ask) this.showAsk(sessionId, project, describeAsk(ask, project));
     if (toolUses.length > 0) this.touchBoss();
     for (const tu of toolUses) this.startTool(sessionId, project, tu);
     this.onBossReply(sessionId, project, line, blocks);
@@ -923,6 +957,35 @@ function capLines(s: string, max: number): string {
   const lines = s.split('\n');
   if (lines.length <= max) return s;
   return lines.slice(0, max).join('\n') + '\n…';
+}
+
+/**
+ * Shape an ASK_TOOLS tool_use into the card the office shows. Pure so the
+ * summary/option shaping is testable without an Office.
+ *
+ * ExitPlanMode has no menu on the wire — the CLI supplies the accept/reject
+ * choices — so it carries the plan's headline and no options. AskUserQuestion
+ * carries its own labels, which are exactly the numbered menu in the terminal.
+ */
+export function describeAsk(tu: any, project: string): PendingAsk {
+  const base = { id: String(tu.id ?? ''), project, at: new Date().toISOString() };
+  if (tu.name === 'ExitPlanMode') {
+    const plan = String(tu.input?.plan ?? '');
+    // the first heading reads as a title; fall back to the first prose line
+    const head = plan.split('\n').find((l: string) => l.trim().startsWith('#'));
+    const line = head ?? plan.split('\n').find((l: string) => l.trim()) ?? 'Plan ready for approval';
+    return { ...base, kind: 'plan', summary: firstLine(line.replace(/^#+\s*/, ''), ASK_SUMMARY_MAX_CHARS), options: [] };
+  }
+  const questions: any[] = Array.isArray(tu.input?.questions) ? tu.input.questions : [];
+  const q = questions[0] ?? {};
+  const more = questions.length > 1 ? ` (+${questions.length - 1} more)` : '';
+  const text = String(q.question ?? 'Waiting on your answer');
+  return {
+    ...base,
+    kind: 'question',
+    summary: firstLine(text, ASK_SUMMARY_MAX_CHARS - more.length) + more,
+    options: (Array.isArray(q.options) ? q.options : []).map((o: any) => String(o?.label ?? '')).filter(Boolean),
+  };
 }
 
 function firstLine(s: string, max: number): string {

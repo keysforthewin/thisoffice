@@ -10,6 +10,7 @@ import { PerfPanel, PerfSampler } from './scene/PerfOverlay.tsx';
 import { ShadowControl } from './scene/ShadowControl.tsx';
 import { AdaptiveQuality, MAX_DPR } from './scene/AdaptiveQuality.tsx';
 import { QuestionBar } from './quiz/QuestionBar.tsx';
+import { AskBar } from './ask/AskBar.tsx';
 import { loadCatalog } from './characters/catalog.ts';
 
 export default function App() {
@@ -130,6 +131,8 @@ export default function App() {
       {mode.kind === 'free' && pointerLocked && <Crosshair />}
       {/* above the HUD help line, and the only way to answer while pointer-locked */}
       <QuestionBar />
+      {/* what the blinking boss-desk beacon is actually waiting on */}
+      <AskBar />
       <Hud connected={connected} mode={mode} onSettings={() => setSettingsOpen(true)} />
       {settingsOpen && <SettingsPanel />}
     </div>

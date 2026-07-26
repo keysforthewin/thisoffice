@@ -39,7 +39,7 @@ export interface StatusItem {
   at: string;
   /** one readable line, capped server-side */
   text: string;
-  kind: 'boss' | 'done' | 'hire' | 'plan' | 'away' | 'session' | 'quiz';
+  kind: 'boss' | 'done' | 'hire' | 'plan' | 'away' | 'session' | 'quiz' | 'ask';
 }
 
 export interface TodoItem {
@@ -167,6 +167,28 @@ export const QUIZ_MAX_QUESTIONS = 20;
 /** Questions stay one short line; anything longer is truncated. */
 export const QUIZ_QUESTION_MAX_CHARS = 120;
 
+/**
+ * A tool call that is unconditionally blocked on the user — plan approval or a
+ * question menu — surfaced so the office can show *what* is being asked, not
+ * just that something is. Informational only: the server tails transcripts and
+ * has no channel back into the session, so the options are shown for you to
+ * answer in your own terminal (see ASK_TOOLS in server/src/transcript.ts).
+ */
+export interface PendingAsk {
+  /** the tool_use id — unique per transcript, and the dedupe key */
+  id: string;
+  kind: 'plan' | 'question';
+  project: string;
+  /** one line: the plan's headline, or the question text */
+  summary: string;
+  /** menu labels in CLI order; empty for a plain plan approval */
+  options: string[];
+  at: string;
+}
+
+/** Asks and quiz questions stay one short line; anything longer is truncated. */
+export const ASK_SUMMARY_MAX_CHARS = 120;
+
 export interface OfficeState {
   /** HUD title; user-editable, defaults to "This Office" */
   officeName: string;
@@ -182,6 +204,11 @@ export interface OfficeState {
   katPerson: boolean;
   /** true while any tailed session has ended its turn and is waiting on the user (ephemeral) */
   waitingForInput: boolean;
+  /**
+   * What the session is blocked on, when that is knowable (ephemeral). Never
+   * outlives waitingForInput — Office clears it whenever the beacon goes dark.
+   */
+  pendingAsk?: PendingAsk;
   /** build-mode overrides; absent = default layout */
   layout?: OfficeLayout;
   /** uploaded painting behind the boss; absent = the built-in artwork */
