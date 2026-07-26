@@ -134,7 +134,7 @@ export interface BuildHold {
   valid: boolean;
 }
 
-interface AppStore {
+export interface AppStore {
   office: OfficeState | null;
   stats: UsageStats | null;
   quiz: QuizState | null;

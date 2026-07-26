@@ -10,10 +10,22 @@ const BUBBLE_Y = 3.0;
 /**
  * Where the speech bubble hangs for a given asker id. Kat Person is furniture,
  * not staff, so her anchor comes from the layout rather than a seat.
+ *
+ * `office` is narrowed to just `layout` (not the whole `OfficeState`) and the
+ * employee's seat is passed in separately, already resolved by the caller.
+ * That split exists for the store subscriber, not this function: `layout` is
+ * the one field of `office` the store keeps reference-stable across
+ * unrelated broadcasts (`stableLayout` in store.ts), while `office.employees`
+ * is a fresh array on every message (ws.ts JSON.parses each one). Deriving
+ * `seat` inside a selector — rather than handing this function the whole
+ * employees array — turns that per-message noise into a plain number the
+ * store can compare with `Object.is`, so the bubble only re-renders when the
+ * asker's actual seat changes.
  */
 export function askerAnchor(
   asker: string,
-  office: OfficeState | null,
+  seat: number | null,
+  office: Pick<OfficeState, 'layout'> | null,
   maxSeat: number,
 ): [number, number, number] | null {
   if (!office) return null;
@@ -23,8 +35,8 @@ export function askerAnchor(
     const item = resolveFurniture(office.layout, maxSeat).find((f) => f.id === 'catPerson');
     return item ? [item.pose.x, BUBBLE_Y, item.pose.z] : null;
   }
-  const seat = asker === 'boss' ? 0 : office.employees.find((e) => e.id === asker)?.seat;
-  if (seat === undefined) return null;
-  const { position } = resolveSeat(office.layout, seat, maxSeat);
+  const resolvedSeat = asker === 'boss' ? 0 : seat;
+  if (resolvedSeat === null) return null;
+  const { position } = resolveSeat(office.layout, resolvedSeat, maxSeat);
   return [position.x, BUBBLE_Y, position.z];
 }

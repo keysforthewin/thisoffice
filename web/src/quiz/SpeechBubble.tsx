@@ -1,7 +1,24 @@
 import { Html } from '@react-three/drei';
-import { useStore } from '../store.ts';
+import { useStore, type AppStore } from '../store.ts';
 import { askerAnchor } from './askerAnchor.ts';
 import { answerQuiz } from './quizApi.ts';
+
+/**
+ * The current asker's seat, as a plain number (or null) rather than a slice of
+ * `employees`. `ws.ts` JSON.parses every server message, so `office.employees`
+ * is a fresh array reference on every broadcast even when nothing about it
+ * changed; a selector that returned that array (or found-and-returned an
+ * Employee object from it) would make the bubble re-render on every status
+ * push, hire, or monitor-title change, not just ones that move this asker's
+ * seat. Reducing the subscription to the one number this component actually
+ * needs lets zustand's default `Object.is` comparison do its job. Exported so
+ * a store-level test can assert on it without rendering the component.
+ */
+export function selectAskerSeat(s: AppStore): number | null {
+  const asker = s.quiz?.question?.asker;
+  if (!asker || asker === 'boss' || asker === 'catPerson') return null;
+  return s.office?.employees.find((e) => e.id === asker)?.seat ?? null;
+}
 
 /**
  * The office's 20 Questions prompt, above whoever is asking.
@@ -12,12 +29,17 @@ import { answerQuiz } from './quizApi.ts';
  */
 export function SpeechBubble({ maxSeat }: { maxSeat: number }) {
   const question = useStore((s) => s.quiz?.question ?? null);
-  const office = useStore((s) => s.office);
   const buildMode = useStore((s) => s.buildMode);
+  // `layout` is the one field of `office` the store keeps reference-stable
+  // across unrelated broadcasts (`stableLayout` in store.ts); `office` itself
+  // is not.
+  const layout = useStore((s) => s.office?.layout);
+  const hasOffice = useStore((s) => s.office != null);
+  const askerSeat = useStore(selectAskerSeat);
 
   // build mode is for rearranging the room; a click-through bubble is in the way
   if (!question || buildMode) return null;
-  const anchor = askerAnchor(question.asker, office, maxSeat);
+  const anchor = askerAnchor(question.asker, askerSeat, hasOffice ? { layout } : null, maxSeat);
   if (!anchor) return null;
 
   return (
