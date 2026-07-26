@@ -228,7 +228,8 @@ const SCROLL_ROWS_PER_TICK = 3;
 
 /**
  * Wheel → scrollback while the camera is parked on a monitor. Employees scroll
- * their clear-surviving history buffer; the boss scrolls the full inbox log.
+ * their clear-surviving history buffer; the boss scrolls the full inbox log;
+ * the stats TV pages through its stat pages (±1 per tick, wrapping).
  */
 function FocusControls({ target }: { target: string }) {
   const gl = useThree((s) => s.gl);
@@ -239,6 +240,11 @@ function FocusControls({ target }: { target: string }) {
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const st = useStore.getState();
+      if (target === 'tv') {
+        // signed page offset — tvContent wraps it, so no clamping
+        st.setFocusScroll(st.focusScroll + (e.deltaY > 0 ? 1 : -1));
+        return;
+      }
       const raw = target === 'boss' ? bossScreenLines(st.office?.inbox ?? []) : (st.monitorHistory[target] ?? []);
       const total = wrapLines(raw, MONITOR_COLS).length;
       const step = e.deltaY < 0 ? SCROLL_ROWS_PER_TICK : -SCROLL_ROWS_PER_TICK;
