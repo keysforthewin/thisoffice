@@ -194,7 +194,10 @@ export class Quiz {
       at: new Date(this.now()).toISOString(),
     };
     this.state.question = question;
-    this.state.askedCount++;
+    // idempotent under re-issue (e.g. a toggle-off discards an unanswered question and
+    // re-enabling asks a fresh one): always derive from answers.length rather than
+    // incrementing, so repeated disable/enable cycles can't inflate the count.
+    this.state.askedCount = this.state.answers.length + 1;
     this.publish();
   }
 

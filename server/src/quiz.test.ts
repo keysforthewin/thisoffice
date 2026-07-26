@@ -287,6 +287,27 @@ describe('Quiz', () => {
     expect(h.quiz.getState().answers).toHaveLength(1);
   });
 
+  it('keeps askedCount consistent with history across repeated toggling', async () => {
+    const h = harness();
+    h.quiz.setEnabled(true);
+    await settle();
+    h.answerCurrent('yes');
+    await settle();
+    expect(h.quiz.getState().answers).toHaveLength(1);
+
+    // toggling off and on repeatedly discards the unanswered bubble and re-asks;
+    // askedCount must not inflate on each re-issue
+    for (let i = 0; i < 14; i++) {
+      h.quiz.setEnabled(false);
+      h.quiz.setEnabled(true);
+      await settle();
+    }
+    const st = h.quiz.getState();
+    expect(st.answers).toHaveLength(1);
+    expect(st.askedCount).toBe(st.answers.length + 1);
+    expect(st.question!.guess).toBe(false); // nowhere near a forced guess with only 1 answer
+  });
+
   it('round-trips through the data file, dropping awaitingPhoto', async () => {
     const dataFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'quiz-')), 'quiz.json');
     const h = harness({ dataFile, ask: vi.fn(async () => '{"question":"Is it a cat?","guess":true}') });
