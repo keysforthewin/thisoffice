@@ -8,6 +8,10 @@ and the office hires more staff when it gets busy.
 
 ![A monitor up close](docs/screenshots/monitor.png)
 
+There's a TV that keeps track of your Claude usage stats:
+
+![The stats TV](docs/screenshots/tv.png)
+
 ## Run
 
     docker compose up
