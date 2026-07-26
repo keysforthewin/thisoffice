@@ -8,6 +8,7 @@ import { SettingsPanel } from './settings/SettingsPanel.tsx';
 import { PerfPanel, PerfSampler } from './scene/PerfOverlay.tsx';
 import { ShadowControl } from './scene/ShadowControl.tsx';
 import { AdaptiveQuality, MAX_DPR } from './scene/AdaptiveQuality.tsx';
+import { QuestionBar } from './quiz/QuestionBar.tsx';
 import { loadCatalog } from './characters/catalog.ts';
 
 export default function App() {
@@ -124,6 +125,8 @@ export default function App() {
 
       {perfOverlay && <PerfPanel />}
       {mode.kind === 'free' && pointerLocked && <Crosshair />}
+      {/* above the HUD help line, and the only way to answer while pointer-locked */}
+      <QuestionBar />
       <Hud connected={connected} mode={mode} onSettings={() => setSettingsOpen(true)} />
       {settingsOpen && <SettingsPanel />}
     </div>

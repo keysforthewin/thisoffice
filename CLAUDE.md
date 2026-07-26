@@ -49,7 +49,13 @@ via `haiku.ts` (`claude -p --no-session-persistence`, the same feedback-loop gua
 the old summarizer needed). Quiz state rides its own `{type:'quiz'}` message
 rather than `OfficeState`, so a question every turn doesn't rebroadcast the whole
 office and defeat `stableLayout`. A random employee/boss/Kat Person asks; the
-player answers YES/NO on a drei `<Html>` bubble; a YES to a guess wins.
+player answers YES/NO on a drei `<Html>` bubble, on a screen-bottom bar
+(`quiz/QuestionBar.tsx`, which shows the question in full above the HUD help
+line), or with the **Y**/**N** keys — the keys are bound by that bar, so they
+only exist while a question is open, and they are the only way to answer while
+the fly camera holds pointer lock, since the browser routes clicks to the camera
+then. A YES to a guess wins. The award frame is gated on `quiz.enabled`, so an
+office that never plays shows a plain wall rather than an empty award frame.
 Guessing is forced from Q15 and the office concedes at Q20. On a win the server
 asks exactly ONE client (assigned, not elected) to fly the camera to a group shot
 and POST a canvas capture to `/api/decor/eotm`; that photo hangs in the `eotm`

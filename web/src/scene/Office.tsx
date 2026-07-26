@@ -203,6 +203,7 @@ export function Office() {
   const leftOx = useWallOffset('windowLeft', maxSeat);
   const artOx = useWallOffset('wallArt', maxSeat);
   const eotmOx = useWallOffset('eotm', maxSeat);
+  const quizEnabled = useStore((s) => s.quiz?.enabled ?? false);
   const tvOx = useWallOffset('tv', maxSeat);
   const wallItem = (id: string) => WALL_ITEMS.find((w) => w.id === id)!;
 
@@ -299,7 +300,10 @@ export function Office() {
       {buildMode && (
         <group position={[0, 0, backZ]}>
           <WallHandle id="wallArt" wall="back" ox={artOx} oy={2.15} w={wallItem('wallArt').halfW * 2} h={1.7} />
-          <WallHandle id="eotm" wall="back" ox={eotmOx} oy={2.15} w={wallItem('eotm').halfW * 2} h={1.3} />
+          {/* no handle for a frame that isn't hung — the game owns it */}
+          {quizEnabled && (
+            <WallHandle id="eotm" wall="back" ox={eotmOx} oy={2.15} w={wallItem('eotm').halfW * 2} h={1.3} />
+          )}
         </group>
       )}
 

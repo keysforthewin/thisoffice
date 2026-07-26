@@ -41,13 +41,22 @@ function useCaptionTexture(name: string): THREE.CanvasTexture {
  * The Employee of the Month photo behind the boss: a live screenshot of the
  * winner taken the moment they won, replaced by the next winner. Unlike the
  * painting beside it this is not clickable — it is earned, not uploaded.
+ *
+ * The whole frame belongs to the game, so it disappears with it: an office
+ * that never plays shows a plain wall rather than an empty award frame.
  */
 export function EotmFrame({ position }: { position: [number, number, number] }) {
+  const enabled = useStore((s) => s.quiz?.enabled ?? false);
   const photo = useStore((s) => s.quiz?.photo);
   // primitives, not the object: the quiz state arrives as a fresh object on every broadcast
   const v = photo?.v;
   const name = photo?.name ?? '';
+  // called before the early returns below to keep hook order stable across
+  // enable/disable; the texture is a 512×96 canvas, so holding it while the
+  // game is off costs nothing worth branching for
   const caption = useCaptionTexture(name);
+
+  if (!enabled) return null;
 
   if (!v) {
     // no winner yet: an empty frame, so the wall doesn't have a hole in it
