@@ -29,7 +29,10 @@ Server pipeline (`server/src/`):
 - `characters.ts` + `index.ts` — HTTP API for state/catalog/settings and uploaded character storage (`data/characters/`, gitignored — Mixamo assets must never be committed).
 
 Web (`web/src/`):
-- `ws.ts` → `store.ts` (zustand) — all server messages flow through `applyServerMsg`; monitor text lives in the store, rendered as in-world CanvasTextures (`scene/MonitorScreen.tsx`). No speech bubbles by design — all activity renders on monitors. Two wall boards on the right wall: the todo board shows TodoWrite and TaskCreate/TaskUpdate lists (`whiteboardContent.ts`; an all-completed list expires after 10 min via `todos.at`), and the status board shows the rolling server status feed plus who's working (`statusBoardContent.ts`, always visible).
+- `ws.ts` → `store.ts` (zustand) — all server messages flow through `applyServerMsg`; monitor text lives in the store, rendered as in-world CanvasTextures
+(`scene/MonitorScreen.tsx`). All *activity* renders on monitors — the sole
+speech bubble in the scene is the 20 Questions prompt (`quiz/SpeechBubble.tsx`),
+which is game UI needing two clickable targets, not activity telemetry. Two wall boards on the right wall: the todo board shows TodoWrite and TaskCreate/TaskUpdate lists (`whiteboardContent.ts`; an all-completed list expires after 10 min via `todos.at`), and the status board shows the rolling server status feed plus who's working (`statusBoardContent.ts`, always visible).
 - `scene/` — Office, Desk, Person, CameraRig (free orbit + POV tour), NameTag (camera-facing canvas sprites). Movie-mode shot selection lives in `movieShots.ts` as an authored archetype library with per-shot motion (push-ins, orbit arcs, trucks, board pans, fov zooms — interpolated in `MovieCamera.tsx`, which restores the base fov on exit): each cut picks ONE weighted primary subject (boss/wall-boards ×2) and requires LOS to it along the whole camera path (start/mid/end); facing-compatible neighbors are framed opportunistically. Candidates are validated (occluders, ≥3.5 u from the previous shot's end) *before* a cut commits, then the shot is locked for ≥2.5 s.
 - `settings/picker/` — searchable character picker with live 3D preview; thumbnails are runtime snapshots cached in localStorage (bump `THUMB_REV` in useThumbnails.tsx when framing changes).
 - `importer/` — in-browser Mixamo FBX→GLB conversion.
@@ -38,6 +41,22 @@ Web (`web/src/`):
 Images an agent Reads (e.g. PNGs) reach the monitor as a `⟦IMG⟧<dataURL>` marker line (`MONITOR_IMAGE_MARKER` in shared/types.ts) through the normal streamer queue; the client store intercepts it.
 
 The painting behind the boss is user-replaceable: clicking it opens a file picker (`web/src/wallArt.ts`), the raw image POSTs to `/api/decor/wallart` and is stored in `data/decor/` (gitignored, like uploaded characters); only the metadata — extension plus zoom/pan framing — rides `OfficeState.wallArt`. Hovering it mounts a wheel handler (`WallArtControls` in CameraRig.tsx): wheel zooms, ctrl+wheel pans, both applied optimistically and PUT on a trailing debounce. Resetting the layout from the settings panel deletes the image and restores the built-in artwork.
+
+The optional **20 Questions** game (settings checkbox, off by default, zero LLM
+calls while off) lives in `server/src/quiz.ts` — a persisted state machine
+(`data/quiz.json`) that asks Claude Haiku 4.5 for one question per answered turn
+via `haiku.ts` (`claude -p --no-session-persistence`, the same feedback-loop guard
+the old summarizer needed). Quiz state rides its own `{type:'quiz'}` message
+rather than `OfficeState`, so a question every turn doesn't rebroadcast the whole
+office and defeat `stableLayout`. A random employee/boss/Kat Person asks; the
+player answers YES/NO on a drei `<Html>` bubble; a YES to a guess wins.
+Guessing is forced from Q15 and the office concedes at Q20. On a win the server
+asks exactly ONE client (assigned, not elected) to fly the camera to a group shot
+and POST a canvas capture to `/api/decor/eotm`; that photo hangs in the `eotm`
+wall frame with a plaque until the next winner. Failure of any kind still credits
+the win — `gameWins` on `UsageStats` drives a TV champion page. Screenshots
+render-then-`toDataURL` in one tick precisely so `preserveDrawingBuffer` can stay
+off.
 
 ## Gotchas
 
