@@ -1,9 +1,9 @@
 import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
-import { useFrame } from '@react-three/fiber';
-import { useStore } from '../store.ts';
+import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
+import { enterFocusMode, useStore, type CameraPose } from '../store.ts';
 import { FurnitureModel } from './Desk.tsx';
-import { tvContent, TV_PAGE_MS, type TvPage } from './tvContent.ts';
+import { tvContent, tvPageIndex, TV_PAGE_MS, type TvPage } from './tvContent.ts';
 
 const W = 640;
 const H = 360;
@@ -44,16 +44,52 @@ export function WallTV({ position, rotationY = 0 }: Props) {
   }, []);
 
   const drawnKey = useRef('');
+  const gl = useThree((s) => s.gl);
+  /** clock page captured when focus on the TV begins; null while unfocused */
+  const focusBase = useRef<number | null>(null);
 
   useFrame(({ clock }) => {
-    const page = Math.floor((clock.elapsedTime * 1000) / TV_PAGE_MS);
-    const content = tvContent(useStore.getState().stats, page);
+    const autoPage = Math.floor((clock.elapsedTime * 1000) / TV_PAGE_MS);
+    const st = useStore.getState();
+    const focused = st.cameraMode.kind === 'focus' && st.cameraMode.target === 'tv';
+    if (!focused) focusBase.current = null;
+    else if (focusBase.current === null) focusBase.current = autoPage;
+    const page = tvPageIndex(autoPage, focusBase.current, st.focusScroll);
+    const content = tvContent(st.stats, page);
     const key = JSON.stringify(content);
     if (key === drawnKey.current) return;
     drawnKey.current = key;
     drawTvPage(ctx, content.page, content.pageNum, content.pageCount);
     texture.needsUpdate = true;
   });
+
+  const focusTv = (e: ThreeEvent<PointerEvent>) => {
+    // while pointer-locked, clicks steer the fly cam — never steal them
+    if (document.pointerLockElement) return;
+    // in build mode a click drags the TV along the wall, never focuses
+    if (useStore.getState().buildMode) return;
+    e.stopPropagation();
+    const st = useStore.getState();
+    const cur = st.cameraMode;
+    if (cur.kind === 'focus' && cur.target === 'tv') return;
+    const pose: CameraPose = {
+      position: e.camera.position.toArray() as [number, number, number],
+      quaternion: e.camera.quaternion.toArray() as [number, number, number, number],
+    };
+    gl.domElement.style.cursor = '';
+    st.setCameraMode(enterFocusMode(cur, 'tv', pose));
+  };
+  const hoverStart = () => {
+    if (document.pointerLockElement) return; // crosshair raycast owns hover while flying
+    if (useStore.getState().buildMode) return; // build mode's own cursor feedback wins
+    useStore.getState().setMonitorHover('tv');
+    gl.domElement.style.cursor = 'pointer';
+  };
+  const hoverEnd = () => {
+    const st = useStore.getState();
+    if (st.monitorHover === 'tv') st.setMonitorHover(null);
+    gl.domElement.style.cursor = '';
+  };
 
   return (
     <group position={position} rotation={[0, rotationY, 0]}>
@@ -63,7 +99,13 @@ export function WallTV({ position, rotationY = 0 }: Props) {
         position={[0, -TV_HALF_HEIGHT, -TV_HALF_DEPTH]}
       />
       {/* screen: 16:9 plane just in front of the (flush-to-wall) panel face */}
-      <mesh position={[0, 0, 0.03]}>
+      <mesh
+        position={[0, 0, 0.03]}
+        userData={{ monitorTarget: 'tv' }}
+        onPointerDown={focusTv}
+        onPointerEnter={hoverStart}
+        onPointerLeave={hoverEnd}
+      >
         <planeGeometry args={[TV_SCREEN_W, TV_SCREEN_H]} />
         <meshBasicMaterial map={texture} toneMapped={false} />
       </mesh>
