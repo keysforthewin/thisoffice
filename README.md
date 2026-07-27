@@ -3,29 +3,26 @@
 A Claude visualizer. Your live Claude Code sessions play out as a 3D office:
 prompts arrive on the boss's monitor, tool calls run on the employees' screens.
 
-!\[The office](docs/screenshots/office.png)
+![The office](docs/screenshots/office.png)
 
-!\[A monitor up close](docs/screenshots/monitor.png)
+![A monitor up close](docs/screenshots/monitor.png)
 
 There's a TV that keeps track of your Claude usage stats:
 
-!\[The stats TV](docs/screenshots/tv.png)
-
-
+![The stats TV](docs/screenshots/tv.png)
 
 ## Run
 
-&#x20;   docker compose up
-
+```
+docker compose up
+```
 
 Open http://localhost:5173.
-
-
 
 ## How It Works
 
 Claude Code writes a transcript of every session to your local Claude home
-folder (`\~/.claude/projects/`). This Office tails those transcript files and
+folder (`~/.claude/projects/`). This Office tails those transcript files and
 turns what it finds into office activity: your prompts land on the boss's
 monitor, every tool call lights up an employee's screen, and subagents get
 desks of their own.
@@ -35,17 +32,11 @@ session on your machine — every project, every terminal, running or resumed �
 and visualizes all of them out of the box. No hooks, no wrappers, no per-project
 setup: just the one startup command above.
 
-
-
 You can put your own characters in the office. Download a character from Mixamo
 and drop it on the Import tab in the settings, or model one in Blender on the
 skeleton the office provides — see [docs/blender-characters.md](docs/blender-characters.md),
 which walks through wiring Blender up to Claude so it builds the character for
 you.
-
-
-
-
 
 ## Features
 
@@ -127,11 +118,12 @@ occlusion — press **P** for the fps / draw-call / triangle overlay.
 
 ## Advanced
 
-Change the ports by setting `WEB\_PORT` (the page) and `SERVER\_PORT` before
+Change the ports by setting `WEB_PORT` (the page) and `SERVER_PORT` before
 starting:
 
-&#x20;   WEB\_PORT=8080 SERVER\_PORT=4700 docker compose up
-
+```
+WEB_PORT=8080 SERVER_PORT=4700 docker compose up
+```
 
 Characters and furniture are CC0 asset packs — see ATTRIBUTION.md.
 
