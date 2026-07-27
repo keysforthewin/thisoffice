@@ -3,7 +3,15 @@ import * as THREE from 'three';
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { enterFocusMode, useStore, type CameraPose } from '../store.ts';
 import { FurnitureModel } from './Desk.tsx';
-import { DOW_LABELS, formatTokens, tvContent, tvPageIndex, TV_PAGE_MS, type TvPage } from './tvContent.ts';
+import {
+  DOW_LABELS,
+  formatTokens,
+  tvContent,
+  tvPageIndex,
+  TV_PAGE_MS,
+  type BarChart,
+  type TvPage,
+} from './tvContent.ts';
 import type { UsageStats } from '../../../shared/types.ts';
 
 const W = 640;
@@ -136,15 +144,28 @@ export function drawTvPage(ctx: CanvasRenderingContext2D, page: TvPage, pageNum:
   ctx.textAlign = 'center';
   drawLetterspaced(ctx, page.title.toUpperCase(), W / 2, 76, 2.5);
 
-  if (page.chart) {
-    // chart pages trade the big value for the plot; the sub line moves up under the title
+  if (page.chart?.kind === 'ranks') {
+    // a rank list hangs *under* the headline rather than replacing it: the total
+    // is still the point of the card, the leaderboard is the breakdown
+    ctx.fillStyle = VALUE_COLOR;
+    ctx.font = 'bold 50px ui-monospace, Menlo, monospace';
+    ctx.fillText(page.value, W / 2, 122);
+    drawRankList(ctx, page.chart.rows, page.sub);
+  } else if (page.chart) {
+    // other chart pages trade the big value for the plot; the headline moves up under the title
+    if (page.value) {
+      ctx.fillStyle = VALUE_COLOR;
+      ctx.font = 'bold 32px ui-monospace, Menlo, monospace';
+      ctx.fillText(page.value, W / 2, 112);
+    }
     if (page.sub) {
       ctx.fillStyle = SUB_COLOR;
       ctx.font = '20px ui-monospace, Menlo, monospace';
-      ctx.fillText(page.sub, W / 2, 104);
+      ctx.fillText(page.sub, W / 2, page.value ? 138 : 104);
     }
     if (page.chart.kind === 'dowHours') drawDowHourChart(ctx, page.chart.grid);
-    else drawPieChart(ctx, page.chart.slices);
+    else if (page.chart.kind === 'pie') drawPieChart(ctx, page.chart.slices);
+    else drawBarChart(ctx, page.chart, page.value ? 160 : 130);
   } else {
     // value: huge centered, shrink-to-fit if wider than the canvas
     const maxValueWidth = W - 60;
@@ -246,6 +267,96 @@ function drawDowHourChart(ctx: CanvasRenderingContext2D, grid: number[][]) {
     ctx.fillText(it.label, x + chip + 5, y);
     x += it.w + gap;
   });
+  ctx.textAlign = 'center';
+}
+
+/** Ranked bars, one per model: a magnitude above each and its name underneath. */
+function drawBarChart(ctx: CanvasRenderingContext2D, chart: BarChart, top: number) {
+  const bars = chart.bars.filter((b) => b.value > 0);
+  if (bars.length === 0) return;
+  const max = Math.max(...bars.map((b) => b.value));
+  if (max <= 0) return;
+
+  const left = 48;
+  const right = W - 48;
+  const baseline = 268;
+  const pitch = (right - left) / bars.length;
+  const barW = Math.max(4, Math.min(72, Math.floor(pitch) - (bars.length > 8 ? 6 : 12)));
+  const scale = (baseline - top) / max;
+  const fmt = (n: number) => (chart.format === 'tokens' ? formatTokens(n) : String(n));
+
+  ctx.fillStyle = AXIS_COLOR;
+  ctx.fillRect(left, baseline, right - left, 1);
+
+  bars.forEach((b, i) => {
+    const x = Math.round(left + i * pitch + (pitch - barW) / 2);
+    // every counted bar stays visible however small its share of the leader
+    const h = Math.max(2, b.value * scale);
+    ctx.fillStyle = DOW_COLORS[i % DOW_COLORS.length];
+    ctx.fillRect(x, baseline - h, barW, h);
+
+    ctx.textAlign = 'center';
+    ctx.font = '14px ui-monospace, Menlo, monospace';
+    ctx.fillStyle = SUB_COLOR;
+    ctx.fillText(fmt(b.value), x + barW / 2, baseline - h - 7);
+    ctx.fillText(clipToWidth(ctx, b.label, pitch - 4), x + barW / 2, baseline + 20);
+  });
+  ctx.textAlign = 'center';
+}
+
+/**
+ * Numbered leaderboard: `1.` rank column, full tool name, right-aligned count.
+ * Names are never truncated — the rank column and the count column are pinned,
+ * and the row pitch is what gives 10 rows the space to stay legible between the
+ * headline total and the page dots.
+ */
+function drawRankList(ctx: CanvasRenderingContext2D, rows: { label: string; value: number }[], tail?: string) {
+  const rowH = 17;
+  const top = 150;
+  const rankX = 160;
+  const nameX = 196;
+  const countX = W - 160;
+
+  // the counts are right-aligned at countX, so the name column has to stop short
+  // of the widest count they can grow to, not of countX itself
+  const nameWidth = countX - nameX - 60;
+  rows.forEach((row, i) => {
+    const y = top + i * rowH;
+    ctx.font = '15px ui-monospace, Menlo, monospace';
+    ctx.textAlign = 'right';
+    ctx.fillStyle = TITLE_COLOR;
+    ctx.fillText(`${i + 1}.`, rankX, y);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = VALUE_COLOR;
+    // names are never clipped — an over-long one (an MCP tool carries its whole
+    // server prefix, 50+ chars) drops a size and is then squeezed horizontally
+    // to whatever it takes, since a condensed name still reads and a collision
+    // with the count column does not
+    if (ctx.measureText(row.label).width <= nameWidth) {
+      ctx.fillText(row.label, nameX, y);
+    } else {
+      ctx.font = '13px ui-monospace, Menlo, monospace';
+      const w = ctx.measureText(row.label).width;
+      ctx.save();
+      ctx.translate(nameX, y);
+      if (w > nameWidth) ctx.scale(nameWidth / w, 1);
+      ctx.fillText(row.label, 0, 0);
+      ctx.restore();
+      ctx.font = '15px ui-monospace, Menlo, monospace';
+    }
+    ctx.textAlign = 'right';
+    ctx.fillStyle = SUB_COLOR;
+    ctx.fillText(String(row.value), countX, y);
+  });
+
+  // the untallied tail rides as a dim extra row so it lines up with the list
+  // instead of floating between the last name and the page dots
+  if (tail) {
+    ctx.textAlign = 'left';
+    ctx.font = '14px ui-monospace, Menlo, monospace';
+    ctx.fillStyle = TITLE_COLOR;
+    ctx.fillText(tail, nameX, top + rows.length * rowH + 4);
+  }
   ctx.textAlign = 'center';
 }
 

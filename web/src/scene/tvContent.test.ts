@@ -3,13 +3,17 @@ import type { UsageStats } from '../../../shared/types.ts';
 import {
   formatDuration,
   formatTokens,
+  MAX_BARS,
+  MAX_RANKS,
   formatUSD,
   localDowHourGrid,
   tvContent,
   tvPageIndex,
   tvPages,
   topEmployees,
+  type BarChart,
   type DowHourChart,
+  type RankList,
 } from './tvContent.ts';
 
 function baseStats(overrides: Partial<UsageStats> = {}): UsageStats {
@@ -115,7 +119,67 @@ describe('tvPages', () => {
     });
     const top = tvPages(stats).find((p) => p.title === 'Top models')!;
     expect(top.value).toBe('sonnet-4-5');
-    expect(top.sub).toBe('haiku-4-5');
+    expect(top.chart).toEqual({
+      kind: 'bars',
+      format: 'tokens',
+      bars: [
+        { label: 'sonnet-4-5', value: 1_000_000 },
+        { label: 'haiku-4-5', value: 100 },
+      ],
+    });
+  });
+
+  it('bars every model by total tokens (cache included) and drops the never-used ones', () => {
+    const stats = baseStats({
+      tokensByModel: {
+        'claude-opus-4-1-20250805': { input: 10, output: 10, cacheRead: 1000, cacheCreation: 0 },
+        'claude-sonnet-4-5-20250929': { input: 500, output: 0, cacheRead: 0, cacheCreation: 0 },
+        'claude-haiku-4-5-20251001': { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+      },
+    });
+    const page = tvPages(stats).find((p) => p.title === 'Top models')!;
+    const chart = page.chart as BarChart;
+    expect(chart.bars).toEqual([
+      { label: 'opus-4-1', value: 1020 },
+      { label: 'sonnet-4-5', value: 500 },
+    ]);
+    expect(page.value).toBe('opus-4-1');
+    expect(page.sub).toBeUndefined();
+  });
+
+  it('trims the model bars to MAX_BARS and says so in the sub line', () => {
+    const tokensByModel: Record<string, { input: number; output: number; cacheRead: number; cacheCreation: number }> = {};
+    for (let i = 0; i < MAX_BARS + 3; i++) {
+      tokensByModel[`claude-m${i}-20250101`] = { input: 100 - i, output: 0, cacheRead: 0, cacheCreation: 0 };
+    }
+    const page = tvPages(baseStats({ tokensByModel })).find((p) => p.title === 'Top models')!;
+    expect((page.chart as BarChart).bars).toHaveLength(MAX_BARS);
+    expect(page.sub).toBe(`top ${MAX_BARS} of ${MAX_BARS + 3}`);
+  });
+
+  it('keeps the tool-call total as the headline and ranks the tools under it', () => {
+    const stats = baseStats({ toolCalls: { Bash: 5, Read: 12, Edit: 3, Glob: 0 } });
+    const page = tvPages(stats).find((p) => p.title === 'Tool calls')!;
+    expect(page.value).toBe('20');
+    expect(page.sub).toBeUndefined();
+    expect(page.chart).toEqual({
+      kind: 'ranks',
+      rows: [
+        { label: 'Read', value: 12 },
+        { label: 'Bash', value: 5 },
+        { label: 'Edit', value: 3 },
+      ],
+    });
+  });
+
+  it('caps the tool leaderboard at MAX_RANKS and counts the tail in the sub line', () => {
+    const toolCalls: Record<string, number> = {};
+    for (let i = 0; i < MAX_RANKS + 4; i++) toolCalls[`Tool${i}`] = 100 - i;
+    const page = tvPages(baseStats({ toolCalls })).find((p) => p.title === 'Tool calls')!;
+    const chart = page.chart as RankList;
+    expect(chart.rows).toHaveLength(MAX_RANKS);
+    expect(chart.rows[0]).toEqual({ label: 'Tool0', value: 100 });
+    expect(page.sub).toBe('+4 more tools');
   });
 
   it('computes cache hit rate as cacheRead / (input + cacheRead + cacheCreation)', () => {

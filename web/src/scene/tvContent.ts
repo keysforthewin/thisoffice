@@ -12,7 +12,31 @@ export interface TvPage {
   chart?: TvChart;
 }
 
-export type TvChart = DowHourChart | PieChart;
+export type TvChart = DowHourChart | PieChart | BarChart | RankList;
+
+/** Plain ranked bars, largest first, already trimmed to `MAX_BARS`. */
+export interface BarChart {
+  kind: 'bars';
+  bars: { label: string; value: number }[];
+  /** how the per-bar magnitude is written above each bar */
+  format: 'tokens' | 'count';
+}
+
+/**
+ * A numbered leaderboard drawn under the page's headline value rather than in
+ * place of it — names in full, no truncation, so the row count is what has to
+ * stay small (`MAX_RANKS`), not the labels.
+ */
+export interface RankList {
+  kind: 'ranks';
+  rows: { label: string; value: number }[];
+}
+
+/** Past this many bars the labels stop being readable at 640×360. */
+export const MAX_BARS = 12;
+
+/** Rows that fit between the headline total and the page dots at 640×360. */
+export const MAX_RANKS = 10;
 
 /** Token usage as [weekday 0=Mon … 6=Sun][hour 0-23], in the viewer's local zone. */
 export interface DowHourChart {
@@ -178,14 +202,18 @@ export function tvPages(stats: UsageStats | null): TvPage[] {
     pages.push({ title: 'Tokens today', value: formatTokens(todayTokens) });
   }
 
-  // 3. Top models
-  if (models.length > 0) {
-    const ranked = [...models].sort((a, b) => totalTokens(b[1]) - totalTokens(a[1]));
-    const top3 = ranked.slice(0, 3).map(([model]) => shortModelName(model));
+  // 3. Top models — every model that has ever burned a token, as bars; the top
+  // model's name stays the page's headline since that is the one-glance answer.
+  const rankedModels = models
+    .map(([model, t]) => ({ label: shortModelName(model), value: totalTokens(t) }))
+    .filter((b) => b.value > 0)
+    .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+  if (rankedModels.length > 0) {
     pages.push({
       title: 'Top models',
-      value: top3[0],
-      sub: top3.slice(1).join(', ') || undefined,
+      value: rankedModels[0].label,
+      sub: rankedModels.length > MAX_BARS ? `top ${MAX_BARS} of ${rankedModels.length}` : undefined,
+      chart: { kind: 'bars', bars: rankedModels.slice(0, MAX_BARS), format: 'tokens' },
     });
   }
 
@@ -209,11 +237,19 @@ export function tvPages(stats: UsageStats | null): TvPage[] {
 
   // 7. Tool calls
   const totalToolCalls = sum(stats.toolCalls);
-  if (totalToolCalls > 0) {
-    const [topTool, topCount] = Object.entries(stats.toolCalls).reduce((best, cur) =>
-      cur[1] > best[1] ? cur : best,
-    );
-    pages.push({ title: 'Tool calls', value: String(totalToolCalls), sub: `${topTool} × ${topCount}` });
+  const rankedTools = Object.entries(stats.toolCalls)
+    .filter(([label, value]) => label && value > 0)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([label, value]) => ({ label, value }));
+  if (totalToolCalls > 0 && rankedTools.length > 0) {
+    pages.push({
+      title: 'Tool calls',
+      // the total is the headline; the leaderboard under it names the top tools,
+      // so the sub line only reports the tail the list had to leave off
+      value: String(totalToolCalls),
+      sub: rankedTools.length > MAX_RANKS ? `+${rankedTools.length - MAX_RANKS} more tools` : undefined,
+      chart: { kind: 'ranks', rows: rankedTools.slice(0, MAX_RANKS) },
+    });
   }
 
   // 8. Edits & writes
