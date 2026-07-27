@@ -30,6 +30,7 @@ import {
   segmentHitsBox,
   segmentHitsSphere,
   subjectFor,
+  watchedSubjectWentQuiet,
   type ArchetypeName,
   type PickedShot,
   type ShotContext,
@@ -108,6 +109,39 @@ function runCuts(lastActivity: Record<string, number>, cuts: number, overrides: 
   }
   return shots;
 }
+
+describe('watchedSubjectWentQuiet', () => {
+  const now = 100_000;
+
+  it('is true once the screen being watched falls outside its window', () => {
+    expect(watchedSubjectWentQuiet('e1', { e1: now - ACTIVE_WINDOW_MS - 1 }, now)).toBe(true);
+    // …and for a subject that has dropped out of lastActivity altogether
+    expect(watchedSubjectWentQuiet('e1', {}, now)).toBe(true);
+  });
+
+  it('is false while that screen is still streaming', () => {
+    expect(watchedSubjectWentQuiet('e1', { e1: now }, now)).toBe(false);
+  });
+
+  it('respects each subject\'s own window, not the global one', () => {
+    // the status board stays a cut target for minutes (activityTtl)
+    const stale = now - ACTIVE_WINDOW_MS - 1;
+    expect(watchedSubjectWentQuiet('statusboard', { statusboard: stale }, now)).toBe(false);
+    expect(watchedSubjectWentQuiet('e1', { e1: stale }, now)).toBe(true);
+  });
+
+  it('never fires for the standing subjects, which have no activity to lose', () => {
+    // the room, an open question, a hung photo and the beacon each have their own
+    // lifecycle — none is stamped in lastActivity, so "gone quiet" is meaningless
+    for (const key of [IDLE_KEY, QUIZ_KEY, EOTM_KEY, BEACON_KEY]) {
+      expect(watchedSubjectWentQuiet(key, {}, now)).toBe(false);
+    }
+  });
+
+  it('is false with no shot in progress', () => {
+    expect(watchedSubjectWentQuiet(undefined, {}, now)).toBe(false);
+  });
+});
 
 describe('activeKeys / activeSetKey', () => {
   it('keeps only keys stamped within the window', () => {

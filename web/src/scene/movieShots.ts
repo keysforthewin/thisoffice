@@ -850,6 +850,31 @@ export const IDLE_POOL: ArchetypeName[] = ['overheadGod', 'highCorner', 'lowDoll
  */
 export const IDLE_KEY = 'idle';
 
+/**
+ * Subjects that are not driven by `lastActivity` and so can never "go quiet":
+ * the room, an open question, a hung photo, the blinking beacon. Each has its own
+ * lifecycle, and the camera already recuts on all of them.
+ */
+const STANDING_KEYS = new Set([IDLE_KEY, QUIZ_KEY, EOTM_KEY, BEACON_KEY]);
+
+/**
+ * The shot we are holding is on a screen that has just gone quiet.
+ *
+ * Worth its own signal rather than leaving it to the active-set fingerprint: that
+ * recut waits out the full `MIN_HOLD_S`, which means up to five seconds of staring
+ * at a monitor that stopped streaming. The camera cuts away on the shortened
+ * preempt floor instead — long enough to finish the beat, short enough not to
+ * dwell on a dead screen.
+ */
+export function watchedSubjectWentQuiet(
+  primaryKey: string | undefined,
+  lastActivity: Record<string, number>,
+  now: number,
+): boolean {
+  if (!primaryKey || STANDING_KEYS.has(primaryKey)) return false;
+  return !activeKeys(lastActivity, now).includes(primaryKey);
+}
+
 export interface ShotContext {
   office: OfficeState | null;
   lastActivity: Record<string, number>;

@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { useStore } from '../store.ts';
-import { activeSetKey, ARCHETYPES, pickShot, type PickedShot } from './movieShots.ts';
+import { activeSetKey, ARCHETYPES, pickShot, watchedSubjectWentQuiet, type PickedShot } from './movieShots.ts';
 import { askerAnchor, fallbackAnchor } from '../quiz/askerAnchor.ts';
 import { EOTM_KEY } from './eotmTexture.ts';
 
@@ -36,11 +36,12 @@ function isTyping(t: EventTarget | null) {
  * lens zooms — eased across the shot, with layered sinusoid noise on top for a
  * handheld feel.
  *
- * Two events preempt on the shortened PREEMPT_HOLD_S floor instead of waiting out
+ * Three events preempt on the shortened PREEMPT_HOLD_S floor instead of waiting out
  * MIN_HOLD_S: a new message from upstairs (which also forces the boss's screen as
- * the next primary), and the waiting beacon lighting up (which turns the red light
- * into a hard framing requirement on every subsequent shot). Only the arrow keys
- * still bypass the hold entirely.
+ * the next primary), the waiting beacon lighting up (which turns the red light
+ * into a hard framing requirement on every subsequent shot), and the screen being
+ * watched going quiet — no reason to hold five seconds on a monitor that stopped
+ * streaming. Only the arrow keys still bypass the hold entirely.
  */
 export function MovieCamera() {
   const camera = useThree((s) => s.camera) as THREE.PerspectiveCamera;
@@ -127,6 +128,13 @@ export function MovieCamera() {
     if (key !== setKey.current) {
       setKey.current = key;
       pendingRecut.current = true; // honored only once the hold expires
+    }
+    // The screen we are watching stopped streaming: cut away on the preempt floor
+    // rather than holding out the full MIN_HOLD_S on a monitor that has gone dark.
+    // The fingerprint above already flagged the recut — this only shortens its wait.
+    if (watchedSubjectWentQuiet(shot.current?.primaryKey, lastActivity, now)) {
+      pendingRecut.current = true;
+      preempt.current = true;
     }
     // A new message from upstairs lands on the boss's screen and is the most important
     // thing in the room; the active-set fingerprint can't see it (a second prompt inside
