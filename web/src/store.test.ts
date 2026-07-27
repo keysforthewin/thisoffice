@@ -39,14 +39,23 @@ describe('monitor history', () => {
     });
   });
 
-  it('survives clear messages, marking the boundary with a divider', () => {
+  it('keeps the live screen scrolling across a section boundary', () => {
     const apply = useStore.getState().applyServerMsg;
     apply({ type: 'monitor', target: 'e1', append: 'a\nb' } as never);
-    apply({ type: 'monitor', target: 'e1', clear: true, title: 'Bash · proj' } as never);
+    apply({ type: 'monitor', target: 'e1', section: true, title: 'Bash · proj', append: '── Bash · proj ──' } as never);
     apply({ type: 'monitor', target: 'e1', append: 'c' } as never);
 
-    expect(useStore.getState().monitors['e1'].lines).toEqual(['c']);
-    expect(useStore.getState().monitorHistory['e1']).toEqual(['a', 'b', '── Bash · proj ──', 'c']);
+    const expected = ['a', 'b', '── Bash · proj ──', 'c'];
+    expect(useStore.getState().monitors['e1'].lines).toEqual(expected);
+    expect(useStore.getState().monitorHistory['e1']).toEqual(expected);
+  });
+
+  it('drops a section image so it cannot cover the next tool', () => {
+    const apply = useStore.getState().applyServerMsg;
+    apply({ type: 'monitor', target: 'e1', append: '⟦IMG⟧data:image/png;base64,xyz' } as never);
+    expect(useStore.getState().monitors['e1'].image).toBe('data:image/png;base64,xyz');
+    apply({ type: 'monitor', target: 'e1', section: true, title: 'Bash', append: '── Bash ──' } as never);
+    expect(useStore.getState().monitors['e1'].image).toBeUndefined();
   });
 
   it('keeps image marker lines out of history', () => {

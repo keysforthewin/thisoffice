@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { MONITOR_IMAGE_MARKER, type CharacterCatalog, type ItemPose, type OfficeLayout, type OfficeState, type QuizState, type QuizWinner, type ServerMsg, type UsageStats, type WallArtConfig, type WallPlacement } from '../../shared/types.ts';
+import { appendScreenLines, MONITOR_IMAGE_MARKER, type CharacterCatalog, type ItemPose, type OfficeLayout, type OfficeState, type QuizState, type QuizWinner, type ServerMsg, type UsageStats, type WallArtConfig, type WallPlacement } from '../../shared/types.ts';
 import { boardContent } from './scene/whiteboardContent.ts';
 import { activityTtl } from './scene/movieShots.ts';
 import { appendHistory } from './scene/monitorScrollback.ts';
@@ -7,7 +7,7 @@ import { appendHistory } from './scene/monitorScrollback.ts';
 export interface MonitorContent {
   title: string;
   lines: string[];
-  /** data URL of an image the worker looked at (e.g. Read on a PNG); shown until the next clear */
+  /** data URL of an image the worker looked at (e.g. Read on a PNG); shown until the next section */
   image?: string;
 }
 
@@ -158,7 +158,7 @@ export interface AppStore {
   monitors: Record<string, MonitorContent>;
   /** bumps every time a monitor changes so screens know to redraw */
   monitorVersion: Record<string, number>;
-  /** scrollback per monitor: raw lines that survive the per-tool clears, with divider lines at each clear */
+  /** scrollback per monitor: deeper than the live buffer, with a divider line at each tool boundary */
   monitorHistory: Record<string, string[]>;
   /** focus-mode scroll position in wrapped rows from the bottom; 0 = live tail */
   focusScroll: number;
@@ -343,7 +343,9 @@ export const useStore = create<AppStore>((set, get) => ({
       const prev: MonitorContent = msg.clear
         ? { title: '', lines: [] }
         : (monitors[msg.target] ?? { title: '', lines: [] });
-      let image = prev.image;
+      // a section boundary keeps the scrollback (the divider arrives in `append`)
+      // but drops the image, which belonged to the section that just ended
+      let image = msg.section ? undefined : prev.image;
       let lines = prev.lines;
       let appended: string[] = [];
       if (msg.append) {
@@ -354,7 +356,7 @@ export const useStore = create<AppStore>((set, get) => ({
           image = l.slice(MONITOR_IMAGE_MARKER.length);
           return false;
         });
-        lines = [...prev.lines, ...appended].slice(-MONITOR_MAX_LINES);
+        lines = appendScreenLines(prev.lines, appended).slice(-MONITOR_MAX_LINES);
       }
       monitors[msg.target] = { title: msg.title ?? prev.title, lines, image };
       const monitorHistory = { ...get().monitorHistory };

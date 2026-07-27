@@ -165,7 +165,7 @@ export class Transcripts {
     }
     this.queued.delete(key);
     activity.employeeId = employee.id;
-    this.office.monitor(employee.id, { clear: true, title: activity.pendingTitle ?? '' });
+    this.office.monitor(employee.id, { section: true, title: activity.pendingTitle ?? '' });
     if (activity.buffer?.length) this.streamer.enqueue(employee.id, activity.buffer.join('\n'));
     activity.buffer = undefined;
     if (activity.doneWhileQueued) this.office.finish(key);
@@ -209,7 +209,7 @@ export class Transcripts {
       this.office.rename(employee.id, name);
       this.office.pushStatus('hire', `New hire: ${name} joined the office`);
     }
-    this.office.monitor(employee.id, { clear: true, title: fullTitle });
+    this.office.monitor(employee.id, { section: true, title: fullTitle });
     this.streamer.enqueue(employee.id, body);
     this.office.finish(key);
   }
@@ -741,7 +741,7 @@ export class Transcripts {
     }
 
     if (employee) {
-      this.office.monitor(employee.id, { clear: true, title: `${label} · ${project}` });
+      this.office.monitor(employee.id, { section: true, title: `${label} · ${project}` });
       this.streamer.enqueue(employee.id, inputPreview(name, input));
     } else {
       this.emitTo(activity, inputPreview(name, input));

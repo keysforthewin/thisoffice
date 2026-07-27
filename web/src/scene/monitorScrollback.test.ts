@@ -18,19 +18,19 @@ describe('appendHistory', () => {
     expect(appendHistory(['a'], ['b', 'c'], false, undefined)).toEqual(['a', 'b', 'c']);
   });
 
-  it('inserts a divider with the new title when a clear lands on prior content', () => {
-    const out = appendHistory(['a'], ['b'], true, 'Bash · proj');
+  it('keeps a section divider that arrives as an ordinary appended line', () => {
+    const out = appendHistory(['a'], ['── Bash · proj ──', 'b'], false, undefined);
     expect(out).toEqual(['a', '── Bash · proj ──', 'b']);
   });
 
-  it('does not insert a divider when history is empty', () => {
-    expect(appendHistory([], ['a'], true, 'Bash')).toEqual(['a']);
+  it('does not stack dividers on consecutive sections with nothing between', () => {
+    const first = appendHistory(['a'], ['── Read ──'], false, undefined);
+    const second = appendHistory(first, ['── Bash ──', 'b'], false, undefined);
+    expect(second).toEqual(['a', '── Bash ──', 'b']);
   });
 
-  it('does not stack dividers on consecutive clears with nothing between', () => {
-    const first = appendHistory(['a'], [], true, 'Read');
-    const second = appendHistory(first, ['b'], true, 'Bash');
-    expect(second).toEqual(['a', '── Bash ──', 'b']);
+  it('restarts the buffer on a clear (the reconnect replay), so nothing doubles up', () => {
+    expect(appendHistory(['a', 'b'], ['b'], true, 'Bash')).toEqual(['── Bash ──', 'b']);
   });
 
   it('caps history by dropping the oldest lines', () => {

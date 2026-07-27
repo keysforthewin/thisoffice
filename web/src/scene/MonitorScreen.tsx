@@ -210,7 +210,7 @@ function drawToolScreen(
   base(ctx, title, working ? '#7ee787' : '#8b949e');
 
   if (scroll > 0) {
-    // scrolled into history: render the window from the clear-surviving buffer
+    // scrolled into history: render the window from the deeper scrollback buffer
     const wrapped = wrapLines(st.monitorHistory[target] ?? [], MAX_COLS);
     drawLines(ctx, visibleRows(wrapped, scroll, MAX_ROWS));
     drawScrollIndicator(ctx, scroll, wrapped.length);

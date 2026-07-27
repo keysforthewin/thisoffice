@@ -1,20 +1,15 @@
 /**
- * Pure scrollback logic for the monitor focus mode. History is kept client-side
- * because the server clears each screen on every tool change (transcript.ts) —
- * the live buffer in the store is wiped constantly, so scrolling back needs a
- * separate buffer that survives clears.
+ * Pure scrollback logic for the monitor focus mode. A monitor is a continuous
+ * terminal — a new tool appends a divider rather than wiping the screen — so
+ * this buffer exists only to hold *more* than the live one: the store caps at
+ * MONITOR_MAX_LINES and the on-screen canvas shows ~16 rows, while scrolling
+ * back wants several screens of it.
  */
+
+import { appendScreenLines, sectionDivider } from '../../../shared/types.ts';
 
 /** Raw (unwrapped) lines kept per monitor — comfortably 10+ screens of 16 rows. */
 export const HISTORY_MAX_LINES = 400;
-
-function divider(title: string | undefined): string {
-  return title ? `── ${title} ──` : '──────';
-}
-
-function isDivider(line: string): boolean {
-  return line.startsWith('── ') || line === '──────';
-}
 
 /** Hard-wrap lines to `cols` characters (no word breaking). */
 export function wrapLines(lines: string[], cols: number): string[] {
@@ -27,9 +22,11 @@ export function wrapLines(lines: string[], cols: number): string[] {
 }
 
 /**
- * Fold one monitor message into the history buffer. A clear becomes a divider
- * line carrying the new title (screen boundaries stay visible when scrolling);
- * consecutive clears collapse into the latest divider.
+ * Fold one monitor message into the history buffer. Section dividers arrive
+ * inside `appended` like any other line (the server writes them there), and
+ * `appendScreenLines` collapses two in a row. A `clear` is the reconnect replay
+ * rebuilding the screen wholesale, so it restarts the buffer instead of
+ * doubling everything the client already has.
  */
 export function appendHistory(
   prev: string[],
@@ -38,13 +35,8 @@ export function appendHistory(
   title: string | undefined,
   cap = HISTORY_MAX_LINES,
 ): string[] {
-  let out = prev;
-  if (clear && prev.length) {
-    out = isDivider(prev[prev.length - 1]) ? prev.slice(0, -1) : prev.slice();
-    out.push(divider(title));
-  }
-  if (appended.length) out = [...out, ...appended];
-  return out.slice(-cap);
+  if (clear) return (title ? [sectionDivider(title), ...appended] : appended).slice(-cap);
+  return appendScreenLines(prev, appended).slice(-cap);
 }
 
 /** Clamp a rows-from-bottom scroll offset so the view never runs past the top. */

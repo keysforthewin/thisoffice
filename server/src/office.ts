@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { CharacterCatalog, Employee, OfficeState, InboxItem, ItemPose, OfficeLayout, PendingAsk, StatusItem, TodoItem, ServerMsg, WallArtConfig, WallArtExt, WallPlacement, WorkerStatus, StaffingSettings } from '../../shared/types.ts';
-import { CHARACTER_VARIANTS, MONITOR_IMAGE_MARKER, WALL_ART_EXTS, WALL_SIDES, WALL_ART_ZOOM_MAX, WALL_ART_ZOOM_MIN } from '../../shared/types.ts';
+import { appendScreenLines, CHARACTER_VARIANTS, MONITOR_IMAGE_MARKER, sectionDivider, WALL_ART_EXTS, WALL_SIDES, WALL_ART_ZOOM_MAX, WALL_ART_ZOOM_MIN } from '../../shared/types.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.resolve(__dirname, '../../data');
@@ -21,7 +21,7 @@ const SCREEN_MAX_LINES = 60;
 interface ScreenSnapshot {
   title: string;
   lines: string[];
-  /** last MONITOR_IMAGE_MARKER line seen since the last clear */
+  /** last MONITOR_IMAGE_MARKER line seen since the last section boundary */
   image?: string;
 }
 
@@ -437,20 +437,28 @@ export class Office {
     this.emit({ type: 'state', state: this.state });
   }
 
-  monitor(target: string, opts: { title?: string; append?: string; clear?: boolean }) {
+  monitor(target: string, opts: { title?: string; append?: string; clear?: boolean; section?: boolean }) {
     const snap: ScreenSnapshot = opts.clear
       ? { title: '', lines: [] }
       : (this.screens.get(target) ?? { title: '', lines: [] });
     if (opts.title !== undefined) snap.title = opts.title;
-    if (opts.append) {
-      for (const l of opts.append.split('\n')) {
+    // A section boundary rides in `append` as a divider line, so a new tool
+    // scrolls onto the screen like any other output instead of wiping it.
+    const appended = [
+      ...(opts.section ? [sectionDivider(opts.title ?? snap.title)] : []),
+      ...(opts.append ? opts.append.split('\n') : []),
+    ];
+    if (opts.section) snap.image = undefined; // belonged to the section that just ended
+    if (appended.length) {
+      const text: string[] = [];
+      for (const l of appended) {
         if (l.startsWith(MONITOR_IMAGE_MARKER + 'data:image/') || l.startsWith(MONITOR_IMAGE_MARKER + 'http')) snap.image = l;
-        else snap.lines.push(l);
+        else text.push(l);
       }
-      snap.lines = snap.lines.slice(-SCREEN_MAX_LINES);
+      snap.lines = appendScreenLines(snap.lines, text).slice(-SCREEN_MAX_LINES);
     }
     this.screens.set(target, snap);
-    this.emit({ type: 'monitor', target, ...opts });
+    this.emit({ type: 'monitor', target, ...opts, ...(appended.length ? { append: appended.join('\n') } : {}) });
   }
 
   /** One monitor message per screen that rebuilds it as it looks right now (sent to new connections). */

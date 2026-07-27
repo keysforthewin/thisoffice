@@ -307,6 +307,35 @@ export interface UsageStats {
  */
 export const MONITOR_IMAGE_MARKER = '⟦IMG⟧';
 
+/**
+ * A monitor is one continuous terminal: a new tool never wipes the screen, it
+ * opens a *section* — a divider line carrying the new title, appended to the
+ * scrollback that is already there. These two helpers are shared because the
+ * server snapshot (`Office.monitor`), the client's live buffer and its focus
+ * scrollback all fold the same lines and must agree on what a boundary is.
+ */
+export function sectionDivider(title?: string): string {
+  return title ? `── ${title} ──` : '──────';
+}
+
+export function isSectionDivider(line: string): boolean {
+  return line.startsWith('── ') || line === '──────';
+}
+
+/**
+ * Append lines to a screen buffer, collapsing a divider that lands directly on
+ * another — two tools starting back to back with no output between them are one
+ * boundary, not an empty section.
+ */
+export function appendScreenLines(prev: string[], incoming: string[]): string[] {
+  const out = prev.slice();
+  for (const line of incoming) {
+    if (isSectionDivider(line) && out.length && isSectionDivider(out[out.length - 1])) out[out.length - 1] = line;
+    else out.push(line);
+  }
+  return out;
+}
+
 /** Messages from server to client */
 export type ServerMsg =
   | { type: 'state'; state: OfficeState }
@@ -316,7 +345,18 @@ export type ServerMsg =
       target: string;
       title?: string;
       append?: string;
+      /**
+       * Wipe the screen and rebuild it from this message. Only the replay sent
+       * to a new connection does this — activity never clears a monitor.
+       */
       clear?: boolean;
+      /**
+       * Start a new section on a screen that keeps its scrollback: the divider
+       * ships inside `append`, and any image on the monitor is dropped (it
+       * belonged to the section that just ended and would otherwise cover the
+       * terminal forever).
+       */
+      section?: boolean;
     }
   | { type: 'catalog'; catalog: CharacterCatalog }
   | { type: 'stats'; stats: UsageStats }

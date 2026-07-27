@@ -364,6 +364,35 @@ describe('screen snapshots (monitor replay on connect)', () => {
     ]);
   });
 
+  it('a section keeps the scrollback, appends a divider and drops the old image', () => {
+    const office = makeOffice();
+    const msgs: any[] = [];
+    office.subscribe((m) => msgs.push(m));
+    office.monitor('emp-1', { section: true, title: 'Read · proj' });
+    office.monitor('emp-1', { append: 'reading\n' + IMG });
+    office.monitor('emp-1', { section: true, title: 'Bash · proj' });
+    office.monitor('emp-1', { append: 'fresh' });
+    // the divider rides in `append`, so the client folds it in like any other line
+    expect(msgs[2]).toEqual({ type: 'monitor', target: 'emp-1', section: true, title: 'Bash · proj', append: '── Bash · proj ──' });
+    expect(office.screenReplay()).toEqual([
+      {
+        type: 'monitor',
+        target: 'emp-1',
+        clear: true,
+        title: 'Bash · proj',
+        append: ['── Read · proj ──', 'reading', '── Bash · proj ──', 'fresh'].join('\n'),
+      },
+    ]);
+  });
+
+  it('collapses back-to-back sections that produced no output', () => {
+    const office = makeOffice();
+    office.monitor('emp-1', { section: true, title: 'Read · proj' });
+    office.monitor('emp-1', { section: true, title: 'Bash · proj' });
+    office.monitor('emp-1', { append: 'fresh' });
+    expect(office.screenReplay()[0]).toMatchObject({ append: ['── Bash · proj ──', 'fresh'].join('\n') });
+  });
+
   it('keeps only the most recent lines, not full history', () => {
     const office = makeOffice();
     office.monitor('emp-1', { clear: true, title: 't' });

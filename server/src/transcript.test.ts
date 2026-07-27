@@ -136,10 +136,10 @@ describe('main-session tool flow', () => {
     expect(enqueued[2].text).toContain('✓ done');
   });
 
-  it('clear/title still go directly to office.monitor on start', () => {
+  it('a section boundary + title goes directly to office.monitor on start', () => {
     const { transcripts, monitors } = makeHarness();
     startBash(transcripts);
-    expect(monitors[0]).toMatchObject({ target: 'emp-1', clear: true, title: 'Bash · myapp' });
+    expect(monitors[0]).toMatchObject({ target: 'emp-1', section: true, title: 'Bash · myapp' });
     expect(monitors[0].append).toBeUndefined();
   });
 });
@@ -345,7 +345,7 @@ describe('boss replies', () => {
       }),
     ]);
     expect(office.assign).toHaveBeenCalledWith('sess-1:msg-uuid-1', 'Reporting to the Boss');
-    expect(monitors[0]).toMatchObject({ target: 'emp-1', clear: true, title: 'Reporting to the Boss · myapp' });
+    expect(monitors[0]).toMatchObject({ target: 'emp-1', section: true, title: 'Reporting to the Boss · myapp' });
     expect(enqueued[0].text).toBe('💭 planning the fix\nI found the bug in the parser.');
     expect(finished).toEqual(['sess-1:msg-uuid-1']);
   });
@@ -451,8 +451,8 @@ describe('subagent attachment race', () => {
     transcripts.handleLines(MAIN, [taskLine]);
     expect((transcripts as any).pendingTasks.get('sess-1')).toHaveLength(1);
     expect((transcripts as any).agentFiles.has(AGENT)).toBe(false);
-    // Screen still gets its clear/title + input preview even with no file attached yet.
-    expect(monitors[0]).toMatchObject({ clear: true, title: 'Agent: explore · myapp' });
+    // Screen still gets its section/title + input preview even with no file attached yet.
+    expect(monitors[0]).toMatchObject({ section: true, title: 'Agent: explore · myapp' });
     expect(enqueued.map((e) => e.text)).toContain('explore');
 
     // The normal live flow still works: a later fileAppeared attaches it.
@@ -510,7 +510,7 @@ describe('queued activities', () => {
     ]);
     expect(h.finished).toEqual([]); // finish deferred while queued
     h.pickup('sess-1:tu-1');
-    expect(h.monitors.at(-1)).toMatchObject({ target: 'emp-9', clear: true, title: 'Bash · myapp' });
+    expect(h.monitors.at(-1)).toMatchObject({ target: 'emp-9', section: true, title: 'Bash · myapp' });
     const replay = h.enqueued.map((e) => e.text).join('\n');
     expect(replay).toContain('$ npm test');
     expect(replay).toContain('row 0');
