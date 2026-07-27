@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { applyLook, LOOK_SENSITIVITY, MAX_PITCH, modeForDragLook } from './dragLook.ts';
+import {
+  applyLook,
+  LOOK_SENSITIVITY,
+  MAX_PITCH,
+  modeForDragLook,
+  shouldGrabLockOnDragLook,
+} from './dragLook.ts';
 
 describe('applyLook', () => {
   it('turns mouse motion into yaw/pitch, inverted on both axes', () => {
@@ -35,5 +41,21 @@ describe('modeForDragLook', () => {
 
   it('leaves the free camera alone — nothing to yield', () => {
     expect(modeForDragLook({ kind: 'free' })).toBeNull();
+  });
+});
+
+describe('shouldGrabLockOnDragLook', () => {
+  it('grabs the lock itself when the camera is already free — nothing else will mount to do it', () => {
+    expect(shouldGrabLockOnDragLook({ kind: 'free' }, false)).toBe(true);
+  });
+
+  it('leaves it to FreeFlyControls\' mount effect when the drag also changes mode', () => {
+    expect(shouldGrabLockOnDragLook({ kind: 'pov', index: 0 }, false)).toBe(false);
+    expect(shouldGrabLockOnDragLook({ kind: 'movie' }, false)).toBe(false);
+    expect(shouldGrabLockOnDragLook({ kind: 'focus', target: 'tv', from: { kind: 'free' } }, false)).toBe(false);
+  });
+
+  it('never locks in build mode, where the cursor belongs to the furniture', () => {
+    expect(shouldGrabLockOnDragLook({ kind: 'free' }, true)).toBe(false);
   });
 });

@@ -8,6 +8,7 @@ import { deskFootprint, resolveSeat } from './buildLayout.ts';
 import { BuildHandle, displayPose } from './build.tsx';
 import { useStore } from '../store.ts';
 import { catalogEntry } from '../characters/catalog.ts';
+import { BEACON_TARGET } from './monitorPicking.ts';
 
 interface Props {
   seat: number;
@@ -135,15 +136,27 @@ function WaitingLight({ on }: { on: boolean }) {
     gl.domElement.style.cursor = '';
   };
 
+  // `userData.monitorTarget` is the fly cam's crosshair channel; it is stamped on
+  // only while the beacon is armed, so a pointer-locked click at a dark bulb
+  // falls through to whatever is behind it rather than arming a mute for a wait
+  // that hasn't happened — the same rule `dismiss` follows for the cursor.
+  const crosshair = armed ? { monitorTarget: BEACON_TARGET } : {};
+
   return (
     <group position={[0.7, 1.0, 0.25]} onPointerDown={dismiss} onPointerOver={hover} onPointerOut={unhover}>
       {/* The two existing meshes are the whole click target. A larger invisible
           collider would be easier to hit, but every raycastable mesh also
           occludes nametags (see nametagVisibility.ts) — a hit box bigger than
           the bulb would punch a hole in the tags behind the boss desk. */}
-      <mesh castShadow position={[0, 0.02, 0]} geometry={BEACON_BASE_GEOMETRY} material={BEACON_BASE_MATERIAL} />
+      <mesh
+        castShadow
+        position={[0, 0.02, 0]}
+        geometry={BEACON_BASE_GEOMETRY}
+        material={BEACON_BASE_MATERIAL}
+        userData={crosshair}
+      />
       {/* the bulb material is per-instance: its emissiveIntensity is animated */}
-      <mesh position={[0, 0.07, 0]} geometry={BEACON_BULB_GEOMETRY}>
+      <mesh position={[0, 0.07, 0]} geometry={BEACON_BULB_GEOMETRY} userData={crosshair}>
         <meshStandardMaterial ref={mat} color="#3a0d0d" emissive="#ff2222" emissiveIntensity={0.15} />
       </mesh>
       {/* Mounted only while actually waiting. An intensity-0 light still counts

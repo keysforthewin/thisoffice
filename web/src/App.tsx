@@ -6,6 +6,7 @@ import { Office } from './scene/Office.tsx';
 import { DuskSky } from './scene/DuskSky.tsx';
 import { CameraRig, usePovList } from './scene/CameraRig.tsx';
 import { EOTM_KEY } from './scene/eotmTexture.ts';
+import { STATUS_BOARD_KEY, TODO_BOARD_KEY } from './scene/movieShots.ts';
 import { SettingsPanel } from './settings/SettingsPanel.tsx';
 import { PerfPanel, PerfSampler } from './scene/PerfOverlay.tsx';
 import { ShadowControl } from './scene/ShadowControl.tsx';
@@ -62,6 +63,13 @@ export default function App() {
         st.setBuildMode(!st.buildMode);
         return;
       }
+      if (e.key === 'a' || e.key === 'A') {
+        // the tour driving itself only means anything inside the tour
+        if (cur.kind !== 'pov') return;
+        const st = useStore.getState();
+        st.setPovAuto(!st.povAuto);
+        return;
+      }
       if (e.key === 'p' || e.key === 'P') {
         const st = useStore.getState();
         st.setPerfOverlay(!st.perfOverlay);
@@ -83,8 +91,11 @@ export default function App() {
         useStore.getState().setFocusScroll(0); // snap back to the live tail
       } else if ((e.key === 'Tab' || e.key === 'ArrowRight') && cur.kind === 'pov') {
         e.preventDefault();
+        // stepping by hand takes the tour back — auto would move it again within 5s
+        useStore.getState().setPovAuto(false);
         setMode({ kind: 'pov', index: (cur.index + 1) % povCount });
       } else if (e.key === 'ArrowLeft' && cur.kind === 'pov') {
+        useStore.getState().setPovAuto(false);
         setMode({ kind: 'pov', index: (cur.index - 1 + povCount) % povCount });
       }
     };
@@ -197,6 +208,7 @@ function Hud({ connected, mode, onSettings }: { connected: boolean; mode: Return
     }).catch(() => {});
   };
   const eotmName = useStore((s) => s.quiz?.photo?.name ?? '');
+  const povAuto = useStore((s) => s.povAuto);
   const focusName =
     mode.kind === 'focus'
       ? mode.target === 'boss'
@@ -214,9 +226,12 @@ function Hud({ connected, mode, onSettings }: { connected: boolean; mode: Return
           ? 'Stats TV — scroll wheel to flip through stats · Esc or click away = back'
         : mode.kind === 'focus' && mode.target === EOTM_KEY
           ? `Employee of the Month${eotmName ? `: ${eotmName}` : ''} — Esc or click away = back`
+        : mode.kind === 'focus' && (mode.target === TODO_BOARD_KEY || mode.target === STATUS_BOARD_KEY)
+          // the boards hold no scrollback, so their hint doesn't offer a wheel
+          ? `${mode.target === TODO_BOARD_KEY ? 'Todo board' : 'Status board'} — Esc or click away = back`
         : mode.kind === 'focus'
           ? `Screen: ${focusName} — scroll wheel for history · End = live · Esc or click away = back`
-          : `POV: ${povs[Math.min(mode.index, povs.length - 1)]?.label ?? ''} — Tab/← → cycle · right-drag for first person · V/Esc exit`;
+          : `POV: ${povs[Math.min(mode.index, povs.length - 1)]?.label ?? ''}${povAuto ? ' · AUTO' : ''} — Tab/← → cycle · A auto-follow · right-drag for first person · V/Esc exit`;
   return (
     <>
       <div style={hudStyles.topLeft}>

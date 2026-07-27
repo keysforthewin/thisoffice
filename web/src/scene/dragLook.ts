@@ -34,3 +34,19 @@ export function applyLook(look: Look, movementX: number, movementY: number): Loo
 export function modeForDragLook(cur: CameraMode): CameraMode | null {
   return cur.kind === 'free' ? null : { kind: 'free' };
 }
+
+/**
+ * Whether the right-drag should also grab the pointer lock itself.
+ *
+ * Every right-drag ends in first person — the difference is who asks for the
+ * lock. Out of pov/focus/movie the mode change mounts FreeFlyControls, and its
+ * mount effect does it (`pendingRelock`). Already in free mode nothing mounts,
+ * so the gesture has to ask directly or the drag would leave the camera one
+ * left-click short of first person.
+ *
+ * Build mode is the exception on purpose: the cursor belongs to the furniture
+ * there, so it gets the look gesture without the lock.
+ */
+export function shouldGrabLockOnDragLook(cur: CameraMode, buildMode: boolean): boolean {
+  return cur.kind === 'free' && !buildMode;
+}

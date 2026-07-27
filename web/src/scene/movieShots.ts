@@ -51,6 +51,12 @@ export const QUIZ_KEY = 'quiz';
 const QUIZ_SIZE = 2.4;
 /** The bubble hangs at y 3.0 (askerAnchor); frame from between it and the head. */
 const QUIZ_CENTER_DROP = 0.5;
+/** Focus/subject keys for the two wall boards — shared with Whiteboard.tsx, which
+ *  stamps them on the board meshes so a click (cursor or fly-cam crosshair) lands
+ *  on the same subject the movie camera shoots. */
+export const TODO_BOARD_KEY = 'whiteboard';
+export const STATUS_BOARD_KEY = 'statusboard';
+
 const WHITEBOARD_W = 3.2;
 const WHITEBOARD_H = 1.95;
 const UP = new THREE.Vector3(0, 1, 0);
@@ -223,8 +229,8 @@ interface WallBoardDef {
  * wall gets shot from the front of it, not from inside the wall it used to be on.
  */
 const WALL_BOARD_ITEMS: Record<string, { id: string; width: number; height: number }> = {
-  whiteboard: { id: 'todoBoard', width: WHITEBOARD_W, height: WHITEBOARD_H },
-  statusboard: { id: 'statusBoard', width: WHITEBOARD_W, height: WHITEBOARD_H },
+  [TODO_BOARD_KEY]: { id: 'todoBoard', width: WHITEBOARD_W, height: WHITEBOARD_H },
+  [STATUS_BOARD_KEY]: { id: 'statusBoard', width: WHITEBOARD_W, height: WHITEBOARD_H },
   tv: { id: 'tv', width: TV_SCREEN_W, height: TV_SCREEN_H },
   // Photo *and* plaque *and* moulding: the whole point of visiting the frame is
   // reading who won, and the subject size is what every archetype fits its
@@ -831,6 +837,19 @@ export const SINGLE_POOL: ArchetypeName[] = [
 export const GROUP_POOL: ArchetypeName[] = ['groupLevel', 'elevatedGroup', 'groupArc', 'staticGroup'];
 export const IDLE_POOL: ArchetypeName[] = ['overheadGod', 'highCorner', 'lowDolly', 'wideEstablishing', 'staticWide', 'staticCorner'];
 
+/**
+ * Pseudo-primary for the room itself: the idle pool's wides, offered as a peer of
+ * the ambient wall surfaces rather than only as the empty-set branch.
+ *
+ * Without it an office with nothing live parks on its set dressing. The TV and the
+ * status board carry 150-second activity windows *because* they are ambient, and a
+ * lone stamped one is still `subjects.length > 0` — so every cut for two and a half
+ * minutes had exactly one primary to choose from and the camera sat on the TV. Now
+ * the room competes for those cuts, and since it is recorded in `recentPrimaries`
+ * like any other primary, the least-recently-led ordering alternates them.
+ */
+export const IDLE_KEY = 'idle';
+
 export interface ShotContext {
   office: OfficeState | null;
   lastActivity: Record<string, number>;
@@ -873,7 +892,7 @@ export interface ShotContext {
  * would also stop the quiz bubble ever joining the cast (see `pickShot`, which
  * admits the bubble only when everything else on offer is ambient).
  */
-const AMBIENT_KEYS = new Set(['statusboard', 'tv', EOTM_KEY]);
+const AMBIENT_KEYS = new Set([STATUS_BOARD_KEY, 'tv', EOTM_KEY]);
 
 /** Camera distance ceiling while anything is active, as a multiple of the primary's
  *  fit distance: a busy office gets close/medium coverage where a screen is legible.
@@ -883,17 +902,6 @@ export const MEDIUM_MAX_MUL = 2.4;
 
 /** How many primaries a single cut will try before falling back. */
 const MAX_PRIMARY_TRIES = 3;
-
-/**
- * The award frame is offered on one cut in three.
- *
- * Unlike every other subject it has no activity window to expire, so without a
- * duty cycle a silent office — game on, photo hung, nothing else stamped — would
- * have exactly one candidate and cut to the same wall hanging forever, losing the
- * idle branch's far/wide coverage entirely. At a third it reads as the camera
- * wandering past the frame now and then, which is what it is.
- */
-const AWARD_CUT_PERIOD = 3;
 
 /** Weighted sampling without replacement: repeatedly draw from the remaining set by
  *  weight. Higher-weight items tend to sort earlier, but it's still randomized (not a
@@ -915,9 +923,22 @@ function weightedShuffle<T>(items: T[], weight: (t: T) => number, rng: () => num
   return out;
 }
 
-/** Boss screen and wall boards fire rarely; give them extra draw weight so their
- *  brief activity windows actually land as shots among streaming employee monitors. */
-function subjectWeight(s: Subject): number {
+/** The room outweighs its own set dressing. An idle office is mostly a room to look
+ *  at, punctuated by the boards — not a TV with the occasional glance elsewhere. */
+const IDLE_WEIGHT = 3;
+
+/**
+ * Boss screen and the todo board fire rarely; give them extra draw weight so their
+ * brief activity windows actually land as shots among streaming employee monitors.
+ *
+ * The AMBIENT surfaces get no such help, and deliberately so — the bonus exists for
+ * subjects whose window is *short*, and theirs run for minutes. Weighting them up
+ * only ever mattered inside the idle tier, where they compete with the room rather
+ * than with live work, and there it read as the camera parking on the TV.
+ */
+function subjectWeight(s: { key: string }): number {
+  if (s.key === IDLE_KEY) return IDLE_WEIGHT;
+  if (AMBIENT_KEYS.has(s.key)) return 1;
   return s.key === 'boss' || s.key === QUIZ_KEY || isWallBoard(s.key) ? 2 : 1;
 }
 
@@ -928,12 +949,32 @@ function subjectWeight(s: Subject): number {
  * candidate for some subjects — and the next one should get its turn instead of the
  * cut collapsing to the unvalidated fallback.
  */
-function orderPrimaries(subjects: Subject[], recentPrimaries: string[], rng: () => number): Subject[] {
-  const recent = recentPrimaries.slice(0, 2);
-  return [
+function orderPrimaries<T extends { key: string }>(subjects: T[], recentPrimaries: string[], rng: () => number): T[] {
+  // How far back "recently led" looks. Capped so it can never cover the whole tier
+  // minus one: at that point exactly one candidate is ever fresh, the draw becomes a
+  // fixed round-robin and the weights stop meaning anything — which is how a stamped
+  // TV and status board got a guaranteed third of every idle cut each. The no-repeat
+  // rule below is what keeps variety in a small tier; the window handles large ones.
+  const recent = recentPrimaries.slice(0, Math.max(0, Math.min(2, subjects.length - 2)));
+  const ordered = [
     ...weightedShuffle(subjects.filter((s) => !recent.includes(s.key)), subjectWeight, rng),
     ...weightedShuffle(subjects.filter((s) => recent.includes(s.key)), subjectWeight, rng),
   ];
+  // Never lead on the same *subject* twice running while another is on offer. The
+  // least-recently-led split above degenerates when the tier is smaller than the
+  // window it looks back over — with two candidates, one cut each puts BOTH in
+  // `recent`, the first half empties, and the draw collapses to raw weight. That
+  // is what let a lone stamped TV take two, three cuts in a row.
+  //
+  // `IDLE_KEY` is exempt: it is not a subject but the room, and two consecutive
+  // idle cuts are two different wides (different archetype — `recent` bars the
+  // last three — from a different randomized position), not the same shot twice.
+  // Without the exemption this rule forces strict alternation and hands the TV
+  // every other cut no matter what its weight says.
+  if (ordered.length > 1 && ordered[0].key === recentPrimaries[0] && ordered[0].key !== IDLE_KEY) {
+    [ordered[0], ordered[1]] = [ordered[1], ordered[0]];
+  }
+  return ordered;
 }
 
 export function pickShot(ctx: ShotContext): PickedShot {
@@ -945,7 +986,12 @@ export function pickShot(ctx: ShotContext): PickedShot {
     .filter((s): s is Subject => s !== null);
   // The award frame has no activity to stamp — a photo hangs there for days —
   // so it is simply always in the cast while the game is on, at ambient rank.
-  const award = ctx.awardFrame && ctx.cutIndex % AWARD_CUT_PERIOD === 0 ? subjectFor(EOTM_KEY, office) : null;
+  // No activity window to expire — a photo hangs there for days — so while the game
+  // is on and someone has won it is simply always in the cast, at ambient rank. It
+  // used to be rationed to one cut in three, because a silent office would otherwise
+  // have had it as the *only* candidate and parked on it; `IDLE_KEY` is what stops
+  // that now, for every ambient subject at once, so the ration is gone.
+  const award = ctx.awardFrame ? subjectFor(EOTM_KEY, office) : null;
   const active = award ? [...stamped, award] : stamped;
   // An open question joins the cast only while no live screen is streaming: with
   // work on the monitors the bubble waits its turn, and with the office quiet it
@@ -1024,7 +1070,8 @@ export function pickShot(ctx: ShotContext): PickedShot {
   const beaconFallback = (): PickedShot | null =>
     beacon ? { ...closeUpShot(beacon, fovY, aspect, rng, office), archetype: 'staticCloseup', primaryKey: BEACON_KEY } : null;
 
-  if (subjects.length === 0) {
+  /** The room itself as a shot: the idle pool's wides, with no subject to hold LOS on. */
+  const idleShot = (): PickedShot | null => {
     const gens: Record<string, () => Shot> = {
       overheadGod: () => overheadGodCandidate(office, rng),
       highCorner: () => highCornerCandidate(office, rng),
@@ -1034,6 +1081,11 @@ export function pickShot(ctx: ShotContext): PickedShot {
       staticCorner: () => staticCornerCandidate(office, rng),
     };
     const hit = tryPool(IDLE_POOL, gens, []);
+    return hit ? { ...hit, primaryKey: IDLE_KEY } : null;
+  };
+
+  if (subjects.length === 0) {
+    const hit = idleShot();
     if (hit) return hit;
     // an idle office whose light is blinking still owes the viewer the light
     return beaconFallback() ?? { ...wideShot(office, rng), archetype: 'wideEstablishing' }; // last-resort, unvalidated
@@ -1049,8 +1101,12 @@ export function pickShot(ctx: ShotContext): PickedShot {
   // The quiz bubble sits in the same tier as the ambient boards rather than above
   // them: with the office quiet the camera rotates between the question, the status
   // board and the TV, instead of parking on the bubble for every cut.
+  //
+  // With nothing live, the room joins that tier as `IDLE_KEY`: an office whose only
+  // stamped subject is a long-window wall surface is idle, and the wides belong in
+  // the rotation rather than being reserved for the (rare) empty active set.
   const live = subjects.filter((s) => !AMBIENT_KEYS.has(s.key) && s.key !== QUIZ_KEY);
-  const tier = live.length > 0 ? live : subjects;
+  const tier: ({ key: string } | Subject)[] = live.length > 0 ? live : [...subjects, { key: IDLE_KEY }];
   let ordered = orderPrimaries(tier, ctx.recentPrimaries ?? [], rng);
   if (ctx.forcePrimary) {
     const forced = subjects.find((s) => s.key === ctx.forcePrimary) ?? subjectFor(ctx.forcePrimary, office);
@@ -1059,7 +1115,13 @@ export function pickShot(ctx: ShotContext): PickedShot {
 
   // bounded so a hard cut (every candidate for every archetype rejected) can't fan out
   // across a nine-desk office: three primaries is enough for the constraints to find air
-  for (const primary of ordered.slice(0, MAX_PRIMARY_TRIES)) {
+  for (const entry of ordered.slice(0, MAX_PRIMARY_TRIES)) {
+    if (entry.key === IDLE_KEY) {
+      const hit = idleShot();
+      if (hit) return hit;
+      continue; // the room was unshootable from here; the stamped subjects get their turn
+    }
+    const primary = entry as Subject;
     const neighbors = subjects.filter((s) => s.key !== primary.key && s.normal.dot(primary.normal) > -0.01);
 
     const gens: Record<string, () => Shot> = {
@@ -1114,7 +1176,13 @@ export function pickShot(ctx: ShotContext): PickedShot {
   }
 
   // best-effort fallback: static close-up on the beacon (if it must be framed) or the
-  // first-choice primary
-  return beaconFallback()
-    ?? { ...closeUpShot(ordered[0], fovY, aspect, rng, office), archetype: 'otsCloseup', primaryKey: ordered[0].key };
+  // first-choice real subject — `IDLE_KEY` carries no geometry to close in on, and its
+  // own unvalidated fallback is the wide below
+  const fallbackPrimary = ordered.find((s): s is Subject => s.key !== IDLE_KEY);
+  return (
+    beaconFallback() ??
+    (fallbackPrimary
+      ? { ...closeUpShot(fallbackPrimary, fovY, aspect, rng, office), archetype: 'otsCloseup', primaryKey: fallbackPrimary.key }
+      : { ...wideShot(office, rng), archetype: 'wideEstablishing', primaryKey: IDLE_KEY })
+  );
 }

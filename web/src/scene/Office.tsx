@@ -2,6 +2,7 @@ import { useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import { useTexture } from '@react-three/drei';
 import { useThree, type ThreeEvent } from '@react-three/fiber';
+import { WALL_ART_TARGET } from './monitorPicking.ts';
 import { useStore } from '../store.ts';
 import { pickWallArtImage } from '../wallArt.ts';
 import { wallArtTransform } from './wallArtTexture.ts';
@@ -86,7 +87,7 @@ function WallArt() {
       </mesh>
       <mesh
         position={[0, 0, 0.035]}
-        userData={{ monitorTarget: 'wallArt' }}
+        userData={{ monitorTarget: WALL_ART_TARGET }}
         onPointerDown={onPointerDown}
         onPointerEnter={hoverStart}
         onPointerLeave={hoverEnd}

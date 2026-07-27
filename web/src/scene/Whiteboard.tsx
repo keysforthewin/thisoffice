@@ -1,7 +1,8 @@
 import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
-import { useFrame } from '@react-three/fiber';
-import { useStore } from '../store.ts';
+import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
+import { enterFocusMode, useStore, type CameraPose } from '../store.ts';
+import { STATUS_BOARD_KEY, TODO_BOARD_KEY } from './movieShots.ts';
 import { boardContent, type BoardContent } from './whiteboardContent.ts';
 import { statusBoardContent, type StatusBoardContent } from './statusBoardContent.ts';
 import { BOARD_POLL_MS, shouldRecheck } from './redrawGate.ts';
@@ -19,10 +20,13 @@ interface BoardMeshProps<T> extends Props {
   /** projection from office state to board content; redrawn only when its JSON changes */
   content: (office: OfficeState | null) => T;
   draw: (ctx: CanvasRenderingContext2D, content: T) => void;
+  /** focus-mode subject key, and what the fly cam's crosshair picks up */
+  target: string;
 }
 
 /** Shared wall-board shell: frame, marker tray, and a canvas texture redrawn on content change. */
-function BoardMesh<T>({ content, draw }: BoardMeshProps<T>) {
+function BoardMesh<T>({ content, draw, target }: BoardMeshProps<T>) {
+  const gl = useThree((s) => s.gl);
   const { ctx, texture } = useMemo(() => {
     const canvas = document.createElement('canvas');
     canvas.width = W;
@@ -55,6 +59,36 @@ function BoardMesh<T>({ content, draw }: BoardMeshProps<T>) {
     texture.needsUpdate = true;
   });
 
+  // click-to-focus, the same contract the TV and the award frame carry: the
+  // pointer path uses these handlers, and `userData.monitorTarget` is what the
+  // fly cam's centre-screen raycast reads while the cursor is pointer-locked
+  const focusBoard = (e: ThreeEvent<PointerEvent>) => {
+    if (e.button !== 0) return; // right-drag aims the camera; it must not park it here
+    if (document.pointerLockElement) return; // while flying, clicks belong to the crosshair
+    if (useStore.getState().buildMode) return; // build mode drags the board along the wall
+    e.stopPropagation();
+    const st = useStore.getState();
+    const cur = st.cameraMode;
+    if (cur.kind === 'focus' && cur.target === target) return;
+    const pose: CameraPose = {
+      position: e.camera.position.toArray() as [number, number, number],
+      quaternion: e.camera.quaternion.toArray() as [number, number, number, number],
+    };
+    gl.domElement.style.cursor = '';
+    st.setCameraMode(enterFocusMode(cur, target, pose));
+  };
+  const hoverStart = () => {
+    if (document.pointerLockElement) return; // crosshair raycast owns hover while flying
+    if (useStore.getState().buildMode) return; // build mode's own cursor feedback wins
+    useStore.getState().setMonitorHover(target);
+    gl.domElement.style.cursor = 'pointer';
+  };
+  const hoverEnd = () => {
+    const st = useStore.getState();
+    if (st.monitorHover === target) st.setMonitorHover(null);
+    gl.domElement.style.cursor = '';
+  };
+
   return (
     <group position={[0, 0, BOARD_STANDOFF]}>
       {/* frame */}
@@ -62,7 +96,13 @@ function BoardMesh<T>({ content, draw }: BoardMeshProps<T>) {
         <boxGeometry args={[3.4, 2.15, 0.06]} />
         <meshStandardMaterial color="#b8bcc2" roughness={0.4} metalness={0.3} />
       </mesh>
-      <mesh position={[0, 0, 0.035]}>
+      <mesh
+        position={[0, 0, 0.035]}
+        userData={{ monitorTarget: target }}
+        onPointerDown={focusBoard}
+        onPointerEnter={hoverStart}
+        onPointerLeave={hoverEnd}
+      >
         <planeGeometry args={[3.2, 1.95]} />
         <meshBasicMaterial map={texture} toneMapped={false} />
       </mesh>
@@ -76,11 +116,11 @@ function BoardMesh<T>({ content, draw }: BoardMeshProps<T>) {
 }
 
 export function Whiteboard(props: Props) {
-  return <BoardMesh {...props} content={(office) => boardContent(office)} draw={drawTodos} />;
+  return <BoardMesh {...props} content={(office) => boardContent(office)} draw={drawTodos} target={TODO_BOARD_KEY} />;
 }
 
 export function StatusBoard(props: Props) {
-  return <BoardMesh {...props} content={statusBoardContent} draw={drawStatus} />;
+  return <BoardMesh {...props} content={statusBoardContent} draw={drawStatus} target={STATUS_BOARD_KEY} />;
 }
 
 function drawHeading(ctx: CanvasRenderingContext2D, text: string) {

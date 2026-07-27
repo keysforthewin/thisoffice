@@ -25,6 +25,7 @@ import {
   quizSubject,
   SINGLE_POOL,
   GROUP_POOL,
+  IDLE_KEY,
   IDLE_POOL,
   segmentHitsBox,
   segmentHitsSphere,
@@ -394,12 +395,38 @@ describe('shots', () => {
     expect(new Set(quiet.map((s) => s.primaryKey))).toContain('statusboard');
   });
 
+  it('does not park on a lone ambient board: the room is a peer primary when nothing is live', () => {
+    // the TV's activity window runs for 150s, so before IDLE_KEY it was the only
+    // candidate for every cut in that window — the camera sat on it and never left
+    const keys = runCuts({ tv: 100_000 }, 40).map((s) => s.primaryKey);
+    expect(new Set(keys)).toEqual(new Set(['tv', IDLE_KEY]));
+    // the room takes the bulk of a quiet office; the TV is one of the things it passes
+    const tvShare = keys.filter((k) => k === 'tv').length / keys.length;
+    expect(tvShare).toBeGreaterThan(0);
+    expect(tvShare).toBeLessThan(0.5);
+    // and the board never leads twice running — that repetition is the whole complaint.
+    // Consecutive idle cuts are fine: each is a different wide from a different spot.
+    for (let i = 1; i < keys.length; i++) {
+      expect(keys[i] === 'tv' && keys[i - 1] === 'tv').toBe(false);
+    }
+  });
+
+  it('still leads on live work when something is streaming — the room waits its turn', () => {
+    const now = 100_000;
+    const keys = runCuts({ e1: now, tv: now }, 20).map((s) => s.primaryKey);
+    expect(keys).not.toContain(IDLE_KEY);
+    expect(keys).not.toContain('tv');
+  });
+
   it('keeps every active cut at close/medium range on its primary, start and end', () => {
     const now = 100_000;
     const office = makeOffice();
     const cases: Record<string, number>[] = [{ e1: now }, { e1: now, e2: now, boss: now }, { whiteboard: now }, { tv: now }];
     for (const active of cases) {
       for (const shot of runCuts(active, 12, { office })) {
+        // an ambient-only office now also draws the room itself (IDLE_KEY), whose
+        // whole point is the far coverage this ceiling excludes
+        if (shot.primaryKey === IDLE_KEY) continue;
         const primary = subjectFor(shot.primaryKey!, office)!;
         const max = fitDistance(primary.width, primary.height, FOV, ASPECT, 1.3) * MEDIUM_MAX_MUL;
         expect(shot.position.distanceTo(primary.center)).toBeLessThanOrEqual(max + 1e-6);
@@ -416,7 +443,8 @@ describe('shots', () => {
     const now = 100_000;
 
     it('is cut to in a quiet office, with no activity to stamp it', () => {
-      const shots = runCuts({}, 10, { awardFrame: true });
+      // the room is a peer here, so this is a "gets its turn" test, not a majority one
+      const shots = runCuts({}, 30, { awardFrame: true });
       expect(shots.some((s) => s.primaryKey === EOTM_KEY)).toBe(true);
     });
 
@@ -465,7 +493,7 @@ describe('shots', () => {
     const anchor: [number, number, number] = [0, 3, -4.6]; // the boss asking, at their desk
 
     it('is cut to when the office is otherwise silent, instead of pure B-roll', () => {
-      const shots = runCuts({}, 8, { quizAnchor: anchor });
+      const shots = runCuts({}, 30, { quizAnchor: anchor });
       expect(shots.some((s) => s.primaryKey === QUIZ_KEY)).toBe(true);
     });
 
@@ -626,7 +654,9 @@ describe('archetype shot selection', () => {
     const subject = subjectFor('tv', office)!;
     let sawPan = false;
     for (let i = 0; i < 40 && !sawPan; i++) {
-      const shot = pickShot(ctx({ office, lastActivity: { tv: now }, now, rng: rng(i + 700), cutIndex: i }));
+      // forcePrimary, because this is a geometry test for the tv's pan, not a test of
+      // how often the draw picks the tv (the idle tier outweighs it on purpose)
+      const shot = pickShot(ctx({ office, lastActivity: { tv: now }, now, rng: rng(i + 700), cutIndex: i, forcePrimary: 'tv' }));
       if (shot.archetype !== 'boardPan') continue;
       sawPan = true;
       expect(shot.lookAtEnd).toBeDefined();

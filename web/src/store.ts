@@ -192,6 +192,13 @@ export interface AppStore {
   buildHold: BuildHold | null;
   /** P toggles the dev fps/draw-call readout */
   perfOverlay: boolean;
+  /**
+   * A toggles, inside the POV tour only: the over-the-shoulder spot moves itself,
+   * following whichever desks are streaming (see scene/povAuto.ts). Not persisted
+   * and dropped on any manual mode change, so it can only ever be running because
+   * the viewer just asked for it in the tour they are watching.
+   */
+  povAuto: boolean;
   applyServerMsg: (msg: ServerMsg) => void;
   /** click on the blinking boss-desk beacon: stop blinking for this wait */
   muteBeacon: () => void;
@@ -207,6 +214,7 @@ export interface AppStore {
   setBuildMode: (v: boolean) => void;
   setBuildHold: (h: BuildHold | null) => void;
   setPerfOverlay: (v: boolean) => void;
+  setPovAuto: (v: boolean) => void;
   /** optimistic local merge on drop; the server broadcast confirms it */
   patchLayout: (patch: OfficeLayout) => void;
   /** true while the cursor is over the painting, so the wheel reframes it instead of doing nothing */
@@ -277,6 +285,7 @@ export const useStore = create<AppStore>((set, get) => ({
   buildMode: false,
   buildHold: null,
   perfOverlay: loadPerfOverlay(),
+  povAuto: false,
 
   applyServerMsg: (msg) => {
     if (msg.type === 'state') {
@@ -375,6 +384,8 @@ export const useStore = create<AppStore>((set, get) => ({
     set({
       cameraMode,
       focusScroll: 0,
+      // auto only exists inside the tour; leaving it (not moving within it) ends it
+      ...(cameraMode.kind !== 'pov' ? { povAuto: false } : {}),
       ...(cameraMode.kind !== 'free' ? { pendingRelock: false, buildMode: false, buildHold: null } : {}),
     });
   },
@@ -400,6 +411,7 @@ export const useStore = create<AppStore>((set, get) => ({
     ),
   setBuildMode: (buildMode) => set({ buildMode, buildHold: null }),
   setBuildHold: (buildHold) => set({ buildHold }),
+  setPovAuto: (povAuto) => set({ povAuto }),
   setPerfOverlay: (perfOverlay) => {
     savePerfOverlay(perfOverlay);
     set({ perfOverlay });

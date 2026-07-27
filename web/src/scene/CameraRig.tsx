@@ -5,9 +5,10 @@ import { enterFocusMode, useStore, type CameraPose } from '../store.ts';
 import { resolveSeat } from './buildLayout.ts';
 import type { OfficeLayout, OfficeState, QuizWinner } from '../../../shared/types.ts';
 import { MovieCamera } from './MovieCamera.tsx';
-import { clampToRoom, fitDistance, subjectFor } from './movieShots.ts';
+import { clampToRoom, fitDistance, STATUS_BOARD_KEY, subjectFor, TODO_BOARD_KEY } from './movieShots.ts';
 import { clampOffset, wrapLines } from './monitorScrollback.ts';
-import { pickMonitorTarget } from './monitorPicking.ts';
+import { BEACON_TARGET, pickMonitorTarget, WALL_ART_TARGET } from './monitorPicking.ts';
+import { activePovIndices, nextPovIndex, POV_AUTO_MS, shouldCutEarly } from './povAuto.ts';
 import { bossScreenLines } from './bossScreen.ts';
 import { MONITOR_COLS, MONITOR_ROWS } from './MonitorScreen.tsx';
 import { EOTM_KEY } from './eotmTexture.ts';
@@ -18,16 +19,26 @@ import { photoShot } from '../quiz/photoShot.ts';
 import { facePoint } from '../quiz/facePoint.ts';
 import { captureCanvas, PHOTO_FLY_MS, PHOTO_HOLD_MS, PHOTO_LINGER_MS } from '../quiz/capture.ts';
 import { uploadEotmPhoto } from '../quiz/quizApi.ts';
-import { applyLook, modeForDragLook, MAX_LOOK_DELTA, MAX_PITCH, type Look } from './dragLook.ts';
+import {
+  applyLook,
+  modeForDragLook,
+  shouldGrabLockOnDragLook,
+  MAX_LOOK_DELTA,
+  MAX_PITCH,
+  type Look,
+} from './dragLook.ts';
 
 export interface Pov {
   label: string;
   position: THREE.Vector3;
   lookAt: THREE.Vector3;
+  /** the activity key this spot looks at ('boss', an employee id, a board key) —
+   *  what POV auto mode matches against `store.lastActivity` */
+  key: string;
 }
 
 /** Over-shoulder POV for a seat: behind the character's head, looking at the screen. */
-function seatPov(seat: number, label: string, layout: OfficeLayout | undefined, maxSeat: number): Pov {
+function seatPov(seat: number, label: string, key: string, layout: OfficeLayout | undefined, maxSeat: number): Pov {
   const { position, rotationY } = resolveSeat(layout, seat, maxSeat);
   const forward = new THREE.Vector3(0, 0, 1).applyAxisAngle(new THREE.Vector3(0, 1, 0), rotationY);
   // character sits at forward*-1.35; hover behind their right shoulder
@@ -38,7 +49,7 @@ function seatPov(seat: number, label: string, layout: OfficeLayout | undefined, 
     .add(right.multiplyScalar(1.05))
     .add(new THREE.Vector3(0, 3.05, 0));
   const target = position.clone().add(forward.clone().multiplyScalar(0.35)).add(new THREE.Vector3(0, 1.6, 0));
-  return { label, position: camPos, lookAt: target };
+  return { label, key, position: camPos, lookAt: target };
 }
 
 /**
@@ -50,18 +61,18 @@ function seatPov(seat: number, label: string, layout: OfficeLayout | undefined, 
  */
 export function buildPovList(office: OfficeState | null): Pov[] {
   const maxSeat = Math.max(3, ...(office?.employees.map((e) => e.seat) ?? []));
-  const povs: Pov[] = [seatPov(0, office?.boss.name ?? 'Boss', office?.layout, maxSeat)];
-  for (const e of office?.employees ?? []) povs.push(seatPov(e.seat, e.name, office?.layout, maxSeat));
+  const povs: Pov[] = [seatPov(0, office?.boss.name ?? 'Boss', 'boss', office?.layout, maxSeat)];
+  for (const e of office?.employees ?? []) povs.push(seatPov(e.seat, e.name, e.id, office?.layout, maxSeat));
   // Every wall surface is draggable — to any wall, at any height — so all three
   // spots come from the same layout-aware subject the movie camera uses. A fixed
   // transform would keep aiming at the wall a board used to hang on.
   for (const [key, label, back] of [
-    ['whiteboard', 'Whiteboard', 4.2],
-    ['statusboard', 'Status Board', 4.2],
+    [TODO_BOARD_KEY, 'Whiteboard', 4.2],
+    [STATUS_BOARD_KEY, 'Status Board', 4.2],
     ['tv', 'Stats TV', 3.4],
   ] as const) {
     const s = subjectFor(key, office);
-    if (s) povs.push({ label, position: s.center.clone().addScaledVector(s.normal, back), lookAt: s.center.clone() });
+    if (s) povs.push({ label, key, position: s.center.clone().addScaledVector(s.normal, back), lookAt: s.center.clone() });
   }
   return povs;
 }
@@ -152,6 +163,43 @@ function useFlyMotion() {
   });
 }
 
+/**
+ * POV auto mode (A inside the tour): drives `cameraMode.index` itself, hopping the
+ * over-the-shoulder spot between desks whose screens are streaming — see
+ * `povAuto.ts` for the rotation rule.
+ *
+ * Mounted only while the tour is running with auto on, so the timer exists exactly
+ * as long as the mode does; the CameraRig lerp does the actual flying, the same as
+ * for a hand-driven Tab.
+ */
+function PovAutoControls({ index, povs }: { index: number; povs: Pov[] }) {
+  const elapsed = useRef(0);
+  const deskKeys = useMemo(() => {
+    const office = useStore.getState().office;
+    return new Set(['boss', ...(office?.employees ?? []).map((e) => e.id)]);
+  }, []);
+
+  useFrame((_, delta) => {
+    const st = useStore.getState();
+    const mode = st.cameraMode;
+    if (mode.kind !== 'pov') return;
+    const active = activePovIndices(povs, st.lastActivity, Date.now(), deskKeys);
+    elapsed.current += delta * 1000;
+    // a dead screen while others are live doesn't get to hold its full dwell
+    if (elapsed.current < POV_AUTO_MS && !shouldCutEarly(mode.index, active)) return;
+    elapsed.current = 0;
+    const next = nextPovIndex(mode.index, active, povs.length);
+    if (next !== mode.index) st.setCameraMode({ kind: 'pov', index: next });
+  });
+
+  // a fresh spot gets its full dwell, however it was chosen
+  useEffect(() => {
+    elapsed.current = 0;
+  }, [index]);
+
+  return null;
+}
+
 /** Build mode: the cursor belongs to the furniture, so flight loses its mouse-look
  *  (right-drag covers that) but keeps the keyboard. */
 function BuildFlyControls() {
@@ -189,11 +237,17 @@ function FreeFlyControls({ glide }: { glide: React.MutableRefObject<Glide | null
       if (document.pointerLockElement === dom) {
         // first-person: the crosshair is the cursor
         const target = crosshairTarget();
-        if (target === 'wallArt') {
+        if (target === WALL_ART_TARGET) {
           // the painting isn't a focus subject — a click hangs a new picture,
           // and the file dialog needs the pointer back
           document.exitPointerLock();
           pickWallArtImage();
+          return;
+        }
+        if (target === BEACON_TARGET) {
+          // the beacon is a switch, not a place: dismiss the blink and keep
+          // flying, exactly as a cursor click on it does out of first person
+          st.muteBeacon();
           return;
         }
         if (target) {
@@ -332,6 +386,12 @@ function DragLookControls({
         // that is what mounts the component that reads it.
         st.setPendingRelock(true);
         st.setCameraMode(next);
+      } else if (shouldGrabLockOnDragLook(st.cameraMode, st.buildMode)) {
+        // already free: nothing is about to mount, so this gesture asks for the
+        // lock itself. Chrome grants activation for a right-button press, and
+        // the handover is the same one the mode-change path relies on — the
+        // move handler below stands down the moment the lock lands.
+        (dom.requestPointerLock() as unknown as Promise<void> | undefined)?.catch(() => {});
       }
       const from = readLook(camera);
       look.yaw = from.yaw;
@@ -403,9 +463,10 @@ function FocusControls({ target }: { target: string }) {
     // race guard: entering focus from a pointer-locked fly cam
     if (document.pointerLockElement) document.exitPointerLock();
     const onWheel = (e: WheelEvent) => {
-      // a photo has nothing to scroll: leave the wheel alone rather than
-      // swallowing it and driving focusScroll against an empty history
-      if (target === EOTM_KEY) return;
+      // a photo and the wall boards have nothing to scroll: leave the wheel
+      // alone rather than swallowing it and driving focusScroll against an
+      // empty history
+      if (target === EOTM_KEY || target === TODO_BOARD_KEY || target === STATUS_BOARD_KEY) return;
       e.preventDefault();
       const st = useStore.getState();
       if (target === 'tv') {
@@ -687,6 +748,8 @@ export function CameraRig() {
     camera.lookAt(lookTarget.current);
   });
 
+  const povAuto = useStore((s) => s.povAuto);
+
   const controls =
     mode.kind === 'movie' ? (
       <MovieCamera />
@@ -704,6 +767,7 @@ export function CameraRig() {
   return (
     <>
       {wallArtHover && <WallArtControls />}
+      {mode.kind === 'pov' && povAuto && <PovAutoControls index={mode.index} povs={povs} />}
       {pendingCapture && <PhotoControls winner={pendingCapture} maxSeat={maxSeat} />}
       <DragLookControls glide={glide} dragging={dragLooking} />
       {controls}
