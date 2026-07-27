@@ -57,6 +57,56 @@ clone has them already. Run `/help` in Claude Code if you want to see the list.
 Check the wiring by asking Claude "what's in the Blender scene?" — if it answers,
 you're set.
 
+## Start from a generated model — recommended
+
+Modelling a character from scratch with an LLM driving Blender works, but it is
+the slowest and least reliable way to get a good result. The much better path is
+to **generate a 3D model with generative AI first, then have Claude touch it up
+in Blender** — retopologise it, fit it to the template's proportions, weight it
+to the skeleton and export it. You start from something that already looks like
+your character instead of from a cube.
+
+Two ways to pull generated and stock assets in:
+
+**fal.ai over MCP.** fal hosts text-to-3D and image-to-3D models (Trellis,
+Hunyuan3D, Rodin and others). Add fal's hosted MCP server alongside the Blender
+one and Claude can generate a mesh and download it without you leaving the
+session. It's an HTTP server authenticated with a fal API key
+(https://fal.ai/dashboard/keys):
+
+    {
+      "mcpServers": {
+        "fal-ai": {
+          "type": "http",
+          "url": "https://mcp.fal.ai/mcp",
+          "headers": {
+            "Authorization": "Bearer YOUR_FAL_KEY_ID:YOUR_FAL_KEY_SECRET"
+          }
+        }
+      }
+    }
+
+Put that in your user config rather than the repo's `.mcp.json` — the key is a
+credential and `.mcp.json` is committed. A typical turn once it's connected:
+"generate a 3D model of a round copper robot with fal, import it into Blender,
+and fit it onto the rig template."
+
+**The Blender addon's own asset providers.** The BlenderMCP sidebar has toggles
+for external sources, and turning them on lets Claude fetch straight into the
+scene:
+
+- **Poly Haven** — free CC0 HDRIs, textures and models, no key needed. Good for
+  materials and reference props.
+- **Hyper3D Rodin** — generates a 3D model from a prompt or an image. Needs an
+  API key (there's a free trial key in the addon).
+- **Sketchfab** — searches downloadable models. Needs an API key.
+
+Whatever you generate, the rig rules below still apply: a generated mesh arrives
+with no armature, so it has to be fitted onto the template skeleton and weighted
+before it will animate. That fitting is the part Blender and Claude are actually
+good at. Generated meshes also tend to be dense and triangle-soupy — expect a
+decimate/retopo pass, and keep an eye on the export size.
+
 ## Make the character
 
 Start Claude Code in the repo, with Blender open and connected, and say:
@@ -65,7 +115,11 @@ Start Claude Code in the repo, with Blender open and connected, and say:
     with a single glowing eye, stubby arms, and a dented copper finish.
 
 Describe whatever you want in place of the robot — an animal, a mascot, a
-version of yourself. Claude will ask one question up front:
+version of yourself. If you have a generative-3D source wired up (above), say so
+in the same breath — "generate the base mesh with fal and fit it to the rig" —
+and it will start there rather than modelling from primitives.
+
+Claude will ask one question up front:
 
 > Is this character just for your office, or do you want to contribute it to the
 > project so it ships for everyone?
