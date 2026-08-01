@@ -34,6 +34,7 @@ function baseStats(overrides: Partial<UsageStats> = {}): UsageStats {
     byDay: {},
     hourCounts: {},
     tokensByDowHour: {},
+    skillCounts: {},
     gameWins: {},
     charsByEmployee: {},
     ...overrides,
@@ -180,6 +181,36 @@ describe('tvPages', () => {
     expect(chart.rows).toHaveLength(MAX_RANKS);
     expect(chart.rows[0]).toEqual({ label: 'Tool0', value: 100 });
     expect(page.sub).toBe('+4 more tools');
+  });
+
+  it('keeps the skill-invocation total as the headline and ranks the skills under it', () => {
+    const stats = baseStats({ skillCounts: { 'superpowers:brainstorming': 9, commit: 4, run: 1 } });
+    const page = tvPages(stats).find((p) => p.title === 'Top skills')!;
+    expect(page.value).toBe('14');
+    expect(page.sub).toBeUndefined();
+    expect(page.chart).toEqual({
+      kind: 'ranks',
+      rows: [
+        { label: 'superpowers:brainstorming', value: 9 },
+        { label: 'commit', value: 4 },
+        { label: 'run', value: 1 },
+      ],
+    });
+  });
+
+  it('caps the skill leaderboard at MAX_RANKS and counts the tail in the sub line', () => {
+    const skillCounts: Record<string, number> = {};
+    for (let i = 0; i < MAX_RANKS + 3; i++) skillCounts[`skill${i}`] = 100 - i;
+    const page = tvPages(baseStats({ skillCounts })).find((p) => p.title === 'Top skills')!;
+    const chart = page.chart as RankList;
+    expect(chart.rows).toHaveLength(MAX_RANKS);
+    expect(chart.rows[0]).toEqual({ label: 'skill0', value: 100 });
+    expect(page.sub).toBe('+3 more skills');
+  });
+
+  it('shows no Top skills page when no skill has ever been invoked', () => {
+    expect(tvPages(baseStats()).some((p) => p.title === 'Top skills')).toBe(false);
+    expect(tvPages(baseStats({ skillCounts: { run: 0 } })).some((p) => p.title === 'Top skills')).toBe(false);
   });
 
   it('computes cache hit rate as cacheRead / (input + cacheRead + cacheCreation)', () => {

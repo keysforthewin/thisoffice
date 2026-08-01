@@ -342,6 +342,7 @@ describe('lastActivity stamping', () => {
       byDay: {},
       hourCounts: {},
       tokensByDowHour: {},
+      skillCounts: {},
       gameWins: {},
       charsByEmployee: {},
     };

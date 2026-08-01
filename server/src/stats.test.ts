@@ -104,6 +104,59 @@ describe('StatsAggregator subagent counting', () => {
   });
 });
 
+describe('StatsAggregator.recordSkill', () => {
+  it('counts skill invocations by name', () => {
+    const s = new StatsAggregator(file);
+    s.recordSkill('superpowers:brainstorming', 'toolu_1');
+    s.recordSkill('superpowers:brainstorming', 'toolu_2');
+    s.recordSkill('commit', 'toolu_3');
+    const snap = s.snapshot();
+    expect(snap.skillCounts['superpowers:brainstorming']).toBe(2);
+    expect(snap.skillCounts['commit']).toBe(1);
+  });
+
+  it('counts a skill id once even when replayed', () => {
+    const s = new StatsAggregator(file);
+    s.recordSkill('run', 'toolu_1');
+    s.recordSkill('run', 'toolu_1');
+    expect(s.snapshot().skillCounts['run']).toBe(1);
+  });
+
+  it('dedupes a replayed skill id across a persistence round-trip', () => {
+    const s1 = new StatsAggregator(file);
+    s1.recordSkill('run', 'toolu_replay');
+    s1.flush();
+
+    const s2 = new StatsAggregator(file);
+    s2.recordSkill('run', 'toolu_replay');
+    expect(s2.snapshot().skillCounts['run']).toBe(1);
+  });
+
+  it('keeps its own ring: the same tool_use id counts in both recordTool and recordSkill', () => {
+    // a Skill tool_use block feeds both counters with the same id — that must not collide
+    const s = new StatsAggregator(file);
+    s.recordTool('Skill', 'toolu_1');
+    s.recordSkill('discernment', 'toolu_1');
+    const snap = s.snapshot();
+    expect(snap.toolCalls['Skill']).toBe(1);
+    expect(snap.skillCounts['discernment']).toBe(1);
+  });
+
+  it('counts without an id (no dedupe possible)', () => {
+    const s = new StatsAggregator(file);
+    s.recordSkill('run');
+    s.recordSkill('run');
+    expect(s.snapshot().skillCounts['run']).toBe(2);
+  });
+
+  it('ignores empty or whitespace names', () => {
+    const s = new StatsAggregator(file);
+    s.recordSkill('', 'toolu_1');
+    s.recordSkill('  ', 'toolu_2');
+    expect(Object.keys(s.snapshot().skillCounts)).toHaveLength(0);
+  });
+});
+
 describe('StatsAggregator replay dedupe (resume/fork copies prior history into a new file)', () => {
   it('counts a tool_use id once even if recordTool is called twice with the same id', () => {
     const s = new StatsAggregator(file);

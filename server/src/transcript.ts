@@ -69,6 +69,21 @@ const WAITING_STOP_REASONS = new Set(['end_turn', 'stop_sequence', 'max_tokens',
  */
 const ASK_TOOLS = new Set(['ExitPlanMode', 'AskUserQuestion']);
 /**
+ * Stock CLI commands, excluded from skill counting: a `<command-name>` user line
+ * looks identical for `/clear` and for a skill's slash command, so name matching
+ * is the only lever. Skills the CLI also ships as built-ins (init, review…) stay
+ * in this set on purpose — the harness has the model invoke those via the Skill
+ * tool, which is counted, so excluding the command line prevents double counting.
+ */
+const SLASH_BUILTINS = new Set([
+  'add-dir', 'agents', 'bashes', 'bug', 'clear', 'code-review', 'compact', 'config', 'context', 'cost',
+  'doctor', 'effort', 'exit', 'export', 'fast', 'help', 'hooks', 'ide', 'init', 'install-github-app',
+  'login', 'logout', 'mcp', 'memory', 'migrate-installer', 'model', 'output-style', 'permissions', 'plan',
+  'plugin', 'pr-comments', 'privacy-settings', 'quit', 'release-notes', 'reload-plugins', 'rename',
+  'resume', 'review', 'rewind', 'security-review', 'stats', 'status', 'statusline', 'terminal-setup',
+  'todos', 'ultrareview', 'upgrade', 'usage', 'usage-credits', 'vim', 'workflows',
+]);
+/**
  * Backstop only: user-activity eviction handles resumes/forks in the same
  * project dir; this catches files eviction can't see (deleted transcripts,
  * renamed project dirs, missed watcher events).
@@ -380,7 +395,7 @@ export class Transcripts {
       return;
     }
     if (text.startsWith('<')) {
-      this.routeTaggedText(file, sessionId, project, text);
+      this.routeTaggedText(file, sessionId, project, text, line.uuid);
       return;
     }
     if (line.isMeta) {
@@ -396,9 +411,11 @@ export class Transcripts {
   }
 
   /** User text starting with '<': slash commands, ! shell passthrough, notifications, reminders. */
-  private routeTaggedText(file: string, sessionId: string, project: string, text: string) {
+  private routeTaggedText(file: string, sessionId: string, project: string, text: string, uuid?: string) {
     const commandName = tagContent(text, 'command-name');
     if (commandName !== undefined) {
+      const bare = commandName.replace(/^\//, '').trim();
+      if (bare && !SLASH_BUILTINS.has(bare)) this.stats?.recordSkill(bare, uuid);
       const args = tagContent(text, 'command-args');
       const msg = tagContent(text, 'command-message');
       const lines = [`ran ${commandName}${args ? ' ' + args : ''}`];
@@ -457,7 +474,10 @@ export class Transcripts {
       if (b.type === 'fallback') {
         this.showEphemeral(sessionId, project, 'Model Swap', `⚠ model fallback: ${b.from?.model ?? '?'} → ${b.to?.model ?? '?'}`);
       }
-      if (b.type === 'tool_use') this.stats?.recordTool(b.name, b.id);
+      if (b.type === 'tool_use') {
+        this.stats?.recordTool(b.name, b.id);
+        if (b.name === 'Skill' && b.input?.skill) this.stats?.recordSkill(String(b.input.skill), b.id);
+      }
     }
     const toolUses = blocks.filter((b) => b.type === 'tool_use');
     // every content block of one response repeats the response's stop_reason,
@@ -872,6 +892,7 @@ export class Transcripts {
           this.emitTo(activity, '💭 ' + b.thinking.trim());
         } else if (b.type === 'tool_use') {
           this.stats?.recordTool(b.name, b.id);
+          if (b.name === 'Skill' && b.input?.skill) this.stats?.recordSkill(String(b.input.skill), b.id);
           if (FANOUT_EXCLUDED.has(b.name)) {
             this.emitTo(activity, `> ${b.name} ${oneLine(inputPreview(b.name, b.input ?? {}))}`);
             continue;

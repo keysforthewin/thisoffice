@@ -252,28 +252,42 @@ export function tvPages(stats: UsageStats | null): TvPage[] {
     });
   }
 
-  // 8. Edits & writes
+  // 8. Top skills — same shape as Tool calls: total as headline, top 10 ranked under it
+  const rankedSkills = Object.entries(stats.skillCounts ?? {})
+    .filter(([label, value]) => label && value > 0)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([label, value]) => ({ label, value }));
+  if (rankedSkills.length > 0) {
+    pages.push({
+      title: 'Top skills',
+      value: String(rankedSkills.reduce((a, r) => a + r.value, 0)),
+      sub: rankedSkills.length > MAX_RANKS ? `+${rankedSkills.length - MAX_RANKS} more skills` : undefined,
+      chart: { kind: 'ranks', rows: rankedSkills.slice(0, MAX_RANKS) },
+    });
+  }
+
+  // 9. Edits & writes
   const edits = (stats.toolCalls['Edit'] ?? 0) + (stats.toolCalls['Write'] ?? 0) + (stats.toolCalls['NotebookEdit'] ?? 0);
   if (edits > 0) {
     pages.push({ title: 'Edits & writes', value: String(edits) });
   }
 
-  // 9. Subagents launched
+  // 10. Subagents launched
   if (stats.subagents > 0) {
     pages.push({ title: 'Subagents launched', value: String(stats.subagents) });
   }
 
-  // 10. Sessions
+  // 11. Sessions
   if (stats.sessions > 0) {
     pages.push({ title: 'Sessions', value: String(stats.sessions) });
   }
 
-  // 11. Prompts
+  // 12. Prompts
   if (stats.prompts > 0) {
     pages.push({ title: 'Prompts', value: String(stats.prompts), sub: topHour(stats.hourCounts) });
   }
 
-  // 12. Avg turn
+  // 13. Avg turn
   if (stats.turns > 0) {
     pages.push({
       title: 'Avg turn',
@@ -282,7 +296,7 @@ export function tvPages(stats: UsageStats | null): TvPage[] {
     });
   }
 
-  // 13. Web searches
+  // 14. Web searches
   const webTotal = stats.webSearches + stats.webFetches;
   if (webTotal > 0) {
     pages.push({
@@ -292,7 +306,7 @@ export function tvPages(stats: UsageStats | null): TvPage[] {
     });
   }
 
-  // 14. Head count
+  // 15. Head count
   if (stats.headcount > 0 || stats.peakHeadcount > 0) {
     pages.push({
       title: 'Head count',
@@ -301,14 +315,14 @@ export function tvPages(stats: UsageStats | null): TvPage[] {
     });
   }
 
-  // 15. Busiest hours — token usage by hour, stacked by weekday
+  // 16. Busiest hours — token usage by hour, stacked by weekday
   const grid = localDowHourGrid(stats.tokensByDowHour ?? {});
   const peak = peakCell(grid);
   if (peak) {
     pages.push({ title: 'Busiest hours', value: '', sub: peak, chart: { kind: 'dowHours', grid } });
   }
 
-  // 16. Busiest desks — share of everything typed onto a monitor, top 5
+  // 17. Busiest desks — share of everything typed onto a monitor, top 5
   const busiest = topEmployees(stats.charsByEmployee ?? {});
   if (busiest.length > 0) {
     const shown = busiest.reduce((a, s) => a + s.value, 0);
@@ -322,7 +336,7 @@ export function tvPages(stats: UsageStats | null): TvPage[] {
     });
   }
 
-  // 17. Quiz champion — only once someone has actually won a round
+  // 18. Quiz champion — only once someone has actually won a round
   const wins = Object.entries(stats.gameWins ?? {});
   if (wins.length > 0) {
     const [topName, topWins] = wins.reduce((best, cur) => (cur[1] > best[1] ? cur : best));
@@ -334,7 +348,7 @@ export function tvPages(stats: UsageStats | null): TvPage[] {
     });
   }
 
-  // 18. Tracking since — always present when stats exist
+  // 19. Tracking since — always present when stats exist
   const days = Math.max(0, Math.round((Date.now() - Date.parse(stats.trackingSince)) / 86_400_000));
   pages.push({
     title: 'Tracking since',

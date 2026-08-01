@@ -61,6 +61,7 @@ function makeHarness(opts: { queue?: boolean; hire?: boolean } = {}) {
   const stats = {
     recordUsage: vi.fn(),
     recordTool: vi.fn(),
+    recordSkill: vi.fn(),
     recordPrompt: vi.fn(),
     recordSession: vi.fn(),
     recordTurn: vi.fn(),
@@ -1509,5 +1510,78 @@ describe('describeAsk', () => {
       'p',
     );
     expect(ask.options).toEqual(['A']);
+  });
+});
+
+describe('skill invocation counting', () => {
+  it('records a Skill tool_use on a main-transcript line under its skill name', () => {
+    const { transcripts, stats } = makeHarness();
+    transcripts.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: {
+          content: [{ type: 'tool_use', id: 'tu-1', name: 'Skill', input: { skill: 'superpowers:brainstorming' } }],
+        },
+      }),
+    ]);
+    expect(stats.recordSkill).toHaveBeenCalledWith('superpowers:brainstorming', 'tu-1');
+    expect(stats.recordTool).toHaveBeenCalledWith('Skill', 'tu-1'); // still a tool call too
+  });
+
+  it('records a Skill tool_use inside a subagent transcript', () => {
+    const { transcripts, stats } = makeHarness();
+    transcripts.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'tool_use', id: 'tu-task', name: 'Task', input: { description: 'explore' } }] },
+      }),
+    ]);
+    transcripts.fileAppeared(AGENT);
+    transcripts.handleLines(AGENT, [
+      line({
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', id: 'tu-sub-1', name: 'Skill', input: { skill: 'run' } }] },
+      }),
+    ]);
+    expect(stats.recordSkill).toHaveBeenCalledWith('run', 'tu-sub-1');
+  });
+
+  it('does not record a Skill tool_use with no skill name in its input', () => {
+    const { transcripts, stats } = makeHarness();
+    transcripts.handleLines(MAIN, [
+      line({
+        type: 'assistant',
+        sessionId: 'sess-1',
+        cwd: '/home/user/code/myapp',
+        message: { content: [{ type: 'tool_use', id: 'tu-1', name: 'Skill', input: {} }] },
+      }),
+    ]);
+    expect(stats.recordSkill).not.toHaveBeenCalled();
+  });
+
+  it('records a user-typed slash command under its bare name, forwarding the line uuid', () => {
+    const { transcripts, stats } = makeHarness();
+    transcripts.handleLines(MAIN, [
+      userText('<command-message>verify-branch</command-message>\n<command-name>/verify-branch</command-name>', {
+        uuid: 'cmd-uuid-1',
+      }),
+    ]);
+    expect(stats.recordSkill).toHaveBeenCalledWith('verify-branch', 'cmd-uuid-1');
+  });
+
+  it('does not record built-in CLI commands as skills', () => {
+    const { transcripts, stats } = makeHarness();
+    for (const name of ['clear', 'model', 'resume', 'compact', 'help']) {
+      transcripts.handleLines(MAIN, [
+        userText(`<command-message>${name}</command-message>\n<command-name>/${name}</command-name>`, {
+          uuid: `cmd-uuid-${name}`,
+        }),
+      ]);
+    }
+    expect(stats.recordSkill).not.toHaveBeenCalled();
   });
 });

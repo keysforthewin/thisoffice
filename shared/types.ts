@@ -288,6 +288,13 @@ export interface UsageStats {
    * into the viewer's zone, which rolls the weekday when the hour wraps.
    */
   tokensByDowHour: Record<string, number>;
+  /**
+   * Skill invocations by skill name, from both channels: the model's `Skill`
+   * tool calls (input.skill) and user-typed slash commands (`<command-name>`
+   * user lines, stock CLI built-ins excluded). Plugin skills keep their
+   * `plugin:skill` prefix.
+   */
+  skillCounts: Record<string, number>;
   /** 20 Questions wins, keyed by employee name (a rehired name inherits its wins) */
   gameWins: Record<string, number>;
   /**

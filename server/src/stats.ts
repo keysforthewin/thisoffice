@@ -14,6 +14,7 @@ const RECENT_SESSIONS_MAX = 200;
 const RECENT_TOOL_IDS_MAX = 5000;
 const RECENT_PROMPT_IDS_MAX = 2000;
 const RECENT_TURN_IDS_MAX = 2000;
+const RECENT_SKILL_IDS_MAX = 2000;
 /** byDay is pruned to this window on every write. */
 const BYDAY_MAX_DAYS = 30;
 
@@ -46,6 +47,8 @@ interface PersistedFile {
   recentPromptIds?: string[];
   /** most-recently-seen turn_duration line uuids, FIFO capped — guards recordTurn against replay */
   recentTurnIds?: string[];
+  /** most-recently-seen skill-invocation ids (tool_use ids or command-line uuids), FIFO capped — guards recordSkill against replay */
+  recentSkillIds?: string[];
 }
 
 /** Simple FIFO-capped id-dedupe ring: a Set for O(1) membership plus an array for eviction order. */
@@ -106,6 +109,7 @@ function emptyStats(): UsageStats {
     byDay: {},
     hourCounts: {},
     tokensByDowHour: {},
+    skillCounts: {},
     gameWins: {},
     charsByEmployee: {},
   };
@@ -124,6 +128,9 @@ export class StatsAggregator {
   private recentPromptIds = new IdRing(RECENT_PROMPT_IDS_MAX);
   /** turn_duration line uuid dedupe ring, same replay guarantee. */
   private recentTurnIds = new IdRing(RECENT_TURN_IDS_MAX);
+  /** skill-invocation id dedupe ring; separate from recentToolUseIds because a Skill
+   *  tool_use block feeds recordTool AND recordSkill with the same id. */
+  private recentSkillIds = new IdRing(RECENT_SKILL_IDS_MAX);
   private dirty = false;
 
   constructor(private dataFile: string) {
@@ -154,6 +161,7 @@ export class StatsAggregator {
     this.recentToolUseIds = new IdRing(RECENT_TOOL_IDS_MAX, persisted.recentToolUseIds ?? []);
     this.recentPromptIds = new IdRing(RECENT_PROMPT_IDS_MAX, persisted.recentPromptIds ?? []);
     this.recentTurnIds = new IdRing(RECENT_TURN_IDS_MAX, persisted.recentTurnIds ?? []);
+    this.recentSkillIds = new IdRing(RECENT_SKILL_IDS_MAX, persisted.recentSkillIds ?? []);
     const stats = persisted.stats;
     // defensive defaults in case the file predates a field
     return { ...emptyStats(), ...stats };
@@ -276,6 +284,19 @@ export class StatsAggregator {
     this.markDirty();
   }
 
+  /**
+   * A skill invocation, from either channel: a `Skill` tool_use (id = tool_use id)
+   * or a user-typed slash command (id = the user line's uuid). The two id spaces
+   * never collide, so one ring guards both.
+   */
+  recordSkill(name: string, id?: string): void {
+    const key = name.trim();
+    if (!key) return;
+    if (id && !this.recentSkillIds.addIfNew(id)) return; // replayed line
+    this.stats.skillCounts[key] = (this.stats.skillCounts[key] ?? 0) + 1;
+    this.markDirty();
+  }
+
   /** `uuid` is the record's own line uuid; same replay guard as recordTool. */
   recordPrompt(uuid?: string): void {
     if (uuid && !this.recentPromptIds.addIfNew(uuid)) return; // replayed line
@@ -349,6 +370,7 @@ export class StatsAggregator {
       recentToolUseIds: this.recentToolUseIds.toArray(),
       recentPromptIds: this.recentPromptIds.toArray(),
       recentTurnIds: this.recentTurnIds.toArray(),
+      recentSkillIds: this.recentSkillIds.toArray(),
     };
     fs.mkdirSync(path.dirname(this.dataFile), { recursive: true });
     const tmp = this.dataFile + '.tmp';
