@@ -1,6 +1,7 @@
 services:
   server:
     build: .
+    restart: unless-stopped
     command: sh -c "npm install && npm run dev -w server"
     working_dir: /app
     environment:
@@ -19,6 +20,7 @@ services:
 
   web:
     build: .
+    restart: unless-stopped
     command: sh -c "npm install && npm run dev -w web -- --host 0.0.0.0"
     working_dir: /app
     environment:
